@@ -1,10 +1,11 @@
 // Colony window: Mission Control home, explorer, editor tabs, terminals, agent and git panels.
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { AgentPanel } from "./agent";
-import { api, Channel, errText, focusPolicy, h, type AgentEvent, type StartupInfo, type WorkspaceInfo } from "./api";
+import { api, errText, focusPolicy, h, type StartupInfo, type WorkspaceInfo } from "./api";
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
 import { GitPanel } from "./git";
+import { runs } from "./runs";
 import "./styles.css";
 import { Terminals } from "./terminal";
 
@@ -437,16 +438,15 @@ async function runSmoke(root: string) {
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
-    const events: string[] = [];
-    let exitCode: number | null | undefined;
-    const ch = new Channel<AgentEvent>();
-    ch.onmessage = (m) => {
-      if (m.kind === "event") events.push(String(JSON.parse(m.line).type));
-      if (m.kind === "exit") exitCode = m.code;
-    };
-    const cmd = await api.agentStart("claude", 1, ch);
-    for (let i = 0; i < 100 && exitCode === undefined; i++) await wait(200);
-    await log("agent-driver", events.includes("run_end") && exitCode !== undefined, { cmd, events, exitCode });
+    const seen = new Map<number, string[]>();
+    const off = runs.on((c) => {
+      if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
+    });
+    const run = await runs.start({ backend: "claude", maxTicks: 1 });
+    for (let i = 0; i < 100 && run.running; i++) await wait(200);
+    off();
+    const events = seen.get(run.id) ?? [];
+    await log("agent-driver", events.includes("run_end") && !run.running, { cmd: run.cmd, events, exitCode: run.exitCode });
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));

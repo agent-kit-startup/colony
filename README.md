@@ -15,7 +15,7 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Explorer | Lazy file tree (`.git` hidden), refresh button. |
 | Editor | Monaco with one tab per file, dirty marker, Ctrl+S save, Ctrl+W close (asks before dropping unsaved changes), Ctrl+P quick open. |
 | Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
-| Agent | `agent-kit run-plan --events ndjson` for the opened folder (backend picker, tick budget), live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
+| Agent | `agent-kit run-plan --events ndjson` for the opened folder, or for another folder with `Run in folder…` (backend picker, tick budget). Several runs at once, one per folder (the kit has no run lock); pick which one to follow. Live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
 | Open in my editor | `Open in editor` (Ctrl+Shift+E) hands the active file, or the folder from the Mission Control tab, to your own editor; right-click a file or folder in the Explorer for that one. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 

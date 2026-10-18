@@ -24,6 +24,7 @@ input, select, textarea { font: inherit; color: var(--fg); background: var(--bg)
 textarea { font-family: var(--mono); resize: vertical; }
 .dim { color: var(--fg-dim); }
 .spacer { flex: 1; }
+.grow { flex: 1; min-width: 0; }
 .hint { color: var(--fg-dim); font-size: 12px; margin: 4px 0; }
 [hidden] { display: none !important; }
 

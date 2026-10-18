@@ -2,8 +2,11 @@
 //! docs/driver-events-protocol.md). NDJSON events stream to the UI; the operator's
 //! HITL answers go back as JSON lines on stdin. Colony never answers a gate itself.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,7 +18,11 @@ use crate::{tools, workspace, AppState};
 
 const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
 
+/// One `run-plan` driver process. Several can run at once (one per folder: the kit has no
+/// run lock, so two runs on the same plan would race), and every open gate across them
+/// lands in the Inbox.
 pub struct AgentRun {
+    root: PathBuf,
     child: Arc<Mutex<Child>>,
     stdin: Option<ChildStdin>,
 }
@@ -25,6 +32,26 @@ impl AgentRun {
         self.stdin = None;
         if let Ok(mut c) = self.child.lock() {
             let _ = c.kill();
+        }
+    }
+
+    fn alive(&self) -> bool {
+        matches!(self.child.lock().map(|mut c| c.try_wait()), Ok(Ok(None)))
+    }
+}
+
+#[derive(Default)]
+pub struct AgentRegistry {
+    next: AtomicU32,
+    runs: Mutex<HashMap<u32, AgentRun>>,
+}
+
+impl AgentRegistry {
+    pub fn kill_all(&self) {
+        if let Ok(mut map) = self.runs.lock() {
+            for (_, mut run) in map.drain() {
+                run.kill();
+            }
         }
     }
 }
@@ -39,22 +66,39 @@ pub enum AgentEvent {
     Exit { code: Option<i32> },
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStarted {
+    id: u32,
+    cmd: String,
+    root: String,
+    backend: String,
+}
+
+/// Start a driver run in the opened folder, or in `cwd` (another folder the operator
+/// picked, e.g. a second repository or a worktree).
 #[tauri::command]
 pub fn agent_start(
     state: State<'_, AppState>,
     backend: String,
     max_ticks: Option<u32>,
+    cwd: Option<String>,
     on_event: Channel<AgentEvent>,
-) -> Result<String, String> {
+) -> Result<AgentStarted, String> {
     if !BACKENDS.contains(&backend.as_str()) {
         return Err(format!("Unknown backend: {backend}"));
     }
-    let root = workspace::workspace_root(&state)?;
-    let mut guard = state.agent.lock().map_err(|_| "agent lock poisoned")?;
-    if let Some(run) = guard.as_ref() {
-        if matches!(run.child.lock().map(|mut c| c.try_wait()), Ok(Ok(None))) {
-            return Err("A run is already active in this window".into());
-        }
+    let root = match cwd.filter(|c| !c.trim().is_empty()) {
+        Some(c) => PathBuf::from(&c).canonicalize().map_err(|e| format!("Cannot use {c}: {e}"))?,
+        None => workspace::workspace_root(&state)?,
+    };
+    if !root.is_dir() {
+        return Err(format!("Not a folder: {}", root.display()));
+    }
+    let mut runs = state.agents.runs.lock().map_err(|_| "agent lock poisoned")?;
+    runs.retain(|_, r| r.alive());
+    if runs.values().any(|r| r.root == root) {
+        return Err(format!("A run is already active in {} (the kit has no run lock: one run per folder)", root.display()));
     }
     let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH")?;
     let ticks = max_ticks.unwrap_or(10).clamp(1, 200).to_string();
@@ -75,6 +119,7 @@ pub fn agent_start(
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let stdin = child.stdin.take();
     let child = Arc::new(Mutex::new(child));
+    let id = state.agents.next.fetch_add(1, Ordering::SeqCst) + 1;
 
     let ch_out = on_event.clone();
     let out_thread = std::thread::spawn(move || {
@@ -105,13 +150,18 @@ pub fn agent_start(
         let _ = on_event.send(AgentEvent::Exit { code });
     });
 
-    *guard = Some(AgentRun { child, stdin });
-    Ok(format!("{} {} --cwd {}", bin.display(), args.join(" "), root.display()))
+    runs.insert(id, AgentRun { root: root.clone(), child, stdin });
+    Ok(AgentStarted {
+        id,
+        cmd: format!("{} {} --cwd {}", bin.display(), args.join(" "), root.display()),
+        root: root.display().to_string(),
+        backend,
+    })
 }
 
-fn send_line(state: &AppState, value: serde_json::Value) -> Result<(), String> {
-    let mut guard = state.agent.lock().map_err(|_| "agent lock poisoned")?;
-    let run = guard.as_mut().ok_or("No run is active")?;
+fn send_line(state: &AppState, run_id: u32, value: serde_json::Value) -> Result<(), String> {
+    let mut runs = state.agents.runs.lock().map_err(|_| "agent lock poisoned")?;
+    let run = runs.get_mut(&run_id).ok_or("That run is no longer active")?;
     let stdin = run.stdin.as_mut().ok_or("The run's input is closed")?;
     let mut line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     line.push('\n');
@@ -122,25 +172,25 @@ fn send_line(state: &AppState, value: serde_json::Value) -> Result<(), String> {
 /// Relay the operator's answer to the open gate: `reply` is a 1-based number, an exact
 /// label, or free text (driver protocol "Answers").
 #[tauri::command]
-pub fn agent_reply(state: State<'_, AppState>, ask_id: String, reply: serde_json::Value) -> Result<(), String> {
+pub fn agent_reply(state: State<'_, AppState>, run_id: u32, ask_id: String, reply: serde_json::Value) -> Result<(), String> {
     match &reply {
         serde_json::Value::Number(n) if n.as_u64().is_some_and(|v| v >= 1) => {}
         serde_json::Value::String(s) if !s.trim().is_empty() => {}
         _ => return Err("Reply must be a 1-based number or non-empty text".into()),
     }
-    send_line(&state, serde_json::json!({ "type": "hitl_reply", "askId": ask_id, "reply": reply }))
+    send_line(&state, run_id, serde_json::json!({ "type": "hitl_reply", "askId": ask_id, "reply": reply }))
 }
 
 /// `{"type":"stop"}` ends the run at the open gate (exit 4, cause "driver stop").
 #[tauri::command]
-pub fn agent_stop(state: State<'_, AppState>) -> Result<(), String> {
-    send_line(&state, serde_json::json!({ "type": "stop" }))
+pub fn agent_stop(state: State<'_, AppState>, run_id: u32) -> Result<(), String> {
+    send_line(&state, run_id, serde_json::json!({ "type": "stop" }))
 }
 
 /// Hard stop for a run that is mid-tick (no gate open to receive `stop`).
 #[tauri::command]
-pub fn agent_kill(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(run) = state.agent.lock().map_err(|_| "agent lock poisoned")?.as_mut() {
+pub fn agent_kill(state: State<'_, AppState>, run_id: u32) -> Result<(), String> {
+    if let Some(run) = state.agents.runs.lock().map_err(|_| "agent lock poisoned")?.get_mut(&run_id) {
         run.kill();
     }
     Ok(())

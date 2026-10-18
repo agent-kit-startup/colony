@@ -20,7 +20,7 @@ pub struct AppState {
     pub workspace: Mutex<Option<PathBuf>>,
     pub dashboard: Mutex<Option<dashboard::DashboardServer>>,
     pub ptys: pty::PtyRegistry,
-    pub agent: Mutex<Option<agent::AgentRun>>,
+    pub agents: agent::AgentRegistry,
     /// `<app config dir>/settings.json`, set once at startup.
     pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
@@ -194,9 +194,7 @@ pub fn run() {
             let server = state.dashboard.lock().ok().and_then(|mut d| d.take());
             drop(server); // kills the dashboard server
             state.ptys.kill_all();
-            if let Some(mut run) = state.agent.lock().ok().and_then(|mut a| a.take()) {
-                run.kill();
-            }
+            state.agents.kill_all();
         }
     });
 }
