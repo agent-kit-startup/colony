@@ -44,7 +44,7 @@ textarea { font-family: var(--mono); resize: vertical; }
 #shell.no-bottom { grid-template-rows: 40px minmax(0, 1fr) 0 0 24px; }
 #shell.no-bottom #bottom, #shell.no-bottom #resizer { display: none; }
 
-#top { grid-area: top; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
+#top { grid-area: top; display: flex; white-space: nowrap; overflow: hidden; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
 .brand { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
 #ws-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; font-family: var(--mono); font-size: 12px; }
 button.toggle.on { border-color: var(--accent); color: #fff; background: #253061; }
@@ -125,7 +125,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 .badge { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; line-height: 16px; text-align: center; font-weight: 600; }
 .badge.warn { background: var(--warn); color: #1b1e25; }
 
-#view-review { display: grid; grid-template-columns: 320px minmax(0, 1fr); }
+#view-review { display: grid; grid-template-columns: minmax(180px, min(320px, 35%)) minmax(0, 1fr); }
 #view-review[hidden] { display: none !important; }
 .rv-side { border-right: 1px solid var(--line); background: var(--bg-2); display: flex; flex-direction: column; min-height: 0; }
 .rv-list { overflow: auto; flex: 1; padding-bottom: 12px; }

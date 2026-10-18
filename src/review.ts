@@ -61,7 +61,7 @@ export class ReviewView {
       { class: "rv-tick", title: t.resultLine ?? "" },
       h("span", { class: "caret" }, open ? "▾" : "▸"),
       h("strong", {}, `tick ${t.tick}`),
-      h("span", { class: "dim" }, ` ${run ? runLabel(run) : `#${t.runId}`} · ${t.backend}`),
+      h("span", { class: "dim" }, ` ${run ? runLabel(run) : `#${t.runId}`}${run && run.backend === t.backend ? "" : ` · ${t.backend}`}`),
       h("span", { class: "rv-count" }, `${t.files.length}`),
     );
     const box = h("div", { class: "rv-group" }, title);
