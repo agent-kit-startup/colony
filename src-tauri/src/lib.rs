@@ -1,6 +1,9 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
+mod agent;
 mod dashboard;
+mod gitops;
+mod pty;
 mod tools;
 mod workspace;
 
@@ -14,6 +17,8 @@ use tauri::{Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 pub struct AppState {
     pub workspace: Mutex<Option<PathBuf>>,
     pub dashboard: Mutex<Option<dashboard::DashboardServer>>,
+    pub ptys: pty::PtyRegistry,
+    pub agent: Mutex<Option<agent::AgentRun>>,
     startup: Mutex<StartupInfo>,
 }
 
@@ -27,6 +32,8 @@ struct StartupInfo {
     agent_kit: Option<String>,
     node: Option<String>,
     git: Option<String>,
+    /// `COLONY_SMOKE=<log file>`: run the scripted code-path smoke after the folder opens.
+    smoke: Option<String>,
 }
 
 /// WebKitGTK's DMA-BUF renderer hangs on NVIDIA + Wayland (Colony UI benchmark, machine A).
@@ -58,6 +65,25 @@ fn initial_workspace() -> Option<String> {
         .and_then(|a| PathBuf::from(a).canonicalize().ok())
         .filter(|p| p.is_dir())
         .map(|p| p.display().to_string())
+}
+
+/// Append one line to the `COLONY_SMOKE` log (no-op when the smoke is off).
+#[tauri::command]
+fn smoke_log(state: State<'_, AppState>, line: String) -> Result<(), String> {
+    use std::io::Write;
+    let Some(path) = state.startup.lock().ok().and_then(|s| s.smoke.clone()) else { return Ok(()) };
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
+}
+
+/// End a `COLONY_SMOKE` run (refused when the smoke is off).
+#[tauri::command]
+fn smoke_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.startup.lock().ok().and_then(|s| s.smoke.clone()).is_none() {
+        return Err("not a smoke run".into());
+    }
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -108,6 +134,7 @@ pub fn run() {
         agent_kit: tools::agent_kit_bin().map(|p| p.display().to_string()),
         node: tools::node_bin().map(|p| p.display().to_string()),
         git: tools::git_bin().map(|p| p.display().to_string()),
+        smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
     };
 
     let app = tauri::Builder::default()
@@ -115,12 +142,27 @@ pub fn run() {
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            smoke_log,
+            smoke_exit,
             workspace::open_workspace,
             workspace::list_dir,
             workspace::read_text_file,
             workspace::write_text_file,
+            workspace::list_files,
             dashboard::dashboard_start,
             dashboard::dashboard_stop,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            agent::agent_start,
+            agent::agent_reply,
+            agent::agent_stop,
+            agent::agent_kill,
+            gitops::git_status,
+            gitops::git_diff,
+            gitops::git_commit,
+            gitops::git_push,
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -139,6 +181,10 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let server = state.dashboard.lock().ok().and_then(|mut d| d.take());
             drop(server); // kills the dashboard server
+            state.ptys.kill_all();
+            if let Some(mut run) = state.agent.lock().ok().and_then(|mut a| a.take()) {
+                run.kill();
+            }
         }
     });
 }

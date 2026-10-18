@@ -1,0 +1,116 @@
+// Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
+import { api, errText, h, type GitStatus } from "./api";
+
+export class GitPanel {
+  private branch = h("strong");
+  private header = h("span", { class: "dim" });
+  private files = h("div", { class: "git-files" });
+  private msg = h("textarea", { rows: "3", placeholder: "Commit message (Conventional Commits)" });
+  private stageAll = h("input", { type: "checkbox", checked: "" });
+  private commitBtn = h("button", { class: "primary" }, "Commit");
+  private pushBtn = h("button", {}, "Push");
+  private prodBox = h("div", { class: "prod-confirm", hidden: "" });
+  private yes = h("input", { type: "text", placeholder: "type yes" });
+  private out = h("pre", { class: "git-out" });
+  private last: GitStatus | null = null;
+
+  constructor(root: HTMLElement, private status: (msg: string) => void, private onCommitted: () => void) {
+    const refresh = h("button", { title: "Refresh" }, "↻");
+    refresh.addEventListener("click", () => void this.refresh());
+    this.prodBox.append(h("span", {}, "Production push: "), this.yes);
+    root.append(
+      h("div", { class: "panel-row" }, this.branch, this.header, h("span", { class: "spacer" }), refresh),
+      this.files,
+      this.msg,
+      h("label", { class: "check" }, this.stageAll, " Stage all changes (git add -A)"),
+      h("div", { class: "panel-row" }, this.commitBtn, this.pushBtn),
+      this.prodBox,
+      this.out,
+    );
+    this.commitBtn.addEventListener("click", () => void this.commit());
+    this.pushBtn.addEventListener("click", () => void this.push());
+  }
+
+  async refresh() {
+    try {
+      const s = await api.gitStatus();
+      this.last = s;
+      if (!s.isRepo) {
+        this.branch.textContent = "Not a git repository";
+        this.header.textContent = "";
+        this.files.replaceChildren();
+        return;
+      }
+      this.branch.textContent = s.branch;
+      this.header.textContent = s.header.replace(/^[^.]+(\.\.\.)?/, "").trim();
+      this.prodBox.hidden = !s.prodBranch;
+      this.pushBtn.textContent = s.prodBranch ? `Push ${s.branch} (production)` : "Push";
+      const rows = s.files.map((f) => {
+        const r = h("div", { class: "git-file", title: f.path }, h("code", { class: "xy" }, f.xy.replace(/ /g, "·")), h("span", {}, f.path));
+        r.addEventListener("click", () => void this.showDiff(f.path.includes(" -> ") ? f.path.split(" -> ")[1] : f.path));
+        return r;
+      });
+      this.files.replaceChildren(...(rows.length ? rows : [h("div", { class: "dim" }, "Working tree clean")]));
+    } catch (e) {
+      this.out.textContent = errText(e);
+    }
+  }
+
+  private async showDiff(path: string) {
+    try {
+      const diff = await api.gitDiff(path);
+      this.renderDiff(diff || "(no diff against HEAD: new or untracked file)");
+    } catch (e) {
+      this.out.textContent = errText(e);
+    }
+  }
+
+  private renderDiff(text: string) {
+    this.out.replaceChildren(
+      ...text.split("\n").map((line) => {
+        const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
+        return h("div", { class: cls }, line);
+      }),
+    );
+  }
+
+  private async commit() {
+    const message = this.msg.value.trim();
+    if (!message) {
+      this.out.textContent = "Write a commit message first.";
+      return;
+    }
+    this.commitBtn.disabled = true;
+    try {
+      this.out.textContent = await api.gitCommit(message, this.stageAll.checked);
+      this.msg.value = "";
+      this.status("Committed");
+      this.onCommitted();
+    } catch (e) {
+      this.out.textContent = errText(e);
+    } finally {
+      this.commitBtn.disabled = false;
+      await this.refresh();
+    }
+  }
+
+  private async push() {
+    const prod = this.last?.prodBranch ?? false;
+    if (prod && this.yes.value.trim() !== "yes") {
+      this.out.textContent = `Pushing ${this.last?.branch} is a production promotion. Type yes in the box to confirm.`;
+      this.yes.focus();
+      return;
+    }
+    this.pushBtn.disabled = true;
+    try {
+      this.out.textContent = (await api.gitPush(prod ? this.yes.value.trim() : undefined)) || "Pushed.";
+      this.status("Pushed");
+    } catch (e) {
+      this.out.textContent = errText(e);
+    } finally {
+      this.yes.value = "";
+      this.pushBtn.disabled = false;
+      await this.refresh();
+    }
+  }
+}

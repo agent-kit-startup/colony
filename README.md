@@ -6,11 +6,19 @@ Private, closed-source product repository. No open-source license is granted.
 
 ## Status
 
-Alpha shell. Linux (Omarchy / Hyprland) is the first target.
+Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 
-- Window shell on Tauri 2 (WebKitGTK on Linux).
-- Workspace picker (`Open folder`, or the folder as the first CLI argument).
-- Mission Control home: the installed kit's unforked dashboard server, started for the opened folder on a free loopback port and shown in the main pane.
+| Area | What works |
+|------|------------|
+| Workspace | `Open folder` (Ctrl+O), the folder as the first CLI argument, recent folders on the welcome screen. File access is limited to the opened folder. |
+| Mission Control | Home tab: the installed kit's unforked dashboard server, started for the opened folder on a free loopback port. |
+| Explorer | Lazy file tree (`.git` hidden), refresh button. |
+| Editor | Monaco with one tab per file, dirty marker, Ctrl+S save, Ctrl+W close (asks before dropping unsaved changes), Ctrl+P quick open. |
+| Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
+| Agent | `agent-kit run-plan --events ndjson` for the opened folder (backend picker, tick budget), live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
+| Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
+
+Not yet: cross-vendor HITL inbox, per-tick review diff, engine picker per to-do, OS keychain, "Open in my editor", real Mission Control host actions (the panel still copies), signed bundles.
 
 ## Requirements (Linux)
 
@@ -30,6 +38,15 @@ pnpm tauri build                 # release binary + .deb bundle
 
 `pnpm tauri build` writes `src-tauri/target/release/colony` and `src-tauri/target/release/bundle/deb/Colony_<version>_amd64.deb`. A plain `cargo build --release` is not enough for a runnable binary: the Tauri CLI enables the custom protocol that serves the built frontend.
 
+## Launcher (per user, no sudo)
+
+```bash
+pnpm tauri build
+packaging/install-local-launcher.sh
+```
+
+This writes `~/.local/bin/colony` (wrapper around `src-tauri/target/release/colony`) and `~/.local/share/applications/colony.desktop`, so Colony shows up in the app launcher. `colony ~/code/some-repo` opens a folder directly. Rebuilding updates the same binary; the launcher does not need to be reinstalled.
+
 ## Runtime environment
 
 | Variable | Effect |
@@ -38,6 +55,7 @@ pnpm tauri build                 # release binary + .deb bundle
 | `COLONY_ENABLE_DMABUF=1` | Keep the DMA-BUF renderer on NVIDIA + Wayland. |
 | `COLONY_AGENT_KIT_BIN`, `COLONY_NODE_BIN`, `COLONY_GIT_BIN` | Use these binaries instead of the ones found on PATH. |
 | `COLONY_DASHBOARD_SERVE` | Path to a `dashboard/serve.mjs` to run instead of the one next to the installed `agent-kit`. |
+| `COLONY_SMOKE=<log file>` | Code-path smoke: after the folder opens, open `README.md`, append a line and save, run `echo colony-ok-$((6*7)) > smoke.txt` in a terminal, read git status, start a one-tick driver run, log each step as JSON to the file, then exit. Use a scratch folder: it edits `README.md` and writes `smoke.txt`. During the smoke Colony does not focus the editor or the terminal, but the window itself may still take focus from your compositor. |
 
 A desktop launcher often starts apps without your shell's PATH. Colony appends `~/.local/share/mise/shims`, `~/.local/bin`, `~/.cargo/bin` and the newest mise Node install to PATH at startup, so the dashboard server and the CLI resolve the same tools as your terminal.
 
