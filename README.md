@@ -22,7 +22,7 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Review | `◇ Review` tab: every tick of every run in this window with the files it changed (added, modified, deleted, renamed; new untracked files included, `.gitignore` respected), a Monaco side-by-side diff per file, commits made during the tick, the `LOOP_TICK_RESULT` line, "Copy patch". A tick is the working tree change from the previous tick end (or the run start) to its own end, captured as git tree objects through a throwaway index, so your index, worktree and refs are never touched; an edit you make between two ticks shows up in the next tick. A run killed mid-tick still gets its partial tick. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 
-Not yet: engine choice per to-do (the CLI picks the backend per run), OS keychain, OS keychain for vendor keys (left out: the product plan says the IDE never reads, stores or relays vendor tokens; the agent CLIs keep their own login), signed bundles.
+Not yet: engine choice per to-do (the CLI picks the backend per run), OS keychain for vendor keys (left out: the product plan says the IDE never reads, stores or relays vendor tokens; the agent CLIs keep their own login), signed bundles.
 
 ## Requirements (Linux)
 
