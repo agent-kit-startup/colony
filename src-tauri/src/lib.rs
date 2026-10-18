@@ -3,7 +3,9 @@
 mod agent;
 mod dashboard;
 mod gitops;
+mod launch;
 mod pty;
+mod settings;
 mod tools;
 mod workspace;
 
@@ -19,6 +21,8 @@ pub struct AppState {
     pub dashboard: Mutex<Option<dashboard::DashboardServer>>,
     pub ptys: pty::PtyRegistry,
     pub agent: Mutex<Option<agent::AgentRun>>,
+    /// `<app config dir>/settings.json`, set once at startup.
+    pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
 }
 
@@ -163,8 +167,16 @@ pub fn run() {
             gitops::git_diff,
             gitops::git_commit,
             gitops::git_push,
+            settings::settings_get,
+            settings::settings_ensure,
+            settings::settings_workspace,
+            settings::settings_set_workspace,
+            launch::open_in_editor,
         ])
         .setup(|app| {
+            if let Ok(dir) = app.path().app_config_dir() {
+                *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
+            }
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Colony")
                 .inner_size(1500.0, 950.0)

@@ -31,7 +31,8 @@ export class Terminals {
     return this.tabs.length;
   }
 
-  async create() {
+  /** New tab running the user's shell, or `command` (argv) labelled `label`. */
+  async create(command?: string[], label?: string) {
     const pane = h("div", { class: "term-pane" });
     this.host.append(pane);
     const term = new Terminal({
@@ -45,7 +46,7 @@ export class Terminals {
     term.loadAddon(fit);
     term.open(pane);
     const n = ++this.counter;
-    const tab = h("button", { class: "tab" }, `bash ${n}`);
+    const tab = h("button", { class: "tab", title: command ? command.join(" ") : "" }, label ?? `bash ${n}`);
     const close = h("span", { class: "tab-close", title: "Close terminal" }, "×");
     tab.append(close);
     this.tabBar.insertBefore(tab, this.tabBar.querySelector(".tab-add"));
@@ -63,7 +64,7 @@ export class Terminals {
       }
     };
     try {
-      t.id = await api.ptySpawn(term.cols, term.rows, channel);
+      t.id = await api.ptySpawn(term.cols, term.rows, channel, command);
     } catch (e) {
       this.onError(`Terminal: ${errText(e)}`);
       term.write(`\x1b[31m${errText(e)}\x1b[0m\r\n`);

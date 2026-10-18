@@ -19,9 +19,11 @@ document.getElementById("app")!.innerHTML = `
     <span id="ws-name" class="dim">No folder open</span>
     <span class="spacer"></span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
+    <button id="btn-editor" title="Open the current file (or the folder, from Mission Control) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
     <button id="btn-term" class="toggle on" title="Terminal (Ctrl+\`)">Terminal</button>
     <button id="btn-agent" class="toggle" title="Agent panel">Agent</button>
     <button id="btn-git" class="toggle" title="Git panel">Git</button>
+    <button id="btn-settings" class="icon" title="Colony settings (settings.json)">⚙</button>
   </header>
   <aside id="side">
     <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh">↻</button></div>
@@ -71,7 +73,7 @@ let activeTab = HOME_TAB;
 
 // ---- editor + tabs ---------------------------------------------------------------
 const editors = new Editors($("view-editor"), () => renderTabs());
-const tree = new FileTree($("tree"), (p) => void openFile(p), status);
+const tree = new FileTree($("tree"), (p) => void openFile(p), status, (p) => void openInEditor(p));
 
 function relPath(p: string) {
   return workspace && p.startsWith(`${workspace.root}/`) ? p.slice(workspace.root.length + 1) : p;
@@ -135,6 +137,34 @@ async function saveActive() {
     status(`Save failed: ${errText(e)}`);
   }
 }
+
+// ---- open in my editor -------------------------------------------------------------
+/** Hand `path` (default: the active file, else the folder) to the user's own editor. */
+async function openInEditor(path?: string) {
+  if (!workspace) return status("Open a folder first");
+  const target = path ?? (activeTab !== HOME_TAB ? activeTab : workspace.root);
+  if (editors.isDirty(target)) status(`${relPath(target)} has unsaved changes in Colony: save first (Ctrl+S)`);
+  try {
+    const launch = await api.openInEditor(target);
+    if (launch.mode === "terminal") {
+      toggleTerminal(true);
+      await terminals.create(launch.argv, launch.label);
+    }
+    status(`Opened ${relPath(target)} in ${launch.label.split(" ")[0]} (${launch.source}${launch.mode === "terminal" ? ", terminal tab" : ""})`);
+    return launch;
+  } catch (e) {
+    status(`Open in editor: ${errText(e)}`);
+  }
+}
+$("btn-editor").addEventListener("click", () => void openInEditor());
+$("btn-settings").addEventListener("click", async () => {
+  try {
+    await openFile(await api.settingsEnsure());
+    status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the Agent panel");
+  } catch (e) {
+    status(`Settings: ${errText(e)}`);
+  }
+});
 
 // ---- panels ------------------------------------------------------------------------
 const terminals = new Terminals($("term-tabs"), $("terms"), status);
@@ -347,6 +377,7 @@ window.addEventListener(
     else if (key === "o" && !ev.shiftKey && !inTerm) void pickFolder();
     else if (key === "p" && !ev.shiftKey && !inTerm) void showQuick();
     else if (key === "w" && !ev.shiftKey && !inTerm && activeTab !== HOME_TAB) void closeFile(activeTab);
+    else if (key === "e" && ev.shiftKey) void openInEditor();
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
@@ -396,6 +427,14 @@ async function runSmoke(root: string) {
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
+    // Open in my editor (run the smoke with EDITOR=packaging/smoke/fake-editor.sh).
+    const launch = await openInEditor(file);
+    let proof = "";
+    for (let i = 0; i < 25 && !proof; i++) {
+      await wait(200);
+      proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
+    }
+    await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     const events: string[] = [];

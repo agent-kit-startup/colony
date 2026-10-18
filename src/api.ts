@@ -16,6 +16,9 @@ export interface Entry { name: string; path: string; isDir: boolean }
 export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string }
 export type PtyEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null };
 export type AgentEvent = { kind: "event"; line: string } | { kind: "stderr"; line: string } | { kind: "exit"; code: number | null };
+export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
+export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
+export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 export interface GitFile { xy: string; path: string }
 export interface GitStatus { isRepo: boolean; branch: string; header: string; prodBranch: boolean; files: GitFile[] }
 
@@ -29,7 +32,8 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   dashboardStart: () => invoke<DashboardInfo>("dashboard_start"),
-  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>) => invoke<number>("pty_spawn", { cols, rows, onEvent }),
+  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[]) =>
+    invoke<number>("pty_spawn", { cols, rows, command: command ?? null, onEvent }),
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
@@ -38,6 +42,11 @@ export const api = {
   agentReply: (askId: string, reply: number | string) => invoke<void>("agent_reply", { askId, reply }),
   agentStop: () => invoke<void>("agent_stop"),
   agentKill: () => invoke<void>("agent_kill"),
+  settingsGet: () => invoke<SettingsInfo>("settings_get"),
+  settingsEnsure: () => invoke<string>("settings_ensure"),
+  settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
+  settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
+  openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
   gitStatus: () => invoke<GitStatus>("git_status"),
   gitDiff: (path?: string) => invoke<string>("git_diff", { path: path ?? null }),
   gitCommit: (message: string, stageAll: boolean) => invoke<string>("git_commit", { message, stageAll }),

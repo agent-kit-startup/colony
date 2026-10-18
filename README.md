@@ -16,9 +16,10 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Editor | Monaco with one tab per file, dirty marker, Ctrl+S save, Ctrl+W close (asks before dropping unsaved changes), Ctrl+P quick open. |
 | Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
 | Agent | `agent-kit run-plan --events ndjson` for the opened folder (backend picker, tick budget), live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
+| Open in my editor | `Open in editor` (Ctrl+Shift+E) hands the active file, or the folder from the Mission Control tab, to your own editor; right-click a file or folder in the Explorer for that one. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 
-Not yet: cross-vendor HITL inbox, per-tick review diff, engine picker per to-do, OS keychain, "Open in my editor", real Mission Control host actions (the panel still copies), signed bundles.
+Not yet: cross-vendor HITL inbox, per-tick review diff, engine picker per to-do, OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
 
 ## Requirements (Linux)
 
@@ -46,6 +47,19 @@ packaging/install-local-launcher.sh
 ```
 
 This writes `~/.local/bin/colony` (wrapper around `src-tauri/target/release/colony`) and `~/.local/share/applications/colony.desktop`, so Colony shows up in the app launcher. `colony ~/code/some-repo` opens a folder directly. Rebuilding updates the same binary; the launcher does not need to be reinstalled.
+
+## Settings
+
+`~/.config/io.missionkit.colony/settings.json` (the ⚙ button creates it and opens it in a Colony tab). Read on every use: a saved edit applies at once.
+
+```json
+{
+  "editor": { "command": ["zed", "{path}"], "terminal": false },
+  "workspaces": { "/home/me/code/repo": { "backend": "claude" } }
+}
+```
+
+Open in my editor picks, in order: `editor.command` (a string split on spaces, or an argv array; the path is appended or replaces `{path}`), `$VISUAL`, `$EDITOR`, then `xdg-open`. `$VISUAL` / `$EDITOR` run in a new Colony terminal tab through `sh -c '<editor> "$@"'`, the way git runs them, so terminal editors (and wrappers such as `omarchy-launch-editor --inline`) work; a configured command runs detached unless it is a terminal editor (`nvim`, `vim`, `hx`, ...). `editor.terminal` forces either way. The path is always its own argument.
 
 ## Runtime environment
 

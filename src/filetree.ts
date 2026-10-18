@@ -10,6 +10,8 @@ export class FileTree {
     private el: HTMLElement,
     private onOpen: (path: string) => void,
     private onError: (msg: string) => void,
+    /** Right-click on a row: open that file or folder in the user's editor. */
+    private onContext?: (path: string) => void,
   ) {}
 
   async setRoot(root: string) {
@@ -46,6 +48,11 @@ export class FileTree {
       const caret = h("span", { class: "caret" }, entry.isDir ? (this.expanded.has(entry.path) ? "▾" : "▸") : "");
       row.append(caret, h("span", { class: "name" }, entry.name));
       if (entry.path === this.active) row.classList.add("active");
+      row.addEventListener("contextmenu", (ev) => {
+        if (!this.onContext) return;
+        ev.preventDefault();
+        this.onContext(entry.path);
+      });
       box.append(row);
       if (entry.isDir) {
         const kids = h("div", { class: "tree-sub" });

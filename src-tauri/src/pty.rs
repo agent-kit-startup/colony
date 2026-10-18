@@ -70,6 +70,7 @@ pub fn pty_spawn(
     state: State<'_, AppState>,
     cols: u16,
     rows: u16,
+    command: Option<Vec<String>>,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32, String> {
     let cwd = workspace::workspace_root(&state)
@@ -79,7 +80,15 @@ pub fn pty_spawn(
     let pair = native_pty_system()
         .openpty(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("openpty failed: {e}"))?;
-    let mut cmd = CommandBuilder::new(tools::user_shell());
+    // `command`: run this argv instead of the shell (e.g. the user's terminal editor).
+    let mut cmd = match command.as_deref() {
+        Some([prog, args @ ..]) => {
+            let mut c = CommandBuilder::new(prog);
+            c.args(args);
+            c
+        }
+        _ => CommandBuilder::new(tools::user_shell()),
+    };
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");

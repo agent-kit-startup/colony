@@ -58,6 +58,13 @@ pub fn jail(state: &AppState, p: &str) -> Result<PathBuf, String> {
             parent.join(file)
         }
     };
+    // The Colony settings file is the one path outside the folder the editor may open.
+    let settings_file = crate::settings::settings_path(state)
+        .ok()
+        .and_then(|s| Some(s.parent()?.canonicalize().ok()?.join(s.file_name()?)));
+    if settings_file.is_some_and(|s| s == resolved) {
+        return Ok(resolved);
+    }
     if !resolved.starts_with(&root) {
         return Err(format!("Path is outside the workspace: {}", resolved.display()));
     }
