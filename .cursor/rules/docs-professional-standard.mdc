@@ -1,0 +1,51 @@
+---
+description: Project documentation, professional and inheritable standard. No people, transient projects, chat, or session context. Applies to this repo and to any project where Agent Kit is installed.
+alwaysApply: true
+---
+
+# Documentation: professional, inheritable standard
+
+Documentation **belongs to the project**, not the conversation or the moment. A maintainer a year from now should understand the system without chat access.
+
+## Scope
+
+Applies to: README, `docs/`, ADRs, runbooks, `CHANGELOG`, public API comments, setup guides, `install.md`, skills/rules versioned as product, and any markdown **meant to live in Git** as a project reference.
+
+Does **not** apply to chat tone (`ux-tone`). HANDOFF and active plans are session state; still no gossip/meta-language (`agent-output-hygiene`). When promoting plan/HANDOFF content into `docs/`, **rewrite** to this standard.
+
+## Indicative docs; delivery truth (read-time)
+
+README, HANDOFF, inventories, claim matrices, and monitor prose are **indicative**. They orient; they are never sole proof of runtime, release, or "work done."
+
+When a claim matters (install path, shipped version, completed to-do, public behavior), verify against **code, tests, APIs, infra, Git SHAs, and published artifacts**. Prefer those when they conflict with docs.
+
+**Review / acceptance priority** (highest first): (1) delivery truth, (2) security, (3) logic gaps, (4) bad code/practices with path-level evidence.
+
+Write-time **Verifiable** (below) is the authoring half. Evidence: `errors/2026-07-30_docs-claimed-path-c-unpublished-after-ship.md`; ADR `decisions/2026-08-01_docs-indicative-delivery-truth.md`.
+
+## Required
+
+1. **Project voice** - the system ("the CLI does X"), not the session.
+2. **Inheritable** - stable names for components, commands, paths, contracts.
+3. **Timeless** - behavior and invariants over sprint dates.
+4. **Verifiable** - claims match code; docs never sole proof.
+5. **Complete enough** - setup, usage, limits, internal links; no filler.
+
+## Forbidden (transient / outside the project)
+
+Everything forbidden in `agent-output-hygiene` applies. Additionally:
+
+| Forbidden | Instead |
+|-----------|---------|
+| Client-specific IDs / workspace names in examples | Placeholder (`YOUR_LIST_ID`) |
+| "As we discussed", "previous chat", "agent WIP" | Current system state |
+
+## Inheritance test
+
+> Can a new maintainer, with no chat access, use this 12 months from now?
+
+If not, or if it would be embarrassing on public GitHub, rewrite.
+
+## Relation to other rules
+
+`agent-output-hygiene` (chat vs repo), `docs-repo` (writing process, follows this rule), `ux-tone` (chat only).

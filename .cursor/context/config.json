@@ -1,0 +1,137 @@
+{
+  "onboarded": false,
+  "onboarding": {
+    "contractVersion": 1,
+    "status": "in_progress",
+    "updatedAt": "2026-10-18T14:29:38.621Z",
+    "checks": {
+      "workspace.agent-kit": {
+        "status": "ready",
+        "essential": true,
+        "evidence": [
+          {
+            "source": "file",
+            "value": ".cursor/agent-kit.json"
+          }
+        ]
+      },
+      "purpose.classification": {
+        "status": "needs_choice",
+        "essential": true,
+        "evidence": []
+      },
+      "context.sources": {
+        "status": "ready",
+        "essential": true,
+        "evidence": [
+          {
+            "source": "file",
+            "value": ".cursor/rules:Cursor rules"
+          }
+        ]
+      },
+      "git.repository": {
+        "status": "ready",
+        "essential": true,
+        "evidence": [
+          {
+            "source": "git",
+            "value": "branch:main"
+          }
+        ]
+      },
+      "git.staging-branch": {
+        "status": "needs_choice",
+        "essential": false,
+        "evidence": []
+      },
+      "safety.secrets": {
+        "status": "ready",
+        "essential": true,
+        "evidence": [
+          {
+            "source": "file",
+            "value": ".gitignore:.env"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:.env.*"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*.key"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*.pem"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*.p12"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*.pfx"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*credentials*.json"
+          },
+          {
+            "source": "file",
+            "value": ".gitignore:*service-account*.json"
+          }
+        ]
+      },
+      "stack.detected": {
+        "status": "needs_choice",
+        "essential": true,
+        "evidence": []
+      },
+      "quality.validation": {
+        "status": "manual",
+        "essential": false,
+        "evidence": []
+      },
+      "infrastructure.detected": {
+        "status": "ready",
+        "essential": false,
+        "evidence": []
+      },
+      "collaboration.provider": {
+        "status": "ready",
+        "essential": false,
+        "evidence": [
+          {
+            "source": "configuration",
+            "value": ".cursor/agent-kit.config.json#git.provider"
+          }
+        ]
+      },
+      "agent-kit.context": {
+        "status": "ready",
+        "essential": false,
+        "evidence": []
+      }
+    },
+    "deferredItems": []
+  },
+  "externalPlanReview": {
+    "enabled": false,
+    "backend": "claude",
+    "autoRemediate": false,
+    "offerOnExhausted": true,
+    "mode": "paste",
+    "midBatchAudits": false,
+    "preflight": "off"
+  },
+  "autoHandoff": false,
+  "agentPersona": {
+    "default": "autopilot",
+    "modes": {
+      "continue-plan": "autopilot",
+      "run-plan": "night-shift",
+      "cli-run-plan": "ghost-runner"
+    }
+  }
+}

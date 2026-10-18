@@ -1,0 +1,31 @@
+{
+  "name": "colony",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mission Kit Colony desktop IDE",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri"
+  },
+  "packageManager": "pnpm@10.0.0",
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-dialog": "2.8.3",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "monaco-editor": "0.52.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3",
+    "typescript": "5.9.3",
+    "vite": "6.4.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

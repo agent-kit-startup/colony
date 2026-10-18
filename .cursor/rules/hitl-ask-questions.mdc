@@ -1,0 +1,22 @@
+---
+description: HITL via Ask questions (AskQuestion) for ALL Agent Kit confirmations, choices, and clarifications. Chat fallback when tool unavailable.
+alwaysApply: true
+---
+
+# HITL Ask Questions - Kit-wide confirmations via AskQuestion
+
+Agent Kit uses **Ask questions** (`AskQuestion` / ACP `cursor/ask_question`) for **ALL** human-in-the-loop confirmations, choices, and clarifications before acting.
+
+Exact Ask labels, per-command gates, and numbered fallback as **path 1**: [`.cursor/skills/core/hitl-gates/SKILL.md`](../skills/core/hitl-gates/SKILL.md).
+
+## Contract
+
+1. Any step that needs confirmation, choice, or clarification before acting must call **Ask questions**, not ask the user to type. No exceptions for onboarding or install.
+2. Prefer one question at a time (or a small coherent set if the product allows multi-question).
+3. Options must be concrete labels (for example `Write plan file`, `Write plan and add to backlog`, `Start first unit`).
+4. **Fallback is path 1:** when the tool is not in the session toolset, say so once, print one `HITL_GATE: <ask-id> | <labels>` line and the same options as a **numbered list** right after it (same message), accept number or label, and treat a typed answer as Other. Do not invent a fake tool call. Inbox, owed-close, and landing Asks are opt-in or post-default (inventory, ids and sentinel format: `.cursor/skills/core/hitl-gates/SKILL.md`).
+5. Skipped or cancelled answers mean **stop** (same as no yes).
+
+## CLI exception
+
+`agent-kit init` and other interactive CLI confirmations already use `@clack/prompts`. Keep that. Do not call IDE `AskQuestion` from the CLI.

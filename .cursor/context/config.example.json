@@ -1,0 +1,66 @@
+{
+  "onboarded": false,
+  "onboarding": {
+    "contractVersion": 1,
+    "status": "not_started",
+    "updatedAt": null,
+    "checks": {},
+    "deferredItems": []
+  },
+  "externalPlanReview": {
+    "enabled": false,
+    "backend": "auto",
+    "reviewerModel": "sonnet",
+    "advisorModel": "opus",
+    "autoRemediate": false,
+    "offerOnExhausted": true,
+    "mode": "autonomous",
+    "midBatchAudits": true,
+    "preflight": "warn",
+    "cloudAgent": {
+      "repoUrl": null,
+      "startingRef": null,
+      "model": "composer-2.5"
+    }
+  },
+  "autoHandoff": false,
+  "interTickCooldownMs": 0,
+  "dogfood": {
+    "factoryRoot": null
+  },
+  "fieldReportReviewCadence": {
+    "enabled": true,
+    "tickThreshold": 3
+  },
+  "updateCheck": {
+    "enabled": false,
+    "intervalDays": 7,
+    "lastCheckedAt": null
+  },
+  "cursorUpdateCheck": {
+    "enabled": false,
+    "intervalDays": 7,
+    "lastCheckedAt": null,
+    "lastSeenCursorVersion": null,
+    "changelogUrl": "https://cursor.com/changelog"
+  },
+  "publicInboundCheck": {
+    "enabled": false,
+    "intervalDays": 7,
+    "lastCheckedAt": null
+  },
+  "updateApply": {
+    "auto": false
+  },
+  "agentPersona": {
+    "default": "autopilot",
+    "modes": {
+      "continue-plan": "autopilot",
+      "run-plan": "night-shift",
+      "cli-run-plan": "ghost-runner"
+    }
+  },
+  "missionControl": {
+    "preferredBrowser": null
+  }
+}

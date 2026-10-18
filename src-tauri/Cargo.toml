@@ -1,0 +1,27 @@
+[package]
+name = "colony"
+version = "0.1.0"
+description = "Mission Kit Colony desktop IDE"
+edition = "2021"
+publish = false
+
+[lib]
+name = "colony_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.4", features = [] }
+tauri-plugin-dialog = "2"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

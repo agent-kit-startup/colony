@@ -1,0 +1,25 @@
+:root {
+  --bg: #15171c;
+  --bg-2: #1b1e25;
+  --bg-3: #232731;
+  --line: #2e3340;
+  --fg: #d7dae0;
+  --fg-dim: #8b93a3;
+  --accent: #5b7cff;
+  --accent-2: #9a5bff;
+  --danger: #ff5a5f;
+  --ok: #3ccf8e;
+  --warn: #f5b84b;
+  --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", "DejaVu Sans Mono", monospace;
+  --sans: "Inter", "Noto Sans", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--sans); overflow: hidden; }
+button { font: inherit; color: var(--fg); background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: 0.5; cursor: default; }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+textarea { font-family: var(--mono); resize: vertical; }
+.dim { color: var(--fg-dim); }

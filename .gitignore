@@ -1,0 +1,23 @@
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*credentials*.json
+*service-account*.json
+.cursor/HANDOFF.md
+.cursor/dogfood/
+.cursor/context/readiness.json
+.cursor/context/flight-log.json
+.cursor/context/mission-timing.json
+.cursor/context/gate-exit.json
+.cursor/context/review-ledger.json
+.cursor/context/plan-index.json
+.cursor/loop-logs/
+
+# Colony build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/

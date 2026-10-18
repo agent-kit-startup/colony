@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "purpose": {
+    "value": "unknown",
+    "categories": [
+      "unknown"
+    ],
+    "confidence": "low",
+    "evidence": []
+  },
+  "stack": {
+    "language": "unknown",
+    "workspaces": false,
+    "testCommands": [],
+    "validationCommands": [],
+    "hasProjectFiles": false
+  },
+  "git": {
+    "mode": "remote-hosted",
+    "workflow": "feature-pr",
+    "remotes": [
+      {
+        "name": "origin",
+        "url": "git@github.com:agent-kit-startup/mission-kit.git"
+      }
+    ],
+    "remoteUrl": "git@github.com:agent-kit-startup/mission-kit.git",
+    "remoteName": "origin",
+    "currentBranch": "main",
+    "isDirty": true,
+    "hasLocalStaging": false,
+    "hasRemoteStaging": false,
+    "provider": "github",
+    "providerKind": "github",
+    "providerConfidence": "high",
+    "providerEvidence": [
+      {
+        "source": "git",
+        "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+      }
+    ]
+  },
+  "infra": {
+    "docker": false,
+    "kubernetes": false,
+    "ci": "none",
+    "ciFiles": [],
+    "infrastructureFiles": [],
+    "deploymentFiles": [],
+    "ciRunCommands": []
+  },
+  "services": {},
+  "context": {
+    "sources": [
+      {
+        "source": "file",
+        "value": ".cursor/rules:Cursor rules"
+      }
+    ],
+    "hasReadme": false,
+    "hasArchitecture": false,
+    "hasRunbooks": false,
+    "hasAgentGuidance": true
+  },
+  "detection": {
+    "generatedAt": "2026-10-18T14:29:38.621Z",
+    "repositoryFingerprint": "dcbdd48d5d648ee8588e11f47fe507336e39c259355e14fd92fdbeaa88837750",
+    "providerConfidence": "high",
+    "providerEvidence": [
+      {
+        "source": "git",
+        "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+      }
+    ]
+  }
+}

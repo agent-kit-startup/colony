@@ -1,0 +1,48 @@
+---
+description: Structured Git flow (staging -> prod), Agent Kit's DevOps spine. Base: autogit/gitupdate.md. Tied to handoff and memory-loop.
+alwaysApply: true
+globs: 
+---
+
+# Git - Staging to production flow (DevOps spine)
+
+Reference: [autogit/gitupdate.md](autogit/gitupdate.md). Session hard rule point 5 states the short spine (`HARD_RULES`); this rule adds kit naming and pointers. Full routines live in `autogit/gitupdate.md`.
+
+Agent Kit treats this flow as **operational memory**: plan -> handoff -> staging -> prod -> memory. Without a structured promote, handoffs go stale.
+
+## Commands
+
+| Command | Slash | Destination | Use |
+|---------|-------|-------------|-----|
+| `git staging` | `/git-staging` | `origin/staging` | Working branch, commit, MR, merge to staging |
+| `git prod` | `/git-prod` | `origin/main` | Promote approved staging to production |
+
+Factory wrap (not consumer L0): `/kit-staging` / `/kit-prod` when present. Consumers use `/git-staging` / `/git-prod`. Legacy pre-prod names (`homologacao`, `develop`) keep the two-step pattern; canonical name is `staging`.
+
+## Critical rule
+
+- **NEVER** commit or push directly to `main` / `origin/main`. Always via `origin/staging`.
+- Commits: **`git staging`**. Production: only **`git prod`** after staging approval.
+- Never work on `main`. After `git prod`, switch back to `staging`.
+- Install `pre-commit` / `pre-push` guards from [git-hooks/](../../git-hooks/) that abort commit/push to `main`/`master`.
+- `git log --first-parent --no-merges main` should only list the root commit.
+- Prune migrated legacy pre-prod branches locally and on remotes.
+
+## Flow + memory
+
+After staging or prod: update `.cursor/HANDOFF.md`. Closed incidents/decisions: write `.cursor/memory/` (memory-loop).
+
+## Conventional Commits
+
+Prefixes: `feat:`, `fix:`, `docs:`, `docs(memory):`, `refactor:`, `chore:`, `chore(kit):`, `test:`, `style:`, `perf:`. Soft kit paths (monitors, `_index` Audits, versioned HANDOFF) ship as `docs(memory):` / `chore(kit):` when not the product theme.
+
+## When the user says
+
+- **`git staging`** / **`git prod`**: run the matching section in [autogit/gitupdate.md](autogit/gitupdate.md) end-to-end (SoT). Do not invent a parallel routine.
+  Prod: **one confirm, one ship**. Red or unfinished post-prod verification is a STOP. Done means `main` pushed, tag pushed, tag CI green (plus any project release verification). Never steal the confirmation Ask.
+
+## Troubleshooting
+
+- Direct commits to main blocked -> `git staging`.
+- No `staging` branch -> `git checkout -b staging` and `git push -u origin staging`.
+- Legacy `homologacao` -> same command; migrate to `staging` when possible (gitupdate Naming).

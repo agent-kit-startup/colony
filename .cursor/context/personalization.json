@@ -1,0 +1,576 @@
+{
+  "contractVersion": 1,
+  "generatorVersion": "6.2.0",
+  "repositoryFingerprint": "dcbdd48d5d648ee8588e11f47fe507336e39c259355e14fd92fdbeaa88837750",
+  "items": [
+    {
+      "kind": "file",
+      "id": ".cursor/project-context.md",
+      "path": ".cursor/project-context.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": "AGENTS.md",
+      "path": "AGENTS.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": "CLAUDE.md",
+      "path": "CLAUDE.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/agent-kit.md",
+      "path": ".claude/commands/agent-kit.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/agent-kit-onboard.md",
+      "path": ".claude/commands/agent-kit-onboard.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/archive-plan.md",
+      "path": ".claude/commands/archive-plan.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/backlog-add.md",
+      "path": ".claude/commands/backlog-add.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/backlog-cancel.md",
+      "path": ".claude/commands/backlog-cancel.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/backlog-delete.md",
+      "path": ".claude/commands/backlog-delete.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/backlog-edit.md",
+      "path": ".claude/commands/backlog-edit.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/continue-plan.md",
+      "path": ".claude/commands/continue-plan.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/cursor-update-awareness.md",
+      "path": ".claude/commands/cursor-update-awareness.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/dashboard-broadcast.md",
+      "path": ".claude/commands/dashboard-broadcast.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/dashboard.md",
+      "path": ".claude/commands/dashboard.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/dogfood.md",
+      "path": ".claude/commands/dogfood.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/field-report-resolve.md",
+      "path": ".claude/commands/field-report-resolve.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/git-prod.md",
+      "path": ".claude/commands/git-prod.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/git-staging.md",
+      "path": ".claude/commands/git-staging.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/handoff.md",
+      "path": ".claude/commands/handoff.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/hotfix.md",
+      "path": ".claude/commands/hotfix.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/plan-external-review.md",
+      "path": ".claude/commands/plan-external-review.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/plan-review-triage.md",
+      "path": ".claude/commands/plan-review-triage.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/qa.md",
+      "path": ".claude/commands/qa.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/review-pack.md",
+      "path": ".claude/commands/review-pack.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/run-plan-all.md",
+      "path": ".claude/commands/run-plan-all.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/run-plan-loop.md",
+      "path": ".claude/commands/run-plan-loop.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/run-plan-orchestrated.md",
+      "path": ".claude/commands/run-plan-orchestrated.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/run-plan.md",
+      "path": ".claude/commands/run-plan.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/start-project.md",
+      "path": ".claude/commands/start-project.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/summary.md",
+      "path": ".claude/commands/summary.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/commands/update.md",
+      "path": ".claude/commands/update.md",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".claude/settings.json",
+      "path": ".claude/settings.json",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    },
+    {
+      "kind": "file",
+      "id": ".cursor/agent-kit.claude-settings.json",
+      "path": ".cursor/agent-kit.claude-settings.json",
+      "status": "applied",
+      "evidence": [
+        {
+          "source": "git",
+          "value": "remote:git@github.com:agent-kit-startup/mission-kit.git"
+        },
+        {
+          "source": "file",
+          "value": ".cursor/rules:Cursor rules"
+        }
+      ]
+    }
+  ],
+  "protectedPaths": [
+    ".claude/commands/agent-kit-onboard.md",
+    ".claude/commands/agent-kit.md",
+    ".claude/commands/archive-plan.md",
+    ".claude/commands/backlog-add.md",
+    ".claude/commands/backlog-cancel.md",
+    ".claude/commands/backlog-delete.md",
+    ".claude/commands/backlog-edit.md",
+    ".claude/commands/continue-plan.md",
+    ".claude/commands/cursor-update-awareness.md",
+    ".claude/commands/dashboard-broadcast.md",
+    ".claude/commands/dashboard.md",
+    ".claude/commands/dogfood.md",
+    ".claude/commands/field-report-resolve.md",
+    ".claude/commands/git-prod.md",
+    ".claude/commands/git-staging.md",
+    ".claude/commands/handoff.md",
+    ".claude/commands/hotfix.md",
+    ".claude/commands/plan-external-review.md",
+    ".claude/commands/plan-review-triage.md",
+    ".claude/commands/qa.md",
+    ".claude/commands/review-pack.md",
+    ".claude/commands/run-plan-all.md",
+    ".claude/commands/run-plan-loop.md",
+    ".claude/commands/run-plan-orchestrated.md",
+    ".claude/commands/run-plan.md",
+    ".claude/commands/start-project.md",
+    ".claude/commands/summary.md",
+    ".claude/commands/update.md",
+    ".claude/settings.json",
+    ".cursor/HANDOFF.md",
+    ".cursor/agent-kit.claude-settings.json",
+    ".cursor/context/backups/**",
+    ".cursor/context/config.json",
+    ".cursor/context/current/**",
+    ".cursor/memory/**",
+    ".cursor/plans/**",
+    ".cursor/project-context.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ]
+}

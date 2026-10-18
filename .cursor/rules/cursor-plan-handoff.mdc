@@ -1,0 +1,45 @@
+---
+description: Handoff between agents (multi-phase plans). Update HANDOFF.md at the end of a phase or when context is full; in a new conversation, read HANDOFF and resume.
+alwaysApply: true
+---
+
+# Handoff between agents (multi-phase plans)
+
+When working from a **plan** (file in `.cursor/plans/`, or a reference to a plan with to-dos):
+
+0. **Plan first:** no plan with to-dos -> create/update one via plan-routine or `/start-project` before implementing. Keep to-do `status` current (`pending` -> `in_progress` -> `completed`) for the panel.
+
+0b. **Manual mode hard stop (default):** session hard rules 1-2 (one phase per chat; never burn the window without `/run-plan` or its deprecated aliases).
+
+0c. **`/start-project` two gates (HITL):** same as session hard rule 7; Gate B option effects (`Add to backlog` vs `Stop here`) live in `.cursor/skills/core/hitl-gates/start-project-intake.md`. Gates use Ask questions per `.cursor/skills/core/hitl-gates/SKILL.md` and `.cursor/rules/hitl-ask-questions.mdc`.
+
+0d. **Backlog CRUD (enqueue without activation):** same as session hard rule 10. Distinct from `/archive-plan` (parked-list only). Ask questions on every mutate; chat numbered-list fallback.
+
+1. **Execute to-dos by phase** following the plan's "Phases and to-dos by context" section (when it exists), in order Phase 0 -> 5.
+
+2. **At the end of each phase:** create or update `.cursor/HANDOFF.md` (fields per the template below).
+   - **Manual mode:** if the phase produced commitable code, **suggest** `/git-staging` (do not run without being asked). Production only via `/git-prod`.
+   - **Continuous mode** (`/run-plan`): run `/git-staging` at the end of the tick if there is a diff; update to-do status in the plan every tick; **never** `/git-prod`. Orchestrated: the main window does not implement (dispatch a Task/worker, review, write HANDOFF, stage). No Task: in-session loop.
+   - **Queue mode** (`/run-plan-all`): one release per completed plan when Ship auth is `per-plan-release`. `Run plans only` does not promote. A red public sync stops the queue.
+
+3. **If context is getting full** (manual mode): HANDOFF + new conversation per `context-guardian` (Running a Handoff). In **continuous loop** mode, prefer HANDOFF + stop/reschedule per the command; if the window is critical, stop the loop and ask for a new conversation.
+
+4. **New conversation** ("continue the plan" or plan opened): **read `.cursor/HANDOFF.md` first**, resume at the indicated next phase/to-do. Do not start over.
+
+5. **Plans always have to-dos** in the frontmatter (`.cursor/context/templates/plan.md`). None? Flag it: "Heads up, this plan has no to-dos. Want me to create some based on the sections?"
+
+6. **Context budget (optional per to-do)** and **execution modes** (manual `/continue-plan`, continuous `/run-plan`): `read_scope`, `worker_contract`, `max_ticks` in `autogit/plan-routine.md`. In orchestrated mode pass them to the worker; over `max_ticks`, HANDOFF + new conversation.
+
+## HANDOFF.md template
+
+**SoT:** `.cursor/context/templates/handoff.md` (provenance, Gaps voice, Mode vocabulary incl. the quota stop per `context-guardian`, queue fields, growth contract).
+
+Mission Control parses **machine fields** as `- **Field:**` bullets, never `##` headings (hard rule 11): Plan (backticked `*.plan.md` or `none`), Last updated, Mode, Phase completed, Completed to-dos, Next phase, Next to-dos, Gaps, Instruction for the next agent (1-3 sentences), Backlog plans, Parked plans.
+
+**Gaps:** short operator residuals, no monitor paths or `/git-prod` boilerplate; exact `none` when only audit/queue plumbing changed.
+
+**Growth contract:** <= 200 lines, no line over 2,000 chars; machine fields survive a prune. Over: `agent-kit handoff --prune [--keep N]`; `agent-kit validate handoff` warns. `.cursor/HANDOFF.md` may be gitignored.
+
+## Context Memory System
+
+Context Pack `.cursor/context/current/[task-id].md`; CLI `./cursor-handoff new|update|status|handoff|archive|resume` (archive -> `.cursor/context/archive/YYYY-MM/`). On resume, read HANDOFF, then the Context Pack if present.

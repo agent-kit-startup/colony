@@ -1,0 +1,104 @@
+# Handoff - [Task Name]
+
+Machine fields below must stay as `- **Field:**` bullets (Mission Control parses those). Do not replace Backlog / Parked / Run queue with `##` section headings alone.
+
+**Mid-batch monitor pointers are not durable here.** `.cursor/HANDOFF.md` is gitignored session state — `agent-kit install`/`doctor` merges this entry into `.gitignore` (kit-owned ignore patterns; see `packages/cli/src/scanner/detect-repository.ts`). Pointers to sibling monitors must live in the tracked `.cursor/memory/_index.md` Audits row for the watched monitor (R14-paired in the same commit). Cite that row in the plan or monitor notes; do not rely on a HANDOFF line as delivery evidence.
+
+### HITL provenance (required)
+
+Any field that asserts a human decision (parked, approved, deferred, confirmed, stopped-by-operator, `Queue status: stopped` as an operator action) must record what produced it in the same bullet or the next line:
+
+- Ask id (example: `queue-confirm`)
+- Operator reply text (example: `Run as proposed`)
+- `agent-inferred` when no human said it
+
+An inferred park or stop must not look identical to an operator park. Do not write Parked / Queue status stopped as operator action unless an Ask id and operator reply exist.
+
+Examples:
+
+- `- **Parked plans:** \`foo.plan.md\` (agent-inferred; no Ask)`
+- `- **Queue status:** stopped (Ask \`queue-confirm\` = Cancel)`
+- `- **Queue status:** running (Ask \`queue-confirm\` = Run as proposed)`
+
+- **Plan:** `file.plan.md`
+- **Last updated:** [YYYY-MM-DD HH:MM]
+- **Mode:** [manual | run-plan (orchestrated) | run-plan (in-session loop) | run-plan-all]
+- **Phase completed:** [N]
+- **Next phase:** [N+1]
+- **Completed to-dos:** [list of ids]
+- **Next to-dos:** [ids]
+- **Gaps:** [none | short list of open residuals, blockers, or stop reasons]
+- **Instruction for the next agent:** [1–3 clear sentences]
+
+### Gaps voice (Flight Log)
+
+`- **Gaps:**` is operator residuals for Mission Control Flight Log (NOW / Earlier), not a system-status dump. Flight Log uses palette-by-type notification chrome (`ok` / `advice` / `prompt` / `residual` / `warning`); OK must not look like a yellow residual debit.
+
+| Say | Avoid |
+|-----|--------|
+| Short open residuals the next human can act on | Field Report cadence WARNING ids |
+| Named blocker or stop reason + recovery cursor | Mid-batch monitor path dumps |
+| Exact `none` when audits/queue plumbing is the only noise | `/git-prod` suggestion boilerplate as Gaps body |
+| | Review all / Resolve all / Copy review chatter |
+| | `none. Residuals…` / `none. Mid-batch…` (OK + pointer in Gaps body) |
+| | `- **Gaps:** none` while `build` / Evidence checks are red or in-flight at merge HEAD |
+
+**Evidence-checks closeout:** before normalizing Gaps to exact `none` after a staging PR merge (or closeout that claims staging-ready), confirm green via `gh pr checks <N>` or local `pnpm evidence:knowledge-classification:check`. Name red/pending Evidence checks under Gaps until fixed or waived. ADR: `decisions/2026-08-01_evidence-checks-merge-gate.md`.
+
+**Before / after:** queue exhausted or mid-batch → prefer exact `none` (audits are not Gaps; put pointers in Instruction). Residuals after triage → short enqueue note, not a full Still-open table. See ADR `2026-07-27_mc-flight-log-panel.md`.
+
+### Mode vocabulary
+
+| Situation | Recommended `- **Mode:**` value |
+|-----------|-------------------------------|
+| Manual `/continue-plan` | `manual` |
+| Continuous run, orchestrated | `run-plan (orchestrated)` |
+| Continuous run, in-session loop | `run-plan (in-session loop)` |
+| Multi-plan queue | `run-plan-all` |
+| API / usage limit hard stop | `[prior mode] — STOPPED: API/usage limit` (example: `run-plan (orchestrated) — STOPPED: API/usage limit`) |
+
+Mission Control treats Mode containing `STOPPED` or `exhausted` as terminal. On quota stops, also set `- **Gaps:**` to the stop reason and recovery cursor.
+
+## Work Status
+
+- **In progress:** [what is being worked on now]
+- **Pending:** [next steps or items not yet started]
+- **Blockers:** [impediments, dependencies or pending decisions - leave empty if none]
+- **Backlog plans:**
+  - `other-plan.plan.md`
+- **Parked plans:** none
+
+## Session Context
+
+- **Branch:** [current branch name]
+- **Uncommitted:** [summary of what was not committed, e.g.: "2 files modified in docs/"]
+- **References:** [links to STATE.md, Context Pack or critical files, e.g.: `file:line`]
+
+## Files Touched
+
+- [file1] - [action]
+- [file2] - [action]
+
+## Decisions Made
+
+- [decision 1] - [rationale]
+
+## Issues Found
+
+- [issue] - [status: resolved|pending]
+
+---
+
+## Run queue (multi-plan only)
+
+When using `/run-plan-all`, persist queue state as the same bullet fields (not a heading-only section):
+
+- **Mode:** run-plan-all
+- **Run queue:** [plan-a.plan.md, plan-b.plan.md, plan-c.plan.md]
+- **Queue cursor:** N (current: plan-x.plan.md)
+- **Queue status:** running | paused | blocked | exhausted
+- **Queue outcomes:**
+  - plan-x.plan.md: completed (last to-do id, notes)
+- **Gaps:** [none | queue-level stop reason]
+
+*Growth contract: at or under 200 lines, no line over 2,000 chars (bytes/lines/longest-line only). Machine fields above always survive a prune. Over the limit: `agent-kit handoff --prune [--keep N]` (default 5) archives older narrative entries to `.cursor/context/archive/`; `agent-kit validate handoff` warns when either limit is crossed.*

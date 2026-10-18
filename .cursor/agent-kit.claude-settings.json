@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "denyRowsWritten": [
+    "Bash(git -* push*)",
+    "Bash(git push * +*)",
+    "Bash(git push * --force*)",
+    "Bash(git push * -f*)",
+    "Bash(git push * @)",
+    "Bash(git push * main *)",
+    "Bash(git push * main)",
+    "Bash(git push * master *)",
+    "Bash(git push * master)",
+    "Bash(git push *+main*)",
+    "Bash(git push *+master*)",
+    "Bash(git push *--no-veri*)",
+    "Bash(git push *:main*)",
+    "Bash(git push *:master*)",
+    "Bash(git push *refs/heads/main*)",
+    "Bash(git push *refs/heads/master*)",
+    "Bash(git push --force*)",
+    "Bash(git push -f*)"
+  ],
+  "hookEntriesWritten": [
+    {
+      "event": "PreToolUse",
+      "marker": "guard shell --format claude"
+    },
+    {
+      "event": "SessionStart",
+      "marker": "hook session-start --format claude"
+    }
+  ]
+}
