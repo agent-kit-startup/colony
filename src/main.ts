@@ -5,6 +5,7 @@ import { api, errText, focusPolicy, h, type StartupInfo, type WorkspaceInfo } fr
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
 import { GitPanel } from "./git";
+import { decide, type McRecord } from "./mcactions";
 import { InboxPanel } from "./inbox";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
@@ -401,13 +402,66 @@ async function openWorkspace(path: string) {
   }
 }
 
-// Mission Control action seam: the frame posts each copy record here (src-tauri/src/lib.rs).
+// Mission Control action seam (src-tauri/src/lib.rs hook, src/mcactions.ts allowlist): the
+// frame offers each copy record here first; `handled: false` makes the frame copy as before.
+type McReply = { handled: boolean; ok?: boolean; message?: string };
+let confirmMcRun = async (plan: string | null) => {
+  const engine = agentPanel.backend.value;
+  const named = plan ? ` Mission Control named ${plan}; agent-kit run-plan runs the folder's active plan.` : "";
+  return ask(`Start an Agent run of the active plan in ${workspace?.name ?? "this folder"} with ${engine}?${named}`, { title: "Mission Control", kind: "info" });
+};
+async function hostMcAction(record: McRecord): Promise<McReply> {
+  const d = decide(record);
+  if (d.action === "open-file" && workspace) {
+    const abs = `${workspace.root}/${d.path}`;
+    try {
+      await editors.open(abs);
+      showTab(abs);
+      return { handled: true, message: `Opened ${d.path} in Colony` };
+    } catch {
+      return { handled: false };
+    }
+  }
+  if (d.action === "run-plan" && workspace) {
+    setRight("agent", true);
+    void confirmMcRun(d.plan).then(async (yes) => {
+      if (!yes) return status("Mission Control: run not started");
+      await agentPanel.start();
+    });
+    return { handled: true, message: "Confirm the run in Colony" };
+  }
+  const where = record.destination === "terminal" ? "paste it in a Colony terminal (Ctrl+Shift+V)" : `paste it in the ${record.destination || "target"}`;
+  status(`Mission Control copied ${record.subject || "text"}: ${where}`);
+  return { handled: false };
+}
 window.addEventListener("message", (ev) => {
-  if (!mcOrigin || ev.origin !== mcOrigin || ev.data?.colony !== "mc-action") return;
+  const frame = $<HTMLIFrameElement>("mc");
+  if (!mcOrigin || ev.origin !== mcOrigin || ev.source !== frame.contentWindow || ev.data?.colony !== "mc-action") return;
+  const port = ev.ports[0];
   const a = ev.data.action ?? {};
-  const where = a.destination === "terminal" ? "paste it in a Colony terminal (Ctrl+Shift+V)" : `paste it in the ${a.destination || "target"}`;
-  status(`Mission Control copied ${a.subject || "text"}: ${where}`);
+  const record: McRecord = { kind: String(a.kind ?? ""), text: String(a.text ?? ""), subject: String(a.subject ?? ""), destination: String(a.destination ?? "") };
+  void hostMcAction(record).then(
+    (reply) => port?.postMessage(reply),
+    () => port?.postMessage({ handled: false }),
+  );
 });
+
+/** COLONY_SMOKE: run `perform()` inside the Mission Control frame and wait for its result. */
+function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
+  const frame = $<HTMLIFrameElement>("mc");
+  const id = Math.random().toString(36).slice(2);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ timeout: true }), 4000);
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.origin !== mcOrigin || ev.data?.colony !== "mc-smoke-result" || ev.data.id !== id) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", onMsg);
+      resolve(ev.data.error ? { error: ev.data.error } : ev.data.result);
+    };
+    window.addEventListener("message", onMsg);
+    frame.contentWindow?.postMessage({ colony: "mc-smoke-perform", id, action }, mcOrigin);
+  });
+}
 
 // ---- keyboard ----------------------------------------------------------------------
 window.addEventListener(
@@ -480,6 +534,35 @@ async function runSmoke(root: string) {
       proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
     }
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
+    // Mission Control host actions: the allowlist, then the real frame -> host round trip.
+    const cases: [McRecord, string][] = [
+      [{ kind: "copy", text: "README.md", subject: "path", destination: "filePicker" }, "open-file"],
+      [{ kind: "copy", text: "../etc/passwd", subject: "path", destination: "filePicker" }, "copy"],
+      [{ kind: "copy", text: "/run-plan", subject: "/run-plan", destination: "chatInput" }, "run-plan"],
+      [{ kind: "copy", text: "/run-plan mission.plan.md", subject: "", destination: "chatInput" }, "run-plan"],
+      [{ kind: "copy", text: "/run-plan-all", subject: "", destination: "chatInput" }, "copy"],
+      [{ kind: "copy", text: "/git-prod", subject: "", destination: "chatInput" }, "copy"],
+      [{ kind: "copy", text: "/run-plan x; rm -rf ~", subject: "", destination: "chatInput" }, "copy"],
+      [{ kind: "copy", text: "git diff", subject: "", destination: "terminal" }, "copy"],
+    ];
+    const verdicts = cases.map(([r, want]) => ({ text: r.text, got: decide(r).action, want }));
+    await log("mc-allowlist", verdicts.every((v) => v.got === v.want), verdicts);
+    showTab(HOME_TAB);
+    const opened = await mcPerformInFrame({ kind: "copy", text: "smoke.txt", subject: "path smoke.txt", destination: "filePicker" });
+    await log("mc-open-file", editors.active === `${root}/smoke.txt` && activeTab === `${root}/smoke.txt`, { result: opened, active: editors.active ? relPath(editors.active) : null });
+    let asked = "";
+    const realConfirm = confirmMcRun;
+    confirmMcRun = async (plan) => {
+      asked = `asked (plan ${plan ?? "none"})`;
+      return false; // the smoke never starts a run from Mission Control
+    };
+    const runReply = await mcPerformInFrame({ kind: "copy", text: "/run-plan demo.plan.md", subject: "/run-plan", destination: "chatInput" });
+    await wait(200);
+    confirmMcRun = realConfirm;
+    await log("mc-run-plan", asked === "asked (plan demo.plan.md)" && runs.list().length === 0, { result: runReply, asked });
+    // Harmless text: the fallback may really write the clipboard.
+    const copied = await mcPerformInFrame({ kind: "copy", text: "colony smoke copy fallback", subject: "smoke text", destination: "terminal", toastMessage: "Copied smoke text" });
+    await log("mc-copy-fallback", JSON.stringify(copied).includes("Colony") && !JSON.stringify(copied).includes("Opened"), copied);
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     const seen = new Map<number, string[]>();

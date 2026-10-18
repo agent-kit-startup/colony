@@ -98,34 +98,73 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
 }
 
 /// Mission Control action seam (embeddable contract): defined only inside the Mission
-/// Control iframe on 127.0.0.1, before the panel script runs. Alpha behavior is still
-/// copy (no real host action ships before the interpolation review owed by the ADR); the
-/// record is also posted to the Colony window so it can show where to paste.
+/// Control iframe on 127.0.0.1, before the panel script runs. Every record (always
+/// `kind: "copy"`) is first offered to the Colony window over a MessageChannel; the window
+/// runs a real host action only for an allowlisted record (open a repo file, start a
+/// plan run after a native confirmation; src/mcactions.ts) and answers `handled`.
+/// Anything else, a refusal or no answer within 1.5 s falls back to the clipboard copy.
 const MC_ACTION_HOOK: &str = r#"
 (function () {
   try {
     if (window === window.top || location.hostname !== '127.0.0.1') return;
+    var copy = function (action) {
+      var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
+      try {
+        return navigator.clipboard.writeText(action.text).then(done, function () {
+          return { ok: true, message: 'Sent to Colony (clipboard unavailable in the frame)' };
+        });
+      } catch (e) {
+        return Promise.resolve({ ok: true, message: 'Sent to Colony' });
+      }
+    };
+    var askHost = function (record) {
+      return new Promise(function (resolve) {
+        var settled = false;
+        var finish = function (v) { if (!settled) { settled = true; resolve(v); } };
+        var timer = setTimeout(function () { finish(null); }, 1500);
+        try {
+          var ch = new MessageChannel();
+          ch.port1.onmessage = function (ev) { clearTimeout(timer); finish(ev.data || null); };
+          window.top.postMessage({ colony: 'mc-action', action: record }, '*', [ch.port2]);
+        } catch (e) { clearTimeout(timer); finish(null); }
+      });
+    };
     var hook = Object.freeze({
       perform: function (action) {
         if (!action || action.kind !== 'copy' || typeof action.text !== 'string') {
           return Promise.reject(new Error('Colony: action not allowed'));
         }
         var record = { kind: 'copy', text: action.text, subject: String(action.subject || ''), destination: String(action.destination || '') };
-        try { window.top.postMessage({ colony: 'mc-action', action: record }, '*'); } catch (e) {}
-        var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
-        try {
-          return navigator.clipboard.writeText(action.text).then(done, function () {
-            return { ok: true, message: 'Sent to Colony (clipboard unavailable in the frame)' };
-          });
-        } catch (e) {
-          return Promise.resolve({ ok: true, message: 'Sent to Colony' });
-        }
+        return askHost(record).then(function (reply) {
+          if (reply && reply.handled === true) {
+            return { ok: reply.ok !== false, message: String(reply.message || 'Done in Colony') };
+          }
+          return copy(action);
+        });
       }
     });
     Object.defineProperty(window, '__MISSION_CONTROL_ACTIONS__', { value: hook, writable: false, configurable: false });
+    /*COLONY_SMOKE*/
   } catch (e) {}
 })();
 "#;
+
+/// COLONY_SMOKE only: let the Colony window call `perform()` inside the frame, so the
+/// smoke covers the frame -> host -> frame round trip without clicking in the page.
+const MC_SMOKE_BRIDGE: &str = r#"
+    window.addEventListener('message', function (ev) {
+      if (ev.source !== window.top || !ev.data || ev.data.colony !== 'mc-smoke-perform') return;
+      var id = ev.data.id;
+      hook.perform(ev.data.action).then(
+        function (r) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, result: r }, '*'); },
+        function (e) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, error: String(e && e.message || e) }, '*'); }
+      );
+    });
+"#;
+
+fn mc_action_hook(smoke: bool) -> String {
+    MC_ACTION_HOOK.replace("/*COLONY_SMOKE*/", if smoke { MC_SMOKE_BRIDGE } else { "" })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -143,6 +182,7 @@ pub fn run() {
         smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
     };
 
+    let hook = mc_action_hook(startup.smoke.is_some());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
@@ -179,7 +219,7 @@ pub fn run() {
             review::review_file,
             review::review_patch,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             if let Ok(dir) = app.path().app_config_dir() {
                 *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
             }
@@ -187,7 +227,7 @@ pub fn run() {
                 .title("Colony")
                 .inner_size(1500.0, 950.0)
                 .min_inner_size(900.0, 600.0)
-                .initialization_script_for_all_frames(MC_ACTION_HOOK)
+                .initialization_script_for_all_frames(&hook)
                 .build()?;
             Ok(())
         })

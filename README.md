@@ -11,7 +11,7 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Area | What works |
 |------|------------|
 | Workspace | `Open folder` (Ctrl+O), the folder as the first CLI argument, recent folders on the welcome screen. File access is limited to the opened folder. |
-| Mission Control | Home tab: the installed kit's unforked dashboard server, started for the opened folder on a free loopback port. |
+| Mission Control | Home tab: the installed kit's unforked dashboard server, started for the opened folder on a free loopback port. "Copy path" opens the file in Colony and the run command starts an Agent run after you confirm; every other action still copies (see Mission Control embedding). |
 | Explorer | Lazy file tree (`.git` hidden), refresh button. |
 | Editor | Monaco with one tab per file, dirty marker, Ctrl+S save, Ctrl+W close (asks before dropping unsaved changes), Ctrl+P quick open. |
 | Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
@@ -22,7 +22,7 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Review | `◇ Review` tab: every tick of every run in this window with the files it changed (added, modified, deleted, renamed; new untracked files included, `.gitignore` respected), a Monaco side-by-side diff per file, commits made during the tick, the `LOOP_TICK_RESULT` line, "Copy patch". A tick is the working tree change from the previous tick end (or the run start) to its own end, captured as git tree objects through a throwaway index, so your index, worktree and refs are never touched; an edit you make between two ticks shows up in the next tick. A run killed mid-tick still gets its partial tick. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 
-Not yet: engine choice per to-do (the CLI picks the backend per run), OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
+Not yet: engine choice per to-do (the CLI picks the backend per run), OS keychain, OS keychain for vendor keys (left out: the product plan says the IDE never reads, stores or relays vendor tokens; the agent CLIs keep their own login), signed bundles.
 
 ## Requirements (Linux)
 
@@ -78,4 +78,4 @@ A desktop launcher often starts apps without your shell's PATH. Colony appends `
 
 ## Mission Control embedding
 
-Colony follows the kit's embeddable contract (`docs/mission-control-embedding.md` in the kit): it runs `node <agent-kit package>/dashboard/serve.mjs` with `MISSION_CONTROL_REPO_ROOT=<opened folder>` and `PORT=<free port>`, loads `http://127.0.0.1:<port>/` in the home pane, and defines `window.__MISSION_CONTROL_ACTIONS__` inside that frame only. In the alpha the hook still copies to the clipboard: no host action ships before the interpolation review the contract requires. The server is stopped when Colony exits (also on a crash, through a parent-death signal). Its log is under `~/.cache/colony/dashboard-<port>.log`.
+Colony follows the kit's embeddable contract (`docs/mission-control-embedding.md` in the kit): it runs `node <agent-kit package>/dashboard/serve.mjs` with `MISSION_CONTROL_REPO_ROOT=<opened folder>` and `PORT=<free port>`, loads `http://127.0.0.1:<port>/` in the home pane, and defines `window.__MISSION_CONTROL_ACTIONS__` inside that frame only. The hook offers every record (always `kind: "copy"`, every string untrusted) to the Colony window first. Colony runs a real host action for exactly two shapes and keeps the copy for everything else (`src/mcactions.ts`): a `filePicker` record holding a plain repo-relative path (no absolute, `~`, `..` or control characters; the Rust side still jails it to the folder) opens that file in a Colony tab, and a `chatInput` record that is exactly `/run-plan` or `/run-plan <plan basename>` starts an Agent run of the folder's active plan after a native confirmation dialog. Terminal commands, PIDs, prompts, `/run-plan-all` and `/git-prod` stay copy, as does any record Colony does not answer within 1.5 s. The server is stopped when Colony exits (also on a crash, through a parent-death signal). Its log is under `~/.cache/colony/dashboard-<port>.log`.
