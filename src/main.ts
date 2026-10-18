@@ -360,6 +360,7 @@ async function openWorkspace(path: string) {
   $("welcome").hidden = true;
   showTab(HOME_TAB);
   await tree.setRoot(workspace.root);
+  await agentPanel.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
   void gitPanel.refresh();
   if (!workspace.hasKit) status("No Agent Kit in this folder: Mission Control shows git and repo data only (agent-kit install adds plans and HANDOFF)");
@@ -461,8 +462,19 @@ async function runSmoke(root: string) {
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
     });
-    agentPanel.backend.value = "claude";
-    agentPanel.ticks.value = "1";
+    // Engine picker: choose through the controls (DOM change events), then read back the
+    // per-folder memory from the settings file.
+    const pick = (el: HTMLInputElement | HTMLSelectElement, v: string) => {
+      el.value = v;
+      el.dispatchEvent(new Event("change"));
+    };
+    pick(agentPanel.backend, "codex");
+    pick(agentPanel.onLimit, "claude");
+    pick(agentPanel.model, "smoke-model");
+    pick(agentPanel.ticks, "1");
+    await wait(300);
+    const remembered = await api.settingsWorkspace();
+    await log("engine-remembered", remembered.backend === "codex" && remembered.onLimit === "claude" && remembered.model === "smoke-model", remembered);
     const run = await agentPanel.start();
     if (!run) throw new Error("agent run did not start");
     for (let i = 0; i < 100 && run.running && !run.gate; i++) await wait(200);
@@ -479,6 +491,8 @@ async function runSmoke(root: string) {
     const events = seen.get(run.id) ?? [];
     await log("agent-driver", events.includes("run_end") && !run.running, { cmd: run.cmd, events, exitCode: run.exitCode });
     if (fixture) {
+      const args = run.rows.find((r) => r.text.startsWith("fixture args:"))?.text ?? "";
+      await log("engine-used", run.backend === "codex" && args === "fixture args: backend=codex on-limit=claude model=smoke-model", { backend: run.backend, args });
       const reply = await api.readTextFile(`${root}/gate-reply.json`).catch((e) => `missing: ${errText(e)}`);
       let sent: Record<string, unknown> = {};
       try {

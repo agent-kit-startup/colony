@@ -37,6 +37,7 @@ export interface FileVersions { before: string | null; after: string | null; not
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
+export interface BackendChoice { id: string; bin: string; available: boolean; note: string }
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string }
 export interface GitFile { xy: string; path: string }
 export interface GitStatus { isRepo: boolean; branch: string; header: string; prodBranch: boolean; files: GitFile[] }
@@ -56,8 +57,16 @@ export const api = {
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
-  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onEvent: Channel<AgentEvent> }) =>
-    invoke<AgentStarted>("agent_start", { backend: o.backend, maxTicks: o.maxTicks, cwd: o.cwd ?? null, onEvent: o.onEvent }),
+  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; onEvent: Channel<AgentEvent> }) =>
+    invoke<AgentStarted>("agent_start", {
+      backend: o.backend,
+      maxTicks: o.maxTicks,
+      cwd: o.cwd ?? null,
+      onLimit: o.onLimit || null,
+      model: o.model || null,
+      onEvent: o.onEvent,
+    }),
+  agentBackends: () => invoke<BackendChoice[]>("agent_backends"),
   agentReply: (runId: number, askId: string, reply: number | string) => invoke<void>("agent_reply", { runId, askId, reply }),
   agentStop: (runId: number) => invoke<void>("agent_stop", { runId }),
   agentKill: (runId: number) => invoke<void>("agent_kill", { runId }),

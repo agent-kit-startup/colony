@@ -16,7 +16,47 @@ use tauri::State;
 
 use crate::{review, tools, workspace, AppState};
 
+/// `agent-kit run-plan --backend` values (kit 6.2.0: packages/cli/src/plan-loop/detect.ts).
 const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
+
+/// What the engine picker shows for each backend: the binary the kit resolves on PATH
+/// and how a HITL answer reaches the agent (driver protocol "Scope").
+const BACKEND_INFO: &[(&str, &str, &str)] = &[
+    ("claude", "claude", "Claude Code; gate answers relayed on stdin"),
+    ("codex", "codex", "Codex CLI (OpenAI API key by default); gate answers relayed by resuming the session"),
+    ("cursor-acp", "cursor-agent", "Cursor agent over ACP (opt-in); gate answers relayed as the next prompt"),
+    ("cursor-agent", "cursor-agent", "Cursor agent -p; no input channel: a gate ends the tick (stop: no relay)"),
+    ("auto", "", "cursor-agent if on PATH, else claude (never codex or cursor-acp)"),
+];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendChoice {
+    id: String,
+    bin: String,
+    available: bool,
+    note: String,
+}
+
+#[tauri::command]
+pub fn agent_backends() -> Vec<BackendChoice> {
+    BACKEND_INFO
+        .iter()
+        .map(|(id, bin, note)| {
+            let available = if bin.is_empty() {
+                ["cursor-agent", "claude"].iter().any(|b| tools::find_bin(b, None).is_some())
+            } else {
+                tools::find_bin(bin, None).is_some()
+            };
+            BackendChoice { id: (*id).into(), bin: (*bin).into(), available, note: (*note).into() }
+        })
+        .collect()
+}
+
+/// `--model` is passed through to the backend: keep it to a plain model id.
+fn valid_model(m: &str) -> bool {
+    !m.is_empty() && m.len() <= 120 && !m.starts_with('-') && m.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@[]-".contains(c))
+}
 
 /// One `run-plan` driver process. Several can run at once (one per folder: the kit has no
 /// run lock, so two runs on the same plan would race), and every open gate across them
@@ -68,6 +108,19 @@ pub enum AgentEvent {
     Review { review: crate::review::TickReview },
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn model_ids() {
+        for ok in ["claude-opus-5-5", "gpt-5.1-codex", "sonnet[1m]", "us.anthropic.x:0"] {
+            assert!(super::valid_model(ok), "{ok}");
+        }
+        for bad in ["", "--dangerous", "a b", "x;rm", &"m".repeat(121)] {
+            assert!(!super::valid_model(bad), "{bad}");
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStarted {
@@ -85,10 +138,24 @@ pub fn agent_start(
     backend: String,
     max_ticks: Option<u32>,
     cwd: Option<String>,
+    on_limit: Option<String>,
+    model: Option<String>,
     on_event: Channel<AgentEvent>,
 ) -> Result<AgentStarted, String> {
     if !BACKENDS.contains(&backend.as_str()) {
         return Err(format!("Unknown backend: {backend}"));
+    }
+    let on_limit = on_limit.filter(|b| !b.trim().is_empty());
+    if let Some(b) = &on_limit {
+        if b == "auto" || !BACKENDS.contains(&b.as_str()) {
+            return Err(format!("Unknown --on-limit backend: {b}"));
+        }
+    }
+    let model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    if let Some(m) = &model {
+        if !valid_model(m) {
+            return Err(format!("Not a model id: {m}"));
+        }
     }
     let root = match cwd.filter(|c| !c.trim().is_empty()) {
         Some(c) => PathBuf::from(&c).canonicalize().map_err(|e| format!("Cannot use {c}: {e}"))?,
@@ -105,11 +172,17 @@ pub fn agent_start(
     let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH")?;
     let id = state.agents.next.fetch_add(1, Ordering::SeqCst) + 1;
     let ticks = max_ticks.unwrap_or(10).clamp(1, 200).to_string();
-    let args = ["run-plan", "--events", "ndjson", "--backend", backend.as_str(), "--max-ticks", ticks.as_str()];
+    let mut args: Vec<&str> = vec!["run-plan", "--events", "ndjson", "--backend", backend.as_str(), "--max-ticks", ticks.as_str()];
+    if let Some(b) = &on_limit {
+        args.extend(["--on-limit", b.as_str()]);
+    }
+    if let Some(m) = &model {
+        args.extend(["--model", m.as_str()]);
+    }
     let mut cmd = Command::new(&bin);
     tools::die_with_parent(&mut cmd);
     let mut child = cmd
-        .args(args)
+        .args(&args)
         .arg("--cwd")
         .arg(&root)
         .current_dir(&root)

@@ -162,6 +162,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             agent::agent_start,
+            agent::agent_backends,
             agent::agent_reply,
             agent::agent_stop,
             agent::agent_kill,

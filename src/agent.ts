@@ -2,7 +2,7 @@
 // one of them: its NDJSON log, its open gate, stop / kill. Runs live in ./runs.ts; open
 // gates from every run also show in the Inbox. It never answers a gate by itself.
 import { open } from "@tauri-apps/plugin-dialog";
-import { errText, h } from "./api";
+import { api, type BackendChoice, errText, h } from "./api";
 import { type Gate, type Row, type Run, runLabel, runs } from "./runs";
 
 export class AgentPanel {
@@ -16,12 +16,19 @@ export class AgentPanel {
   private clearBtn: HTMLButtonElement;
   readonly backend: HTMLSelectElement;
   readonly ticks: HTMLInputElement;
+  readonly onLimit: HTMLSelectElement;
+  readonly model: HTMLInputElement;
+  private note: HTMLElement;
+  private choices: BackendChoice[] = [];
   private selected: number | null = null;
 
   constructor(root: HTMLElement, private status: (msg: string) => void) {
-    this.backend = h("select", { title: "Agent backend (agent-kit run-plan --backend)" });
-    for (const b of ["claude", "codex", "cursor-acp", "auto", "cursor-agent"]) this.backend.append(h("option", { value: b }, b));
+    this.backend = h("select", { title: "Engine for this run (agent-kit run-plan --backend), remembered for this folder" });
+    this.onLimit = h("select", { title: "On a vendor usage limit, continue the next fresh tick on this engine (--on-limit; once per run)" });
+    this.model = h("input", { type: "text", placeholder: "default model", title: "Optional model id (--model), remembered for this folder", class: "grow" });
+    this.note = h("p", { class: "hint" });
     this.ticks = h("input", { type: "number", min: "1", max: "200", value: "10", title: "Max ticks", class: "num" });
+    this.setChoices([]);
     this.startBtn = h("button", { class: "primary", title: "Run the active plan of the opened folder" }, "Run plan");
     this.otherBtn = h("button", { title: "Run the active plan of another folder (another repository or a worktree); its gates land in the same Inbox" }, "Run in folder…");
     this.sessions = h("select", { title: "Runs started in this window", class: "grow" });
@@ -31,7 +38,9 @@ export class AgentPanel {
     this.gate = h("div", { class: "gate", hidden: "" });
     this.log = h("div", { class: "ag-log" });
     root.append(
-      h("div", { class: "panel-row" }, h("label", {}, "Backend ", this.backend), h("label", {}, "Ticks ", this.ticks)),
+      h("div", { class: "panel-row" }, h("label", {}, "Engine ", this.backend), h("label", {}, "Ticks ", this.ticks)),
+      h("div", { class: "panel-row" }, h("label", {}, "On limit ", this.onLimit), this.model),
+      this.note,
       h("div", { class: "panel-row" }, this.startBtn, this.otherBtn),
       h("div", { class: "panel-row" }, this.sessions, this.stopBtn, this.killBtn, this.clearBtn),
       h("p", { class: "hint" }, "Runs agent-kit run-plan --events ndjson on the active plan. Gates wait for your answer here and in the Inbox."),
@@ -39,6 +48,14 @@ export class AgentPanel {
       this.log,
     );
     this.startBtn.addEventListener("click", () => void this.start());
+    this.backend.addEventListener("change", () => {
+      this.renderNote();
+      this.remember({ backend: this.backend.value });
+    });
+    this.onLimit.addEventListener("change", () => this.remember({ onLimit: this.onLimit.value || null }));
+    this.model.addEventListener("change", () => this.remember({ model: this.model.value.trim() || null }));
+    this.ticks.addEventListener("change", () => this.remember({ maxTicks: Number(this.ticks.value) || null }));
+    api.agentBackends().then((c) => this.setChoices(c), () => {});
     this.otherBtn.addEventListener("click", () => void this.startElsewhere());
     this.sessions.addEventListener("change", () => this.select(Number(this.sessions.value) || null));
     this.stopBtn.addEventListener("click", () => this.withRun((r) => runs.stop(r.id)));
@@ -58,6 +75,46 @@ export class AgentPanel {
     this.renderSessions();
   }
 
+  private setChoices(choices: BackendChoice[]) {
+    this.choices = choices;
+    const keep = this.backend.value || "claude";
+    const keepLimit = this.onLimit.value;
+    const ids = choices.length ? choices.map((c) => c.id) : ["claude", "codex", "cursor-acp", "cursor-agent", "auto"];
+    const label = (id: string) => {
+      const c = choices.find((x) => x.id === id);
+      return c && !c.available ? `${id} (not on PATH)` : id;
+    };
+    this.backend.replaceChildren(...ids.map((id) => h("option", { value: id }, label(id))));
+    this.onLimit.replaceChildren(h("option", { value: "" }, "stop"), ...ids.filter((id) => id !== "auto").map((id) => h("option", { value: id }, label(id))));
+    this.backend.value = ids.includes(keep) ? keep : ids[0];
+    this.onLimit.value = keepLimit;
+    this.renderNote();
+  }
+
+  private renderNote() {
+    const c = this.choices.find((x) => x.id === this.backend.value);
+    this.note.textContent = c ? `${c.note}${c.available ? "" : ` · ${c.bin || "no agent CLI"} not found on PATH`}` : "";
+    this.note.classList.toggle("warn", this.backend.value === "cursor-agent" || !!(c && !c.available));
+  }
+
+  private remember(patch: Record<string, unknown>) {
+    api.settingsSetWorkspace(patch).catch((e) => this.status(`Could not remember the engine: ${errText(e)}`));
+  }
+
+  /** Restore the engine choice remembered for the opened folder. */
+  async loadWorkspace() {
+    try {
+      const ws = await api.settingsWorkspace();
+      if (ws.backend && [...this.backend.options].some((o) => o.value === ws.backend)) this.backend.value = ws.backend;
+      this.onLimit.value = ws.onLimit ?? "";
+      this.model.value = ws.model ?? "";
+      if (ws.maxTicks) this.ticks.value = String(ws.maxTicks);
+      this.renderNote();
+    } catch (e) {
+      this.status(`Settings: ${errText(e)}`);
+    }
+  }
+
   private current(): Run | undefined {
     return this.selected === null ? undefined : runs.runs.get(this.selected);
   }
@@ -70,7 +127,13 @@ export class AgentPanel {
   /** Start a run (opened folder unless `cwd`), then follow it. Returns it for callers. */
   async start(cwd?: string): Promise<Run | undefined> {
     try {
-      const run = await runs.start({ backend: this.backend.value, maxTicks: Number(this.ticks.value) || 10, cwd });
+      const run = await runs.start({
+        backend: this.backend.value,
+        maxTicks: Number(this.ticks.value) || 10,
+        cwd,
+        onLimit: this.onLimit.value || undefined,
+        model: this.model.value.trim() || undefined,
+      });
       this.select(run.id);
       this.status(`Agent run #${run.id} started in ${run.name} (${run.backend})`);
       return run;

@@ -26,6 +26,7 @@ textarea { font-family: var(--mono); resize: vertical; }
 .spacer { flex: 1; }
 .grow { flex: 1; min-width: 0; }
 .hint { color: var(--fg-dim); font-size: 12px; margin: 4px 0; }
+.hint.warn { color: var(--warn); }
 [hidden] { display: none !important; }
 
 #shell {

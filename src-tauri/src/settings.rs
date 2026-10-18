@@ -121,6 +121,8 @@ pub fn settings_ensure(state: State<'_, AppState>) -> Result<String, String> {
 /// Merge the given fields into the opened folder's entry (null clears a field).
 #[tauri::command]
 pub fn settings_set_workspace(state: State<'_, AppState>, patch: serde_json::Value) -> Result<WorkspaceSettings, String> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_writer = WRITE.lock().map_err(|_| "settings lock poisoned")?;
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
     let path = settings_path(&state)?;
     let mut s = load(&path)?;

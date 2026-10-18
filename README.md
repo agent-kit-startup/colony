@@ -15,12 +15,13 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Explorer | Lazy file tree (`.git` hidden), refresh button. |
 | Editor | Monaco with one tab per file, dirty marker, Ctrl+S save, Ctrl+W close (asks before dropping unsaved changes), Ctrl+P quick open. |
 | Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
-| Agent | `agent-kit run-plan --events ndjson` for the opened folder, or for another folder with `Run in folder…` (backend picker, tick budget). Several runs at once, one per folder (the kit has no run lock); pick which one to follow. Live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
+| Agent | `agent-kit run-plan --events ndjson` for the opened folder, or for another folder with `Run in folder…` (engine picker, tick budget). Several runs at once, one per folder (the kit has no run lock); pick which one to follow. Live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
 | Open in my editor | `Open in editor` (Ctrl+Shift+E) hands the active file, or the folder from the Mission Control tab, to your own editor; right-click a file or folder in the Explorer for that one. |
+| Engine picker | Per run: engine (`--backend`: `claude`, `codex`, `cursor-acp`, `cursor-agent`, `auto`; the ones not on PATH are marked), `--on-limit` engine for the next fresh tick after a vendor usage limit, optional `--model`, tick budget. Each choice is remembered for the opened folder in the settings file. The note under the picker says how a gate answer reaches that engine (`cursor-agent` has no input channel: a gate ends the tick). |
 | Review | `◇ Review` tab: every tick of every run in this window with the files it changed (added, modified, deleted, renamed; new untracked files included, `.gitignore` respected), a Monaco side-by-side diff per file, commits made during the tick, the `LOOP_TICK_RESULT` line, "Copy patch". A tick is the working tree change from the previous tick end (or the run start) to its own end, captured as git tree objects through a throwaway index, so your index, worktree and refs are never touched; an edit you make between two ticks shows up in the next tick. A run killed mid-tick still gets its partial tick. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 
-Not yet: cross-vendor HITL inbox, engine picker per to-do, OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
+Not yet: cross-vendor HITL inbox, engine choice per to-do (the CLI picks the backend per run), OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
 
 ## Requirements (Linux)
 
