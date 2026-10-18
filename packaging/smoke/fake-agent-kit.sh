@@ -34,6 +34,8 @@ if ! IFS= read -r reply; then
   exit 4
 fi
 printf '%s\n' "$reply" > gate-reply.json
+esc=$(printf '%s' "$reply" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture reply: $esc\""
 ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"user\",\"isReplay\":true,\"message\":{\"content\":\"HITL_REPLY: smoke-gate | relayed by the fixture\"}}"
 printf 'answered\n' >> fixture-tick.txt
 ev "\"type\":\"tick_end\",\"tick\":1,\"backend\":\"$backend\",\"limit\":null,\"exitCode\":0,\"pendingBefore\":1,\"pendingAfter\":0,\"result\":{\"kind\":\"done\",\"line\":\"LOOP_TICK_RESULT: done\"},\"replies\":[],\"stop\":null"

@@ -5,8 +5,9 @@ import { api, errText, focusPolicy, h, type StartupInfo, type WorkspaceInfo } fr
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
 import { GitPanel } from "./git";
+import { InboxPanel } from "./inbox";
 import { ReviewView } from "./review";
-import { runs } from "./runs";
+import { type Run, runs } from "./runs";
 import "./styles.css";
 import { Terminals } from "./terminal";
 
@@ -26,6 +27,7 @@ document.getElementById("app")!.innerHTML = `
     <button id="btn-editor" title="Open the current file (or the folder, from Mission Control) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
     <button id="btn-term" class="toggle on" title="Terminal (Ctrl+\`)">Terminal</button>
     <button id="btn-agent" class="toggle" title="Agent panel">Agent</button>
+    <button id="btn-inbox" class="toggle" title="Inbox: open decisions from every agent run">Inbox <span id="inbox-badge" class="badge warn" hidden></span></button>
     <button id="btn-git" class="toggle" title="Git panel">Git</button>
     <button id="btn-settings" class="icon" title="Colony settings (settings.json)">⚙</button>
   </header>
@@ -50,8 +52,9 @@ document.getElementById("app")!.innerHTML = `
     </div>
   </main>
   <aside id="right">
-    <div class="tabbar"><button class="tab" data-panel="agent">Agent</button><button class="tab" data-panel="git">Git</button></div>
+    <div class="tabbar"><button class="tab" data-panel="agent">Agent</button><button class="tab" data-panel="inbox">Inbox</button><button class="tab" data-panel="git">Git</button></div>
     <div id="panel-agent" class="panel"></div>
+    <div id="panel-inbox" class="panel" hidden></div>
     <div id="panel-git" class="panel" hidden></div>
   </aside>
   <div id="resizer" title="Drag to resize"></div>
@@ -192,23 +195,44 @@ const reviewView = new ReviewView(
 );
 const gitPanel = new GitPanel($("panel-git"), status, () => void tree.refresh());
 
-function setRight(panel: "agent" | "git" | null) {
-  const current = shell.classList.contains("no-right") ? null : $("panel-agent").hidden ? "git" : "agent";
-  const next = panel === current ? null : panel;
+type RightPanel = "agent" | "inbox" | "git";
+const RIGHT_PANELS: RightPanel[] = ["agent", "inbox", "git"];
+function currentRight(): RightPanel | null {
+  if (shell.classList.contains("no-right")) return null;
+  return RIGHT_PANELS.find((p) => !$(`panel-${p}`).hidden) ?? null;
+}
+/** Show `panel` on the right; the same panel again hides the column (unless `keep`). */
+function setRight(panel: RightPanel | null, keep = false) {
+  const next = panel === currentRight() && !keep ? null : panel;
   shell.classList.toggle("no-right", next === null);
-  $("panel-agent").hidden = next !== "agent";
-  $("panel-git").hidden = next !== "git";
-  $("btn-agent").classList.toggle("on", next === "agent");
-  $("btn-git").classList.toggle("on", next === "git");
+  for (const p of RIGHT_PANELS) {
+    $(`panel-${p}`).hidden = next !== p;
+    $(`btn-${p}`).classList.toggle("on", next === p);
+  }
   for (const t of $("right").querySelectorAll<HTMLElement>(".tabbar .tab")) t.classList.toggle("active", t.dataset.panel === next);
   if (next === "git") void gitPanel.refresh();
   requestAnimationFrame(() => editors.layout());
 }
-$("btn-agent").addEventListener("click", () => setRight("agent"));
-$("btn-git").addEventListener("click", () => setRight("git"));
+for (const p of RIGHT_PANELS) $(`btn-${p}`).addEventListener("click", () => setRight(p));
 for (const t of $("right").querySelectorAll<HTMLElement>(".tabbar .tab")) {
-  t.addEventListener("click", () => setRight(t.dataset.panel as "agent" | "git"));
+  t.addEventListener("click", () => setRight(t.dataset.panel as RightPanel, true));
 }
+const inbox = new InboxPanel(
+  $("panel-inbox"),
+  (n) => {
+    const badge = $("inbox-badge");
+    badge.hidden = n === 0;
+    badge.textContent = String(n);
+    const tab = $("right").querySelector<HTMLElement>('.tabbar .tab[data-panel="inbox"]');
+    if (tab) tab.textContent = n ? `Inbox (${n})` : "Inbox";
+  },
+  (runId) => {
+    agentPanel.select(runId);
+    setRight("agent", true);
+  },
+  status,
+);
+void inbox;
 
 function toggleTerminal(force?: boolean) {
   const show = force ?? shell.classList.contains("no-bottom");
@@ -481,10 +505,32 @@ async function runSmoke(root: string) {
     // Fixture driver (COLONY_AGENT_KIT_BIN=packaging/smoke/fake-agent-kit.sh): answer its
     // gate through the same button the operator clicks.
     const fixture = run.plan === "smoke-fixture.plan.md";
+    const second: { run?: Run; root: string } = { root: root.replace(/\/repo$/, "/repo2") };
+    if (run.gate && fixture) {
+      // A second run (another folder, another engine) so the Inbox aggregates two gates.
+      const dup = await runs.start({ backend: "claude", maxTicks: 1 }).then(
+        () => "started",
+        (e) => errText(e),
+      );
+      await log("one-run-per-folder", dup.includes("already active"), dup);
+      second.run = await runs.start({ backend: "claude", maxTicks: 1, cwd: second.root }).catch(() => undefined);
+      for (let i = 0; i < 50 && second.run?.running && !second.run.gate; i++) await wait(200);
+    }
     if (run.gate) {
-      const btn = $("panel-agent").querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]');
-      await log("gate-open", !!btn, { askId: run.gate.askId, labels: run.gate.labels, line: run.gate.line });
-      btn?.click();
+      // Answer from the Inbox cards (same handler as the operator's click).
+      setRight("inbox", true);
+      const badge = $("inbox-badge");
+      const cards = [...$("panel-inbox").querySelectorAll<HTMLElement>(".inbox-card")];
+      await log("inbox-open", !badge.hidden && Number(badge.textContent) === cards.length && cards.length === (second.run ? 2 : 1), {
+        badge: badge.textContent,
+        cards: cards.map((c) => `${c.dataset.run}:${c.dataset.ask} ${c.querySelector(".inbox-meta span")?.textContent}`),
+      });
+      const answer = (r: Run, n: number) =>
+        $("panel-inbox").querySelector<HTMLButtonElement>(`.inbox-card[data-run="${r.id}"] .gate-buttons button[data-reply="${n}"]`)?.click();
+      if (second.run) answer(second.run, 2);
+      answer(run, 1);
+      await wait(400);
+      await log("inbox-cleared", !run.gate && !second.run?.gate && badge.hidden && !$("panel-inbox").querySelector(".inbox-card"), { badgeHidden: badge.hidden });
     }
     for (let i = 0; i < 100 && run.running; i++) await wait(200);
     off();
@@ -501,6 +547,11 @@ async function runSmoke(root: string) {
         /* logged below */
       }
       await log("gate-answer", sent.type === "hitl_reply" && sent.askId === "smoke-gate" && sent.reply === 1 && !run.gate, reply.trim());
+      if (second.run) {
+        for (let i = 0; i < 50 && second.run.running; i++) await wait(200);
+        const r2 = second.run.rows.find((r) => r.text.startsWith("fixture reply:"))?.text ?? "";
+        await log("gate-answer-second-run", r2.includes('"reply":2') && r2.includes('"askId":"smoke-gate"') && second.run.backend === "claude", { reply: r2, backend: second.run.backend, exit: second.run.exitCode });
+      }
       const rv = run.reviews[0];
       const files = (rv?.files ?? []).map((f) => `${f.status} ${f.path}`).sort();
       await log("tick-review", !!rv && rv.finished && files.join(",") === "A fixture-tick.txt,A gate-reply.json,M README.md", { tick: rv?.tick, files, result: rv?.resultLine });
