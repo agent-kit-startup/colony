@@ -5,12 +5,15 @@ import { api, errText, focusPolicy, h, type StartupInfo, type WorkspaceInfo } fr
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
 import { GitPanel } from "./git";
+import { ReviewView } from "./review";
 import { runs } from "./runs";
 import "./styles.css";
 import { Terminals } from "./terminal";
 
 const RECENTS_KEY = "colony.recentWorkspaces";
 const HOME_TAB = "__home__";
+const REVIEW_TAB = "__review__";
+const isFileTab = (id: string) => id !== HOME_TAB && id !== REVIEW_TAB;
 
 document.getElementById("app")!.innerHTML = `
 <div id="shell" class="no-right">
@@ -43,6 +46,7 @@ document.getElementById("app")!.innerHTML = `
         </div>
       </div>
       <div id="view-editor" class="view" hidden></div>
+      <div id="view-review" class="view" hidden></div>
     </div>
   </main>
   <aside id="right">
@@ -71,6 +75,7 @@ const status = (msg: string) => {
 let workspace: WorkspaceInfo | null = null;
 let mcOrigin = "";
 let activeTab = HOME_TAB;
+let reviewCount = 0;
 
 // ---- editor + tabs ---------------------------------------------------------------
 const editors = new Editors($("view-editor"), () => renderTabs());
@@ -84,6 +89,9 @@ function renderTabs() {
   const bar = $("tabs");
   const home = h("button", { class: `tab home ${activeTab === HOME_TAB ? "active" : ""}`, title: "Mission Control" }, "◉ Mission Control");
   home.addEventListener("click", () => showTab(HOME_TAB));
+  const n = reviewCount;
+  const review = h("button", { class: `tab home ${activeTab === REVIEW_TAB ? "active" : ""}`, title: "Per-tick review of agent runs" }, "◇ Review", ...(n ? [h("span", { class: "badge" }, String(n))] : []));
+  review.addEventListener("click", () => showTab(REVIEW_TAB));
   const tabs = editors.paths().map((p) => {
     const name = p.split("/").pop() ?? p;
     const dirty = editors.isDirty(p);
@@ -93,15 +101,17 @@ function renderTabs() {
     t.addEventListener("click", (ev) => (ev.target === close ? void closeFile(p) : showTab(p)));
     return t;
   });
-  bar.replaceChildren(home, ...tabs);
+  bar.replaceChildren(home, review, ...tabs);
 }
 
 function showTab(id: string) {
   activeTab = id;
   const home = id === HOME_TAB;
   $("view-home").hidden = !home;
-  $("view-editor").hidden = home;
-  if (!home) {
+  $("view-review").hidden = id !== REVIEW_TAB;
+  $("view-editor").hidden = !isFileTab(id);
+  if (id === REVIEW_TAB) requestAnimationFrame(() => reviewView.layout());
+  if (isFileTab(id)) {
     editors.activate(id);
     tree.setActive(id);
     requestAnimationFrame(() => editors.layout());
@@ -129,7 +139,7 @@ async function closeFile(path: string) {
 }
 
 async function saveActive() {
-  if (activeTab === HOME_TAB) return;
+  if (!isFileTab(activeTab)) return;
   try {
     const p = await editors.save(activeTab);
     if (p) status(`Saved ${relPath(p)}`);
@@ -143,7 +153,7 @@ async function saveActive() {
 /** Hand `path` (default: the active file, else the folder) to the user's own editor. */
 async function openInEditor(path?: string) {
   if (!workspace) return status("Open a folder first");
-  const target = path ?? (activeTab !== HOME_TAB ? activeTab : workspace.root);
+  const target = path ?? (isFileTab(activeTab) ? activeTab : workspace.root);
   if (editors.isDirty(target)) status(`${relPath(target)} has unsaved changes in Colony: save first (Ctrl+S)`);
   try {
     const launch = await api.openInEditor(target);
@@ -170,7 +180,16 @@ $("btn-settings").addEventListener("click", async () => {
 // ---- panels ------------------------------------------------------------------------
 const terminals = new Terminals($("term-tabs"), $("terms"), status);
 $("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => void terminals.create());
-new AgentPanel($("panel-agent"), status);
+const agentPanel = new AgentPanel($("panel-agent"), status);
+const reviewView = new ReviewView(
+  $("view-review"),
+  (n) => {
+    reviewCount = n;
+    renderTabs();
+  },
+  (p) => void openFile(p),
+  status,
+);
 const gitPanel = new GitPanel($("panel-git"), status, () => void tree.refresh());
 
 function setRight(panel: "agent" | "git" | null) {
@@ -377,7 +396,7 @@ window.addEventListener(
     else if (key === "s" && !ev.shiftKey) void saveActive();
     else if (key === "o" && !ev.shiftKey && !inTerm) void pickFolder();
     else if (key === "p" && !ev.shiftKey && !inTerm) void showQuick();
-    else if (key === "w" && !ev.shiftKey && !inTerm && activeTab !== HOME_TAB) void closeFile(activeTab);
+    else if (key === "w" && !ev.shiftKey && !inTerm && isFileTab(activeTab)) void closeFile(activeTab);
     else if (key === "e" && ev.shiftKey) void openInEditor();
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
@@ -442,11 +461,42 @@ async function runSmoke(root: string) {
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
     });
-    const run = await runs.start({ backend: "claude", maxTicks: 1 });
+    agentPanel.backend.value = "claude";
+    agentPanel.ticks.value = "1";
+    const run = await agentPanel.start();
+    if (!run) throw new Error("agent run did not start");
+    for (let i = 0; i < 100 && run.running && !run.gate; i++) await wait(200);
+    // Fixture driver (COLONY_AGENT_KIT_BIN=packaging/smoke/fake-agent-kit.sh): answer its
+    // gate through the same button the operator clicks.
+    const fixture = run.plan === "smoke-fixture.plan.md";
+    if (run.gate) {
+      const btn = $("panel-agent").querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]');
+      await log("gate-open", !!btn, { askId: run.gate.askId, labels: run.gate.labels, line: run.gate.line });
+      btn?.click();
+    }
     for (let i = 0; i < 100 && run.running; i++) await wait(200);
     off();
     const events = seen.get(run.id) ?? [];
     await log("agent-driver", events.includes("run_end") && !run.running, { cmd: run.cmd, events, exitCode: run.exitCode });
+    if (fixture) {
+      const reply = await api.readTextFile(`${root}/gate-reply.json`).catch((e) => `missing: ${errText(e)}`);
+      let sent: Record<string, unknown> = {};
+      try {
+        sent = JSON.parse(reply);
+      } catch {
+        /* logged below */
+      }
+      await log("gate-answer", sent.type === "hitl_reply" && sent.askId === "smoke-gate" && sent.reply === 1 && !run.gate, reply.trim());
+      const rv = run.reviews[0];
+      const files = (rv?.files ?? []).map((f) => `${f.status} ${f.path}`).sort();
+      await log("tick-review", !!rv && rv.finished && files.join(",") === "A fixture-tick.txt,A gate-reply.json,M README.md", { tick: rv?.tick, files, result: rv?.resultLine });
+      if (rv) {
+        showTab(REVIEW_TAB);
+        const v = await reviewView.show(rv, rv.files.find((f) => f.path === "fixture-tick.txt") ?? rv.files[0]);
+        await wait(500);
+        await log("review-diff", v.before === null && v.after === "written by the fixture tick\nanswered\n", { before: v.before, after: v.after, rows: $("view-review").querySelectorAll(".rv-file").length });
+      }
+    }
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));

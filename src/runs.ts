@@ -2,7 +2,7 @@
 // started (one per folder), their logs, their open HITL gates and their ticks. The Agent
 // panel, the Inbox and the Review view all read from this one store. Colony never
 // answers a gate by itself: a reply is only ever sent from an operator action.
-import { api, Channel, errText, type AgentEvent } from "./api";
+import { api, Channel, errText, type AgentEvent, type TickReview } from "./api";
 
 const MAX_ROWS = 3000;
 
@@ -22,6 +22,7 @@ export interface Run {
   exitCode: number | null | undefined;
   rows: Row[];
   gate: Gate | null;
+  reviews: TickReview[];
   startedAt: string;
 }
 
@@ -29,7 +30,8 @@ export type RunChange =
   | { kind: "row"; run: Run; row: Row }
   | { kind: "gate"; run: Run }
   | { kind: "state"; run: Run }
-  | { kind: "event"; run: Run; ev: Ev };
+  | { kind: "event"; run: Run; ev: Ev }
+  | { kind: "review"; run: Run; review: TickReview };
 
 /** One display line per agent stream-json event (mirrors the benchmark derivation). */
 function agentLine(e: Ev): Row | null {
@@ -101,6 +103,7 @@ class RunStore {
       exitCode: undefined,
       rows: [],
       gate: null,
+      reviews: [],
       startedAt: new Date().toISOString(),
     };
     this.runs.set(run.id, run);
@@ -149,6 +152,13 @@ class RunStore {
 
   private onMessage(run: Run, m: AgentEvent) {
     if (m.kind === "stderr") return this.row(run, m.line, "ag-stderr");
+    if (m.kind === "review") {
+      run.reviews.push(m.review);
+      const n = m.review.files.length;
+      this.row(run, `◇ tick ${m.review.tick} review: ${n} file${n === 1 ? "" : "s"} changed${m.review.finished ? "" : " (tick did not finish)"}`, "ag-dim");
+      this.emit({ kind: "review", run, review: m.review });
+      return;
+    }
     if (m.kind === "exit") {
       run.running = false;
       run.exitCode = m.code;

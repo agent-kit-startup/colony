@@ -14,7 +14,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::{tools, workspace, AppState};
+use crate::{review, tools, workspace, AppState};
 
 const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
 
@@ -64,6 +64,8 @@ pub enum AgentEvent {
     /// One stderr line (human text, not part of the contract).
     Stderr { line: String },
     Exit { code: Option<i32> },
+    /// A tick closed: what it changed in the working tree (review.rs).
+    Review { review: crate::review::TickReview },
 }
 
 #[derive(Serialize)]
@@ -101,6 +103,7 @@ pub fn agent_start(
         return Err(format!("A run is already active in {} (the kit has no run lock: one run per folder)", root.display()));
     }
     let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH")?;
+    let id = state.agents.next.fetch_add(1, Ordering::SeqCst) + 1;
     let ticks = max_ticks.unwrap_or(10).clamp(1, 200).to_string();
     let args = ["run-plan", "--events", "ndjson", "--backend", backend.as_str(), "--max-ticks", ticks.as_str()];
     let mut cmd = Command::new(&bin);
@@ -119,15 +122,23 @@ pub fn agent_start(
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let stdin = child.stdin.take();
     let child = Arc::new(Mutex::new(child));
-    let id = state.agents.next.fetch_add(1, Ordering::SeqCst) + 1;
 
     let ch_out = on_event.clone();
+    let reviews = state.reviews.clone();
+    let mut tracker = review::RunTracker::new(id, root.clone(), backend.clone());
     let out_thread = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            let closed = tracker.on_line(&line, &reviews);
             if ch_out.send(AgentEvent::Event { line }).is_err() {
                 break;
             }
+            if let Some(review) = closed {
+                let _ = ch_out.send(AgentEvent::Review { review });
+            }
+        }
+        if let Some(review) = tracker.on_end(&reviews) {
+            let _ = ch_out.send(AgentEvent::Review { review });
         }
     });
     let ch_err = on_event.clone();

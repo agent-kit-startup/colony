@@ -5,6 +5,7 @@ mod dashboard;
 mod gitops;
 mod launch;
 mod pty;
+mod review;
 mod settings;
 mod tools;
 mod workspace;
@@ -21,6 +22,7 @@ pub struct AppState {
     pub dashboard: Mutex<Option<dashboard::DashboardServer>>,
     pub ptys: pty::PtyRegistry,
     pub agents: agent::AgentRegistry,
+    pub reviews: std::sync::Arc<review::ReviewStore>,
     /// `<app config dir>/settings.json`, set once at startup.
     pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
@@ -172,6 +174,9 @@ pub fn run() {
             settings::settings_workspace,
             settings::settings_set_workspace,
             launch::open_in_editor,
+            review::review_ticks,
+            review::review_file,
+            review::review_patch,
         ])
         .setup(|app| {
             if let Ok(dir) = app.path().app_config_dir() {

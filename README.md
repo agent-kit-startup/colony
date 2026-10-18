@@ -17,9 +17,10 @@ Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
 | Terminals | Real PTYs running your `$SHELL` in the opened folder, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
 | Agent | `agent-kit run-plan --events ndjson` for the opened folder, or for another folder with `Run in folder…` (backend picker, tick budget). Several runs at once, one per folder (the kit has no run lock); pick which one to follow. Live NDJSON event log, HITL gates answered from buttons or free text, "Stop at gate" and "Kill". Needs a folder with the kit installed and an active plan. |
 | Open in my editor | `Open in editor` (Ctrl+Shift+E) hands the active file, or the folder from the Mission Control tab, to your own editor; right-click a file or folder in the Explorer for that one. |
+| Review | `◇ Review` tab: every tick of every run in this window with the files it changed (added, modified, deleted, renamed; new untracked files included, `.gitignore` respected), a Monaco side-by-side diff per file, commits made during the tick, the `LOOP_TICK_RESULT` line, "Copy patch". A tick is the working tree change from the previous tick end (or the run start) to its own end, captured as git tree objects through a throwaway index, so your index, worktree and refs are never touched; an edit you make between two ticks shows up in the next tick. A run killed mid-tick still gets its partial tick. |
 | Git | Status, per-file diff, commit (optionally `git add -A`; hooks always run), push without force. Pushing `main`, `master`, `prod`, `production` or `release` needs a typed `yes`. |
 
-Not yet: cross-vendor HITL inbox, per-tick review diff, engine picker per to-do, OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
+Not yet: cross-vendor HITL inbox, engine picker per to-do, OS keychain, real Mission Control host actions (the panel still copies), signed bundles.
 
 ## Requirements (Linux)
 
@@ -69,7 +70,7 @@ Open in my editor picks, in order: `editor.command` (a string split on spaces, o
 | `COLONY_ENABLE_DMABUF=1` | Keep the DMA-BUF renderer on NVIDIA + Wayland. |
 | `COLONY_AGENT_KIT_BIN`, `COLONY_NODE_BIN`, `COLONY_GIT_BIN` | Use these binaries instead of the ones found on PATH. |
 | `COLONY_DASHBOARD_SERVE` | Path to a `dashboard/serve.mjs` to run instead of the one next to the installed `agent-kit`. |
-| `COLONY_SMOKE=<log file>` | Code-path smoke: after the folder opens, open `README.md`, append a line and save, run `echo colony-ok-$((6*7)) > smoke.txt` in a terminal, read git status, start a one-tick driver run, log each step as JSON to the file, then exit. Use a scratch folder: it edits `README.md` and writes `smoke.txt`. During the smoke Colony does not focus the editor or the terminal, but the window itself may still take focus from your compositor. |
+| `COLONY_SMOKE=<log file>` | Code-path smoke: after the folder opens, open `README.md`, append a line and save, run `echo colony-ok-$((6*7)) > smoke.txt` in a terminal, open `README.md` in your editor, read git status, start a one-tick driver run (answering its gate through the gate button if it opens one), check the tick review, log each step as JSON to the file, then exit. Use a scratch clone: it edits `README.md` and writes files. With `EDITOR=packaging/smoke/fake-editor.sh` and `COLONY_AGENT_KIT_BIN=packaging/smoke/fake-agent-kit.sh` (plus `COLONY_DASHBOARD_SERVE` pointing at the installed kit's `dashboard/serve.mjs`) the editor and the driver are fixtures, so the gate answer and the review are checked end to end with no agent. During the smoke Colony does not focus the editor or the terminal, but the window itself may still take focus from your compositor. |
 
 A desktop launcher often starts apps without your shell's PATH. Colony appends `~/.local/share/mise/shims`, `~/.local/bin`, `~/.cargo/bin` and the newest mise Node install to PATH at startup, so the dashboard server and the CLI resolve the same tools as your terminal.
 

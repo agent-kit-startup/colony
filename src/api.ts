@@ -15,7 +15,25 @@ export interface WorkspaceInfo { root: string; name: string; isGit: boolean; has
 export interface Entry { name: string; path: string; isDir: boolean }
 export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string }
 export type PtyEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null };
-export type AgentEvent = { kind: "event"; line: string } | { kind: "stderr"; line: string } | { kind: "exit"; code: number | null };
+export type AgentEvent =
+  | { kind: "event"; line: string }
+  | { kind: "stderr"; line: string }
+  | { kind: "exit"; code: number | null }
+  | { kind: "review"; review: TickReview };
+export interface FileChange { status: string; path: string; oldPath?: string }
+export interface TickReview {
+  runId: number;
+  tick: number;
+  backend: string;
+  toplevel: string;
+  headBefore: string | null;
+  headAfter: string | null;
+  files: FileChange[];
+  resultLine: string | null;
+  finished: boolean;
+  at: string;
+}
+export interface FileVersions { before: string | null; after: string | null; note: string | null }
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
@@ -48,6 +66,10 @@ export const api = {
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
+  reviewTicks: () => invoke<TickReview[]>("review_ticks"),
+  reviewFile: (runId: number, tick: number, path: string, oldPath?: string) =>
+    invoke<FileVersions>("review_file", { runId, tick, path, oldPath: oldPath ?? null }),
+  reviewPatch: (runId: number, tick: number) => invoke<string>("review_patch", { runId, tick }),
   gitStatus: () => invoke<GitStatus>("git_status"),
   gitDiff: (path?: string) => invoke<string>("git_diff", { path: path ?? null }),
   gitCommit: (message: string, stageAll: boolean) => invoke<string>("git_commit", { message, stageAll }),
