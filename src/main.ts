@@ -1,5 +1,5 @@
 // Colony window: the cockpit. Center tabs hold the native Mission Control views (Mission,
-// Plans, Queue, Inbox, Review, Git, Flight Log), one tab per agent run (its transcript),
+// Plans, Queue, Inbox, Review, Git, CI/CD, Flight Log), one tab per agent run (its transcript),
 // terminal tabs for the interactive vendor CLI and the queue runner, and the editor files.
 // Explorer on the left, shell terminals at the bottom. The kit's web panel stays reachable
 // under More as a fallback.
@@ -9,8 +9,12 @@ import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type W
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
+import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree } from "./filetree";
+import { CicdView, PullRequestsSection } from "./forge";
 import { GitView } from "./git";
+import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
+import { hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
@@ -64,13 +68,14 @@ document.getElementById("app")!.innerHTML = `
     <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button></div>
     <div id="terms"></div>
   </section>
-  <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-env"></span></footer>
+  <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="more-menu" class="menu" hidden>
   <button data-more="web">Mission Control (web panel)</button>
   <button data-more="run-elsewhere">Run plan in another folder…</button>
   <button data-more="refresh">Reload Mission Control data</button>
   <button data-more="terminal">New shell terminal</button>
+  <button data-more="engine">Engine…</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
@@ -431,6 +436,16 @@ const reviewView = new ReviewView(
   status,
 );
 const gitView = new GitView(status, () => void tree.refresh(), host.copy);
+// Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
+const requests = new RequestsSection(status);
+gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
+const cicd = new CicdView(status);
+inbox.addSection(() => inboxRequests(() => showTab("git")));
+hostRequests.on((fresh) => {
+  renderTabs();
+  inbox.invalidate();
+  if (fresh.length) status(`Host request: ${fresh[0].summary}${fresh[0].reason ? ` (${fresh[0].reason})` : ""}: approve or deny it in the Git tab`);
+});
 
 function pinViews() {
   const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
@@ -450,7 +465,10 @@ function pinViews() {
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "⎇", "Git: branch flow, working tree, commit, push", gitView.el, gitView);
+  pin("git", "Git", "⎇", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
+    hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
+  );
+  pin("cicd", "CI/CD", "⟳", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
   pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
 }
 
@@ -527,11 +545,20 @@ menu.addEventListener("click", (ev) => {
       (e) => status(`Skin: ${errText(e)}`),
     );
   }
+  else if (what === "engine") showEngine();
   else if (what === "terminal") {
     toggleTerminal(true);
     void terminals.create();
   }
 });
+
+function showEngine() {
+  void openEnginePanel((m) => {
+    status(m);
+    void refreshEngineBadge($("st-engine"));
+  });
+}
+$("st-engine").addEventListener("click", showEngine);
 
 function renderSkinMenu() {
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
@@ -717,7 +744,8 @@ async function openWorkspace(path: string) {
     const mc = await api.dashboardStart();
     mcUrl = mc.url;
     mcOrigin = new URL(mc.url).origin;
-    $("st-mc").title = `${mc.servePath}\nlog: ${mc.logPath}`;
+    $("st-mc").title = `${mc.servePath}\nengine: ${mc.engine}\nlog: ${mc.logPath}`;
+    void refreshEngineBadge($("st-engine"));
     await snapshot.connect();
   } catch (e) {
     snapshot.feed.error = errText(e);
@@ -817,7 +845,7 @@ window.addEventListener(
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
-    } else if (!ev.shiftKey && !inTerm && /^[1-7]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "flight"][Number(key) - 1]);
+    } else if (!ev.shiftKey && !inTerm && /^[1-8]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "cicd", "flight"][Number(key) - 1]);
     else handled = false;
     if (handled) {
       ev.preventDefault();
@@ -857,6 +885,16 @@ async function runSmoke(root: string, info: StartupInfo) {
     const gotData = await until(() => !!snapshot.data, 20000);
     const d = snapshot.data ?? {};
     await log("mc-snapshot", gotData && typeof d.dashboardDataVersion === "string", { version: d.dashboardDataVersion, plans: snapshot.plans().length, branch: snapshot.git.branch, feed: snapshot.feed });
+    // Managed engine (engine.rs): which engine the Mission Control server runs on.
+    const eng = await api.engineStatus();
+    const viaEngine = eng.source === "env" || eng.source === "managed";
+    await log("engine", !!eng.dashboard && (!viaEngine || eng.dashboard === eng.label), { source: eng.source, label: eng.label, dashboard: eng.dashboard, version: eng.manifest?.version ?? null, node: eng.node, nodeVersion: eng.nodeVersion, nodeSource: eng.nodeSource, agentRuns: info.agentKit });
+    showEngine();
+    await until(() => !!document.querySelector("#engine-panel .engine-actions"), 5000);
+    const panel = document.querySelector("#engine-panel")?.textContent ?? "";
+    await log("engine-panel", panel.includes(eng.label) && panel.includes("Install Node runtime"), panel.slice(0, 240));
+    await shot("engine");
+    closeEnginePanel();
     showTab("mission");
     await wait(300);
     const hero = view("mission").querySelector(".hero")?.textContent ?? "";
@@ -984,6 +1022,9 @@ async function runSmoke(root: string, info: StartupInfo) {
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === "cursor" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
+    await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
+    await wait(1500);
+    await hostSmoke({ root, log, wait, until, shot, showTab, view, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab });
     const seen = new Map<number, string[]>();
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
@@ -1159,13 +1200,15 @@ async function runSmoke(root: string, info: StartupInfo) {
 // ---- boot ------------------------------------------------------------------------------
 shell.classList.add("no-folder");
 pinViews();
+void hostRequests.start().catch((e) => status(`Host requests: ${errText(e)}`));
 renderRecents();
 api
   .appInfo()
   .then(async (info: StartupInfo) => {
     $("st-env").textContent = `v${info.version} · DMA-BUF ${info.webkitDmabuf}`;
     $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("agent-kit CLI not found on PATH: Mission Control and agent runs need it");
+    if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
+    void refreshEngineBadge($("st-engine"));
     if (info.smoke) focusPolicy.enabled = false;
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];

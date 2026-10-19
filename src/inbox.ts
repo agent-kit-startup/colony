@@ -20,6 +20,7 @@ export class InboxView {
   private body = h("div", { class: "cv-body" });
   visible = false;
   private dirty = true;
+  private sections: (() => Node[])[] = [];
 
   constructor(
     private host: CockpitHost,
@@ -37,6 +38,12 @@ export class InboxView {
   show() {
     this.visible = true;
     this.flush();
+  }
+
+  /** More decisions that wait for the operator (host requests), rendered after the live gates. */
+  addSection(render: () => Node[]) {
+    this.sections.push(render);
+    this.invalidate();
   }
 
   hide() {
@@ -81,6 +88,7 @@ export class InboxView {
     const tickets: J[] = Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     return [
       card({ title: "Live gates", aside: gates.length ? [pill(`${gates.length} waiting`, "awaiting", "\u23EF")] : [] }, h("div", { class: "inbox-list" }, ...(live.length ? live : [empty("Nothing waits for you. Gates from every agent run in this window land here.")]))),
+      ...this.sections.flatMap((s) => s()),
       card({ title: "Attention", aside: att.length ? [h("span", { class: "card-count mono" }, String(att.length))] : [] }, ...(snapshot.data ? (att.length ? att : [empty("No attention items.")]) : [empty("Waiting for Mission Control data…")])),
       ...(tickets.length
         ? [

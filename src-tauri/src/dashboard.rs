@@ -1,5 +1,5 @@
-//! Mission Control home: run the installed kit's unforked dashboard server
-//! (`<agent-kit package>/dashboard/serve.mjs`) for the opened workspace on a free
+//! Mission Control home: run the kit's unforked dashboard server
+//! (`<engine>/dashboard/serve.mjs`, engine.rs) for the opened workspace on a free
 //! loopback port, per the embeddable contract (`MISSION_CONTROL_REPO_ROOT`, `PORT`).
 
 use std::net::{TcpListener, TcpStream};
@@ -10,18 +10,24 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::State;
 
-use crate::{tools, workspace, AppState};
+use crate::{engine, tools, workspace, AppState};
 
 pub struct DashboardServer {
     child: Child,
     port: u16,
     root: PathBuf,
     serve: PathBuf,
+    engine: String,
 }
 
 impl DashboardServer {
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Which engine serves it (engine.rs label, `COLONY_DASHBOARD_SERVE` or `unmanaged`).
+    pub fn engine(&self) -> &str {
+        &self.engine
     }
 }
 
@@ -39,18 +45,34 @@ pub struct DashboardInfo {
     port: u16,
     serve_path: String,
     log_path: String,
+    engine: String,
 }
 
-/// `COLONY_DASHBOARD_SERVE`, else `realpath(agent-kit)/../../dashboard/serve.mjs`
-/// (the npm package layout: `<pkg>/dist/cli.js` next to `<pkg>/dashboard/`).
-/// A version-manager shim (mise: `shims/agent-kit -> /usr/bin/mise`) is resolved
-/// through `mise which agent-kit`; the last fallback is `npm root -g`.
-fn serve_script() -> Result<PathBuf, String> {
+/// Node, `serve.mjs` and an engine label: `COLONY_DASHBOARD_SERVE`, else the engine
+/// (engine.rs: `COLONY_ENGINE` or the managed engine), else the unmanaged PATH lookup.
+fn serve_command() -> Result<(PathBuf, PathBuf, String), String> {
     if let Some(p) = std::env::var_os("COLONY_DASHBOARD_SERVE") {
         let p = PathBuf::from(p);
-        return if p.is_file() { Ok(p) } else { Err(format!("COLONY_DASHBOARD_SERVE not found: {}", p.display())) };
+        if !p.is_file() {
+            return Err(format!("COLONY_DASHBOARD_SERVE not found: {}", p.display()));
+        }
+        let node = tools::node_bin().ok_or("node not found on PATH")?;
+        return Ok((node, p, "COLONY_DASHBOARD_SERVE".into()));
     }
-    let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH (install @dadado/agent-kit-cli)")?;
+    if let Some(c) = engine::engine_serve()? {
+        return Ok((c.node, c.serve, c.label));
+    }
+    let serve = unmanaged_serve_script()?;
+    let node = tools::node_bin().ok_or("node not found on PATH")?;
+    Ok((node, serve, "unmanaged (agent-kit on PATH)".into()))
+}
+
+/// Transition fallback: `realpath(agent-kit)/../../dashboard/serve.mjs` (the npm package
+/// layout: `<pkg>/dist/cli.js` next to `<pkg>/dashboard/`). A version-manager shim (mise:
+/// `shims/agent-kit -> /usr/bin/mise`) is resolved through `mise which agent-kit`; the
+/// last fallback is `npm root -g`.
+fn unmanaged_serve_script() -> Result<PathBuf, String> {
+    let bin = tools::agent_kit_bin().ok_or("No Agent Kit engine: install one from More → Engine (or set COLONY_ENGINE)")?;
     let real = bin.canonicalize().map_err(|e| e.to_string())?;
     if let Some(found) = serve_next_to(&real) {
         return Ok(found);
@@ -110,6 +132,7 @@ fn info(s: &DashboardServer) -> DashboardInfo {
         port: s.port,
         serve_path: s.serve.display().to_string(),
         log_path: log_dir().join(format!("dashboard-{}.log", s.port)).display().to_string(),
+        engine: s.engine.clone(),
     }
 }
 
@@ -126,8 +149,7 @@ pub async fn dashboard_start(state: State<'_, AppState>) -> Result<DashboardInfo
         }
         *guard = None; // drops (kills) a server for another folder or a dead one
     }
-    let serve = serve_script()?;
-    let node = tools::node_bin().ok_or("node not found on PATH")?;
+    let (node, serve, engine) = serve_command()?;
     let port = free_port()?;
     let dir = log_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -146,7 +168,7 @@ pub async fn dashboard_start(state: State<'_, AppState>) -> Result<DashboardInfo
         .stderr(Stdio::from(log_err))
         .spawn()
         .map_err(|e| format!("dashboard server failed to start: {e}"))?;
-    let mut server = DashboardServer { child, port, root, serve };
+    let mut server = DashboardServer { child, port, root, serve, engine };
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
