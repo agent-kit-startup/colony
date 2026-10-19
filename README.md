@@ -32,7 +32,15 @@ The cockpit is the center of the window. Its first tabs are Mission Control itse
 | Web panel | `More → Mission Control (web panel)`: the kit's own page in a tab, as a fallback (see Mission Control web panel). |
 | Skins | `More → Skin`: Bare Metal (default) or Legacy for the whole window, web panel included; saved as `ui.skin` in the settings file. |
 
-Not yet: engine choice per to-do (the CLI picks the backend per run), a driver run of a plan other than the HANDOFF one and gates of the queue runner in the Inbox (both need the kit: `run-plan` has no plan argument and `run-plan-all` no `--events ndjson`), backlog actions without an agent (the kit exposes them only as slash commands), OS keychain for vendor keys (left out: the product plan says the IDE never reads, stores or relays vendor tokens; the agent CLIs keep their own login), signed bundles.
+Not yet: engine choice per to-do (the CLI picks the backend per run), a driver run of a plan other than the HANDOFF one and gates of the queue runner in the Inbox (both need the kit: `run-plan` has no plan argument and `run-plan-all` no `--events ndjson`), backlog actions without an agent (the kit exposes them only as slash commands), OS keychain for vendor keys (left out: the product plan says the IDE never reads, stores or relays vendor tokens; the agent CLIs keep their own login), the Tauri updater, macOS and Windows builds.
+
+## Install (Linux x86_64)
+
+```bash
+curl -fsSL https://colony.missionkit.io/install.sh | sh
+```
+
+`packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`). The download host is not live yet: see [docs/release.md](docs/release.md) for the release files, publishing, the identity checklist and the install smoke.
 
 ## Requirements (Linux)
 
