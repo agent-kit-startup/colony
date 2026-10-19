@@ -42,6 +42,7 @@ class ChatStore {
       this.error = "";
     } catch (e) {
       if (n !== this.seq) return;
+      this.list = null;
       this.error = errText(e);
     }
     this.loading = false;

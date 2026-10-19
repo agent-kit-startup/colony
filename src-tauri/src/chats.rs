@@ -2,7 +2,8 @@
 //! a terminal tab (vendor.rs `--resume`).
 //!
 //! Claude Code saves every session as `~/.claude/projects/<slug>/<session-uuid>.jsonl`,
-//! `<slug>` being the session's start folder through `context::project_slug`. Only the
+//! `<slug>` being the session's start folder through `context::project_slug` (the same
+//! name Claude Code builds, long folders included). Only the
 //! top-level `<uuid>.jsonl` files are sessions: subagent transcripts live under
 //! `<slug>/<uuid>/subagents/` and are not listed. Each line is one JSON record; the title
 //! is the last `custom-title` record (a name the user set), else the last `ai-title`
@@ -113,8 +114,7 @@ fn user_prompt(rec: &Value) -> Option<String> {
 }
 
 /// Title and its source from a session transcript. Malformed lines are skipped.
-fn scan_title(reader: impl BufRead) -> (String, &'static str) {
-    let mut reader = reader;
+fn scan_title(mut reader: impl BufRead) -> (String, &'static str) {
     let (mut custom, mut ai, mut first) = (None::<String>, None::<String>, None::<String>);
     let mut line = Vec::new();
     loop {
@@ -158,20 +158,25 @@ fn title_of(path: &Path, mtime: u128, size: u64) -> (String, &'static str) {
     (title, src)
 }
 
-/// The Claude Code sessions started in `cwd`, newest first.
-fn claude_sessions(home: &Path, cwd: &Path) -> ChatList {
+/// The Claude Code sessions started in `cwd`, newest first. No project folder yet is an
+/// empty list; any other read error is an error.
+fn claude_sessions(home: &Path, cwd: &Path) -> Result<ChatList, String> {
     let dir = home.join(".claude/projects").join(context::project_slug(&cwd.display().to_string()));
     let mut found: Vec<(PathBuf, String, u128, u64)> = Vec::new();
-    if let Ok(read) = std::fs::read_dir(&dir) {
-        for e in read.flatten() {
-            let path = e.path();
-            let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".jsonl")).map(String::from) else { continue };
-            if !is_session_id(&id) || !e.file_type().is_ok_and(|t| t.is_file()) {
-                continue;
+    match std::fs::read_dir(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+        Ok(read) => {
+            for e in read.flatten() {
+                let path = e.path();
+                let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".jsonl")).map(String::from) else { continue };
+                if !is_session_id(&id) || !e.file_type().is_ok_and(|t| t.is_file()) {
+                    continue;
+                }
+                let Ok(meta) = e.metadata() else { continue };
+                let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                found.push((path, id, mtime, meta.len()));
             }
-            let Ok(meta) = e.metadata() else { continue };
-            let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-            found.push((path, id, mtime, meta.len()));
         }
     }
     found.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
@@ -185,7 +190,7 @@ fn claude_sessions(home: &Path, cwd: &Path) -> ChatList {
         })
         .collect();
     let note = if total > MAX_SESSIONS { format!("{total} sessions: the newest {MAX_SESSIONS} are listed") } else { String::new() };
-    ChatList { vendor: "claude".into(), status: "ok".into(), note, dir: Some(dir.display().to_string()), total, sessions }
+    Ok(ChatList { vendor: "claude".into(), status: "ok".into(), note, dir: Some(dir.display().to_string()), total, sessions })
 }
 
 /// Saved sessions of `vendor` (a vendor CLI of the backend table) started in `cwd`.
@@ -194,7 +199,7 @@ pub fn list(vendor: &str, home: &Path, cwd: &Path) -> Result<ChatList, String> {
         return Err(format!("Unknown vendor CLI: {vendor}"));
     }
     if vendor == "claude" {
-        return Ok(claude_sessions(home, cwd));
+        return claude_sessions(home, cwd);
     }
     Ok(ChatList {
         vendor: vendor.into(),
@@ -222,6 +227,7 @@ mod tests {
     const A: &str = "0b5c3a52-1f6e-4c1a-9d1e-6a2f3b4c5d6e";
     const B: &str = "1c6d4b63-2a7f-4d2b-8e2f-7b3a4c5d6e7f";
     const C: &str = "2d7e5c74-3b8a-4e3c-9f3a-8c4b5d6e7f80";
+    const D: &str = "3e8f6d85-4c9b-4f4d-8a4b-9d5c6e7f8091";
 
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("colony-chats-{name}-{}", std::process::id()));
@@ -309,8 +315,9 @@ mod tests {
         write(&dir.join(format!("{A}.jsonl")), "{\"type\":\"custom-title\",\"customTitle\":\"colony-terminal\"}\n");
         write(&dir.join(format!("{B}.jsonl")), "{\"type\":\"ai-title\",\"aiTitle\":\"Synch plans\"}\n");
         write(&dir.join(format!("{C}.jsonl")), "{\"type\":\"user\",\"message\":{\"content\":\"hello there\"}}\n");
-        // Not sessions: a subagent transcript, a non-uuid file, a uuid-named folder.
+        // Not sessions: a subagent transcript, a non-uuid file, a folder named `<uuid>.jsonl`.
         write(&dir.join(A).join("subagents/agent-1.jsonl"), "{\"type\":\"ai-title\",\"aiTitle\":\"sub\"}\n");
+        write(&dir.join(format!("{D}.jsonl")).join("x"), "{}\n");
         write(&dir.join("notes.jsonl"), "{}\n");
         write(&dir.join("memory/MEMORY.md"), "- x\n");
         age(&dir.join(format!("{A}.jsonl")), 10);
@@ -329,6 +336,12 @@ mod tests {
         // No project folder yet: an empty list, not an error.
         let other = list("claude", &home, &root).unwrap();
         assert_eq!((other.status.as_str(), other.total), ("ok", 0));
+        // A project path that cannot be read is an error, not "no chats".
+        let odd = root.join("code/odd");
+        std::fs::create_dir_all(&odd).unwrap();
+        write(&home.join(".claude/projects").join(context::project_slug(&odd.display().to_string())), "not a folder\n");
+        let err = list("claude", &home, &odd).unwrap_err();
+        assert!(err.contains("-code-odd"), "{err}");
     }
 
     #[test]

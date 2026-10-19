@@ -367,6 +367,8 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
 
 /** Saved chat (session id) -> the terminal tab that resumed it. */
 const chatTabs = new Map<string, string>();
+/** Saved chats whose resume tab is still opening: a second click must not open another. */
+const resuming = new Set<string>();
 
 let confirmAction = (message: string, title: string) => ask(message, { title, kind: "info" });
 let smokeDryRun = false;
@@ -420,6 +422,8 @@ const host: CockpitHost = {
       showTab(open);
       return { id: open, view: openView };
     }
+    if (resuming.has(id)) return;
+    resuming.add(id);
     try {
       const l = await api.termLaunch({ kind: "interactive", engine: "claude", resume: id });
       if (l.note) status(l.note);
@@ -429,6 +433,8 @@ const host: CockpitHost = {
       return t;
     } catch (e) {
       status(`Resume chat: ${errText(e)}`);
+    } finally {
+      resuming.delete(id);
     }
   },
   showTab,
@@ -759,6 +765,7 @@ async function openWorkspace(path: string) {
   terminals.closeAll();
   snapshot.reset();
   chatTabs.clear();
+  resuming.clear();
   chats.reset();
   void chats.refresh();
   mcUrl = "";

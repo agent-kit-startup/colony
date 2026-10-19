@@ -11,7 +11,7 @@ import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from 
 import { runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { prose } from "./transcript";
-import { ago, btn, card, cardHeader, chip, empty, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
+import { ago, btn, bytes, card, cardHeader, chip, empty, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
 
 export interface CockpitHost {
   status(msg: string): void;
@@ -185,12 +185,6 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
 const CHAT_SOURCE: Record<ChatSession["titleSource"], string> = { custom: "name you set", ai: "title from Claude Code", "first-prompt": "first prompt", none: "no title" };
 const CHATS_SHOWN = 8;
 
-function size(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
 /** One saved chat; a click (or Resume) opens it again in a terminal tab. */
 function chatRow(c: ChatSession, host: CockpitHost): HTMLElement {
   const title = c.title || "Untitled chat";
@@ -198,9 +192,7 @@ function chatRow(c: ChatSession, host: CockpitHost): HTMLElement {
   const resume = () => void host.resumeChat(c.id, c.title);
   const row = h(
     "div",
-    { class: "row click chat-row", title: `${title} (${CHAT_SOURCE[c.titleSource]})
-session ${c.id} · ${size(c.sizeBytes)} · saved ${saved}
-claude --resume ${c.id}` },
+    { class: "row click chat-row", title: `${title} (${CHAT_SOURCE[c.titleSource]})\nsession ${c.id} · ${bytes(c.sizeBytes)} · saved ${saved}\nclaude --resume ${c.id}` },
     h("span", { class: "grow ellipsis" }, c.title ? h("strong", {}, title) : h("span", { class: "dim" }, title)),
     h("span", { class: "run-meta mono" }, h("span", {}, ago(saved)), h("span", {}, c.id.slice(0, 8))),
     btn("Resume", resume, { class: "link", "data-act": "resume" }),
@@ -232,7 +224,11 @@ export class MissionView extends View {
   constructor(host: CockpitHost, private controls: RunControls) {
     super(host, "cv-mission");
     launches.on(() => this.invalidate());
-    chats.on(() => this.invalidate());
+    chats.on(() => {
+      // A new folder (or a failed read) starts folded again.
+      if (!chats.list) this.allChats = false;
+      this.invalidate();
+    });
   }
 
   /** The Chats card lists every chat of the read, not only the newest few. */
@@ -370,15 +366,16 @@ export class MissionView extends View {
           this.invalidate();
         }, { class: "link" }),
       );
-    if (l && l.total > all.length) rows.push(h("div", { class: "dim small" }, `${l.total - all.length} older chat(s) not listed: ${l.note}`));
+    const older = l ? l.total - all.length : 0;
+    if (older > 0) rows.push(h("div", { class: "dim small" }, `${older} older chat${older === 1 ? "" : "s"} not listed (only the newest ${all.length} are read)`));
     const refresh = btn(chats.loading ? "Reading…" : "↻ Refresh", () => void chats.refresh(), { class: "link", "data-act": "chats-refresh", title: "Read the saved sessions of this folder again" });
     const none = empty(
       l || !chats.loading
-        ? "No saved chats for this folder. Claude Code saves each session per start folder (~/.claude/projects/<folder>/); this list shows the ones started in this workspace folder. ⌘ Open interactive starts one."
+        ? "No saved chats for this folder. Claude Code saves each session per start folder (~/.claude/projects/<folder>/); this list shows the ones started in this workspace folder. ⌘ Open interactive with the claude engine starts one."
         : "Reading the saved chats…",
     );
     const body = chats.error ? [empty(`Saved chats unavailable: ${chats.error}`)] : rows.length ? rows : [none];
-    return card({ title: "Chats", aside: [...(l?.total ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []), refresh] }, ...body);
+    return card({ title: "Chats", aside: [...(l?.total && !chats.error ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []), refresh] }, ...body);
   }
 
   private queueCard(): HTMLElement {

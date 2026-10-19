@@ -44,13 +44,41 @@ pub struct ContextReport {
     pub sources: Vec<Source>,
 }
 
-/// Claude Code's project folder name for a working folder: every character that is not an
-/// ASCII letter or digit becomes `-`. Verified on disk (~/.claude/projects): `/` and `.`
-/// both map to `-` (`/home/u/.local/x` -> `-home-u--local-x`), a `-` stays (`/x/-y` ->
-/// `-x--y`), case is kept (`/home/u/Work` -> `-home-u-Work`). Other punctuation (`_`,
-/// spaces) follows the same encoder; no such folder existed locally to confirm it.
+/// Longest project folder name Claude Code writes as is (its `MAX_SANITIZED_LENGTH`).
+const MAX_SANITIZED_LENGTH: usize = 200;
+
+/// Claude Code's project folder name for a working folder, as Claude Code 2.1.302 builds it:
+/// every UTF-16 code unit that is not an ASCII letter or digit becomes `-` (so `/` and `.`
+/// map to `-`, a `-` stays, case is kept, and a character outside the BMP such as an emoji
+/// gives two dashes), and a name longer than 200 characters is cut at 200 and gets `-` plus
+/// a base36 hash of the folder path (a 32-bit `h * 31 + unit` over its UTF-16 code units).
 pub fn project_slug(cwd: &str) -> String {
-    cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+    let mut slug = String::with_capacity(cwd.len());
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else {
+            slug.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    if slug.len() <= MAX_SANITIZED_LENGTH {
+        return slug;
+    }
+    let hash = cwd.encode_utf16().fold(0i32, |h, u| h.wrapping_shl(5).wrapping_sub(h).wrapping_add(i32::from(u)));
+    slug.truncate(MAX_SANITIZED_LENGTH);
+    format!("{slug}-{}", base36(hash.unsigned_abs()))
+}
+
+fn base36(mut n: u32) -> String {
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit(n % 36, 36).unwrap_or('0'));
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
 }
 
 /// Engine (driver backend or vendor CLI name) to loader family.
@@ -221,6 +249,17 @@ mod tests {
         assert_eq!(project_slug("/tmp/claude-1000/-home-x/scratchpad"), "-tmp-claude-1000--home-x-scratchpad");
         assert_eq!(project_slug("/home/severina/Work"), "-home-severina-Work");
         assert_eq!(project_slug("/home/u/my_repo v2"), "-home-u-my-repo-v2");
+        // One dash per UTF-16 code unit: an emoji is two.
+        assert_eq!(project_slug("/home/u/proj \u{1F41D}"), "-home-u-proj---");
+        assert_eq!(project_slug("/home/u/caf\u{e9}"), "-home-u-caf-");
+        // Over 200 characters: cut at 200, then the path's hash (values from Claude Code).
+        let at_cap = format!("/b/{}", "z".repeat(197));
+        assert_eq!(project_slug(&at_cap), format!("-b-{}", "z".repeat(197)));
+        let long = project_slug(&format!("/a/{}", "x".repeat(250)));
+        assert_eq!(long, format!("-a-{}-oej0v1", "x".repeat(197)));
+        let long = project_slug(&format!("/home/u/proj \u{1F41D}/{}", "y".repeat(200)));
+        assert_eq!(long, format!("-home-u-proj----{}-um3jaf", "y".repeat(184)));
+        assert_eq!(base36(i32::MIN.unsigned_abs()), "zik0zk");
     }
 
     #[test]
