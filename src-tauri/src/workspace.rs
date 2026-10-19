@@ -58,6 +58,13 @@ pub fn jail(state: &AppState, p: &str) -> Result<PathBuf, String> {
             parent.join(file)
         }
     };
+    // The Colony settings file is the one path outside the folder the editor may open.
+    let settings_file = crate::settings::settings_path(state)
+        .ok()
+        .and_then(|s| Some(s.parent()?.canonicalize().ok()?.join(s.file_name()?)));
+    if settings_file.is_some_and(|s| s == resolved) {
+        return Ok(resolved);
+    }
     if !resolved.starts_with(&root) {
         return Err(format!("Path is outside the workspace: {}", resolved.display()));
     }
@@ -132,4 +139,38 @@ pub fn read_text_file(state: State<'_, AppState>, path: String) -> Result<String
 pub fn write_text_file(state: State<'_, AppState>, path: String, contents: String) -> Result<(), String> {
     let file = jail(&state, &path)?;
     std::fs::write(&file, contents).map_err(|e| format!("Cannot save {}: {e}", file.display()))
+}
+
+/// Directories skipped by quick open (build output and dependency trees).
+const SKIP_IN_WALK: &[&str] = &[".git", "node_modules", "target", "dist", ".next", ".venv", "__pycache__", ".turbo"];
+const MAX_WALK_FILES: usize = 50_000;
+
+/// Every file under the workspace (relative paths), for quick open. Capped.
+#[tauri::command]
+pub fn list_files(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let root = workspace_root(&state)?;
+    let mut out = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else { continue };
+        for e in read.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if ft.is_dir() {
+                if !SKIP_IN_WALK.contains(&name.as_ref()) {
+                    stack.push(e.path());
+                }
+            } else if ft.is_file() {
+                if let Ok(rel) = e.path().strip_prefix(&root) {
+                    out.push(rel.display().to_string());
+                }
+                if out.len() >= MAX_WALK_FILES {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }

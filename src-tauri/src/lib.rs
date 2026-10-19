@@ -1,6 +1,12 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
+mod agent;
 mod dashboard;
+mod gitops;
+mod launch;
+mod pty;
+mod review;
+mod settings;
 mod tools;
 mod workspace;
 
@@ -14,6 +20,11 @@ use tauri::{Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder};
 pub struct AppState {
     pub workspace: Mutex<Option<PathBuf>>,
     pub dashboard: Mutex<Option<dashboard::DashboardServer>>,
+    pub ptys: pty::PtyRegistry,
+    pub agents: agent::AgentRegistry,
+    pub reviews: std::sync::Arc<review::ReviewStore>,
+    /// `<app config dir>/settings.json`, set once at startup.
+    pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
 }
 
@@ -27,6 +38,8 @@ struct StartupInfo {
     agent_kit: Option<String>,
     node: Option<String>,
     git: Option<String>,
+    /// `COLONY_SMOKE=<log file>`: run the scripted code-path smoke after the folder opens.
+    smoke: Option<String>,
 }
 
 /// WebKitGTK's DMA-BUF renderer hangs on NVIDIA + Wayland (Colony UI benchmark, machine A).
@@ -60,40 +73,98 @@ fn initial_workspace() -> Option<String> {
         .map(|p| p.display().to_string())
 }
 
+/// Append one line to the `COLONY_SMOKE` log (no-op when the smoke is off).
+#[tauri::command]
+fn smoke_log(state: State<'_, AppState>, line: String) -> Result<(), String> {
+    use std::io::Write;
+    let Some(path) = state.startup.lock().ok().and_then(|s| s.smoke.clone()) else { return Ok(()) };
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
+}
+
+/// End a `COLONY_SMOKE` run (refused when the smoke is off).
+#[tauri::command]
+fn smoke_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.startup.lock().ok().and_then(|s| s.smoke.clone()).is_none() {
+        return Err("not a smoke run".into());
+    }
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> StartupInfo {
     state.startup.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
 /// Mission Control action seam (embeddable contract): defined only inside the Mission
-/// Control iframe on 127.0.0.1, before the panel script runs. Alpha behavior is still
-/// copy (no real host action ships before the interpolation review owed by the ADR); the
-/// record is also posted to the Colony window so it can show where to paste.
+/// Control iframe on 127.0.0.1, before the panel script runs. Every record (always
+/// `kind: "copy"`) is first offered to the Colony window over a MessageChannel; the window
+/// runs a real host action only for an allowlisted record (open a repo file, start a
+/// plan run after a native confirmation; src/mcactions.ts) and answers `handled`.
+/// Anything else, a refusal or no answer within 1.5 s falls back to the clipboard copy.
 const MC_ACTION_HOOK: &str = r#"
 (function () {
   try {
     if (window === window.top || location.hostname !== '127.0.0.1') return;
+    var copy = function (action) {
+      var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
+      try {
+        return navigator.clipboard.writeText(action.text).then(done, function () {
+          return { ok: true, message: 'Sent to Colony (clipboard unavailable in the frame)' };
+        });
+      } catch (e) {
+        return Promise.resolve({ ok: true, message: 'Sent to Colony' });
+      }
+    };
+    var askHost = function (record) {
+      return new Promise(function (resolve) {
+        var settled = false;
+        var finish = function (v) { if (!settled) { settled = true; resolve(v); } };
+        var timer = setTimeout(function () { finish(null); }, 1500);
+        try {
+          var ch = new MessageChannel();
+          ch.port1.onmessage = function (ev) { clearTimeout(timer); finish(ev.data || null); };
+          window.top.postMessage({ colony: 'mc-action', action: record }, '*', [ch.port2]);
+        } catch (e) { clearTimeout(timer); finish(null); }
+      });
+    };
     var hook = Object.freeze({
       perform: function (action) {
         if (!action || action.kind !== 'copy' || typeof action.text !== 'string') {
           return Promise.reject(new Error('Colony: action not allowed'));
         }
         var record = { kind: 'copy', text: action.text, subject: String(action.subject || ''), destination: String(action.destination || '') };
-        try { window.top.postMessage({ colony: 'mc-action', action: record }, '*'); } catch (e) {}
-        var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
-        try {
-          return navigator.clipboard.writeText(action.text).then(done, function () {
-            return { ok: true, message: 'Sent to Colony (clipboard unavailable in the frame)' };
-          });
-        } catch (e) {
-          return Promise.resolve({ ok: true, message: 'Sent to Colony' });
-        }
+        return askHost(record).then(function (reply) {
+          if (reply && reply.handled === true) {
+            return { ok: reply.ok !== false, message: String(reply.message || 'Done in Colony') };
+          }
+          return copy(action);
+        });
       }
     });
     Object.defineProperty(window, '__MISSION_CONTROL_ACTIONS__', { value: hook, writable: false, configurable: false });
+    /*COLONY_SMOKE*/
   } catch (e) {}
 })();
 "#;
+
+/// COLONY_SMOKE only: let the Colony window call `perform()` inside the frame, so the
+/// smoke covers the frame -> host -> frame round trip without clicking in the page.
+const MC_SMOKE_BRIDGE: &str = r#"
+    window.addEventListener('message', function (ev) {
+      if (ev.source !== window.top || !ev.data || ev.data.colony !== 'mc-smoke-perform') return;
+      var id = ev.data.id;
+      hook.perform(ev.data.action).then(
+        function (r) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, result: r }, '*'); },
+        function (e) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, error: String(e && e.message || e) }, '*'); }
+      );
+    });
+"#;
+
+fn mc_action_hook(smoke: bool) -> String {
+    MC_ACTION_HOOK.replace("/*COLONY_SMOKE*/", if smoke { MC_SMOKE_BRIDGE } else { "" })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -108,26 +179,55 @@ pub fn run() {
         agent_kit: tools::agent_kit_bin().map(|p| p.display().to_string()),
         node: tools::node_bin().map(|p| p.display().to_string()),
         git: tools::git_bin().map(|p| p.display().to_string()),
+        smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
     };
 
+    let hook = mc_action_hook(startup.smoke.is_some());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            smoke_log,
+            smoke_exit,
             workspace::open_workspace,
             workspace::list_dir,
             workspace::read_text_file,
             workspace::write_text_file,
+            workspace::list_files,
             dashboard::dashboard_start,
             dashboard::dashboard_stop,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            agent::agent_start,
+            agent::agent_backends,
+            agent::agent_reply,
+            agent::agent_stop,
+            agent::agent_kill,
+            gitops::git_status,
+            gitops::git_diff,
+            gitops::git_commit,
+            gitops::git_push,
+            settings::settings_get,
+            settings::settings_ensure,
+            settings::settings_workspace,
+            settings::settings_set_workspace,
+            launch::open_in_editor,
+            review::review_ticks,
+            review::review_file,
+            review::review_patch,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            if let Ok(dir) = app.path().app_config_dir() {
+                *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
+            }
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Colony")
                 .inner_size(1500.0, 950.0)
                 .min_inner_size(900.0, 600.0)
-                .initialization_script_for_all_frames(MC_ACTION_HOOK)
+                .initialization_script_for_all_frames(&hook)
                 .build()?;
             Ok(())
         })
@@ -139,6 +239,8 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let server = state.dashboard.lock().ok().and_then(|mut d| d.take());
             drop(server); // kills the dashboard server
+            state.ptys.kill_all();
+            state.agents.kill_all();
         }
     });
 }
