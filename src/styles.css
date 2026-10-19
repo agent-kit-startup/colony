@@ -121,6 +121,7 @@ input.num { width: 64px; }
 .git-out .del { color: var(--danger); }
 .git-out .hunk { color: var(--mc-blue); }
 .prod-confirm { display: flex; gap: 6px; align-items: center; color: var(--warn); }
+.prod-confirm[hidden] { display: none; }
 label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim); }
 
 #resizer { grid-area: resizer; cursor: row-resize; background: var(--line); }
