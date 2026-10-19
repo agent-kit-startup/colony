@@ -126,13 +126,16 @@ export class GitView {
   readonly el: HTMLElement;
   readonly panel: GitPanel;
   private repo = h("div", { class: "git-repo" });
+  private left: HTMLElement;
+  private extras: { el: HTMLElement; refresh?: () => void }[] = [];
   private dirty = true;
   visible = false;
 
   constructor(status: (msg: string) => void, onCommitted: () => void, private copy: (text: string, what: string) => void) {
     const work = h("section", { class: "card git-work" }, h("div", { class: "card-title" }, "Working tree"));
     this.panel = new GitPanel(work, status, onCommitted);
-    this.el = h("div", { class: "cv cv-git" }, h("div", { class: "cv-body git-grid" }, h("div", { class: "git-left" }, this.repo, this.prodCard()), work));
+    this.left = h("div", { class: "git-left" }, this.repo, this.prodCard());
+    this.el = h("div", { class: "cv cv-git" }, h("div", { class: "cv-body git-grid" }, this.left, work));
     snapshot.on((why) => {
       if (why !== "data") return;
       this.dirty = true;
@@ -140,10 +143,17 @@ export class GitView {
     });
   }
 
+  /** Extra sections above the repository card (host requests, pull requests), refreshed on show. */
+  addSections(...extras: { el: HTMLElement; refresh?: () => void }[]) {
+    this.extras.push(...extras);
+    this.left.prepend(...extras.map((x) => x.el));
+  }
+
   show() {
     this.visible = true;
     if (this.dirty) this.renderRepo();
     void this.panel.refresh();
+    for (const x of this.extras) x.refresh?.();
   }
 
   hide() {

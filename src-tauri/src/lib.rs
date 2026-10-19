@@ -1,8 +1,11 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
 mod agent;
+mod branchrule;
 mod dashboard;
+mod forge;
 mod gitops;
+mod hostreq;
 mod launch;
 mod mcdata;
 mod pty;
@@ -185,9 +188,14 @@ fn mc_action_hook(smoke: bool) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `colony request ...`: the host-action CLI (hostreq.rs), no GUI.
+    if std::env::args().nth(1).as_deref() == Some("request") {
+        std::process::exit(hostreq::cli_main());
+    }
     // Environment first, before any thread exists.
     let dmabuf = apply_webkit_env();
     let added = tools::extend_process_path();
+    let host_requests = std::sync::Arc::new(hostreq::HostRequests::prepare());
     let startup = StartupInfo {
         version: env!("CARGO_PKG_VERSION").into(),
         initial_workspace: initial_workspace(),
@@ -204,6 +212,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
+        .manage(host_requests.clone())
         .invoke_handler(tauri::generate_handler![
             app_info,
             smoke_log,
@@ -233,6 +242,17 @@ pub fn run() {
             gitops::git_diff,
             gitops::git_commit,
             gitops::git_push,
+            forge::forge_status,
+            forge::forge_prs,
+            forge::forge_runs,
+            forge::forge_rerun_failed,
+            hostreq::host_requests_subscribe,
+            hostreq::host_request_context,
+            hostreq::host_request_diff,
+            hostreq::host_request_open,
+            hostreq::host_request_approve,
+            hostreq::host_request_deny,
+            hostreq::host_request_local,
             settings::settings_get,
             settings::settings_ensure,
             settings::settings_workspace,
@@ -244,6 +264,7 @@ pub fn run() {
             review::review_patch,
         ])
         .setup(move |app| {
+            host_requests.start_watcher();
             if let Ok(dir) = app.path().app_config_dir() {
                 *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
             }
@@ -265,6 +286,7 @@ pub fn run() {
             drop(server); // kills the dashboard server
             state.ptys.kill_all();
             state.agents.kill_all();
+            handle.state::<hostreq::Shared>().cleanup();
         }
     });
 }

@@ -1,5 +1,5 @@
 // Colony window: the cockpit. Center tabs hold the native Mission Control views (Mission,
-// Plans, Queue, Inbox, Review, Git, Flight Log), one tab per agent run (its transcript),
+// Plans, Queue, Inbox, Review, Git, CI/CD, Flight Log), one tab per agent run (its transcript),
 // terminal tabs for the interactive vendor CLI and the queue runner, and the editor files.
 // Explorer on the left, shell terminals at the bottom. The kit's web panel stays reachable
 // under More as a fallback.
@@ -9,7 +9,10 @@ import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type W
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
+import { CicdView, PullRequestsSection } from "./forge";
 import { GitView } from "./git";
+import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
+import { hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { decide, type McRecord } from "./mcactions";
 import { ReviewView } from "./review";
@@ -420,6 +423,16 @@ const reviewView = new ReviewView(
   status,
 );
 const gitView = new GitView(status, () => void tree.refresh(), host.copy);
+// Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
+const requests = new RequestsSection(status);
+gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
+const cicd = new CicdView(status);
+inbox.addSection(() => inboxRequests(() => showTab("git")));
+hostRequests.on((fresh) => {
+  renderTabs();
+  inbox.invalidate();
+  if (fresh.length) status(`Host request: ${fresh[0].summary}${fresh[0].reason ? ` (${fresh[0].reason})` : ""}: approve or deny it in the Git tab`);
+});
 
 function pinViews() {
   const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
@@ -439,7 +452,10 @@ function pinViews() {
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "⎇", "Git: branch flow, working tree, commit, push", gitView.el, gitView);
+  pin("git", "Git", "⎇", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
+    hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
+  );
+  pin("cicd", "CI/CD", "⟳", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
   pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
 }
 
@@ -805,7 +821,7 @@ window.addEventListener(
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
-    } else if (!ev.shiftKey && !inTerm && /^[1-7]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "flight"][Number(key) - 1]);
+    } else if (!ev.shiftKey && !inTerm && /^[1-8]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "cicd", "flight"][Number(key) - 1]);
     else handled = false;
     if (handled) {
       ev.preventDefault();
@@ -964,6 +980,9 @@ async function runSmoke(root: string, info: StartupInfo) {
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === "cursor" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
+    await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
+    await wait(1500);
+    await hostSmoke({ root, log, wait, until, shot, showTab, view, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab });
     const seen = new Map<number, string[]>();
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
@@ -1138,6 +1157,7 @@ async function runSmoke(root: string, info: StartupInfo) {
 // ---- boot ------------------------------------------------------------------------------
 shell.classList.add("no-folder");
 pinViews();
+void hostRequests.start().catch((e) => status(`Host requests: ${errText(e)}`));
 renderRecents();
 api
   .appInfo()

@@ -1,6 +1,6 @@
 //! Git panel: status, diff, commit, push with the system git. Hooks always run (no
-//! `--no-verify`), pushes are never forced, and pushing a production branch needs the
-//! operator to type `yes`.
+//! `--no-verify`), pushes are never forced, and pushing a production branch (branchrule.rs)
+//! needs the operator to type `yes`.
 
 use std::path::Path;
 use std::process::Command;
@@ -8,10 +8,8 @@ use std::process::Command;
 use serde::Serialize;
 use tauri::State;
 
-use crate::{tools, workspace, AppState};
+use crate::{branchrule, tools, workspace, AppState};
 
-/// Branches whose push counts as a production promotion.
-const PROD_BRANCHES: &[&str] = &["main", "master", "prod", "production", "release"];
 const MAX_DIFF_BYTES: usize = 400 * 1024;
 
 #[derive(Serialize)]
@@ -31,7 +29,7 @@ pub struct GitStatus {
     files: Vec<FileStatus>,
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let bin = tools::git_bin().ok_or("git not found on PATH")?;
     let out = Command::new(bin)
         .arg("-C")
@@ -69,7 +67,8 @@ pub fn git_status(state: State<'_, AppState>) -> Result<GitStatus, String> {
         }
     }
     let branch = current_branch(&root).unwrap_or_default();
-    Ok(GitStatus { is_repo: true, prod_branch: PROD_BRANCHES.contains(&branch.as_str()), branch, header, files })
+    let prod_branch = branchrule::production_branch(&root, &branch).is_some();
+    Ok(GitStatus { is_repo: true, prod_branch, branch, header, files })
 }
 
 #[tauri::command]
@@ -110,8 +109,10 @@ pub fn git_push(state: State<'_, AppState>, typed_confirm: Option<String>) -> Re
     if branch == "HEAD" {
         return Err("Detached HEAD: check out a branch before pushing".into());
     }
-    if PROD_BRANCHES.contains(&branch.as_str()) && typed_confirm.as_deref().map(str::trim) != Some("yes") {
-        return Err(format!("Pushing {branch} is a production promotion: type yes to confirm"));
+    if let Some(why) = branchrule::production_branch(&root, &branch) {
+        if typed_confirm.as_deref().map(str::trim) != Some("yes") {
+            return Err(format!("Pushing {branch} is a production promotion ({why}): type yes to confirm"));
+        }
     }
     let has_upstream = git(&root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok();
     if has_upstream {
