@@ -686,7 +686,8 @@ pub struct EngineStatus {
     dashboard_override: Option<String>,
 }
 
-#[tauri::command]
+/// Off the main thread: a `COLONY_ENGINE` checkout without engine.json spawns the CLI probe.
+#[tauri::command(async)]
 pub fn engine_status(state: State<'_, AppState>) -> EngineStatus {
     let data = data_dir();
     let engines = data.as_ref().map(|d| d.join("engine"));
