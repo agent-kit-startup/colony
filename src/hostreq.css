@@ -1,0 +1,21 @@
+/* Host requests (approval cards), pull requests and the CI/CD tab. Kept out of styles.css
+   so the shared stylesheet stays untouched; built on its tokens and classes. */
+/* `.chip` and `.prod-confirm` set display, which would beat the hidden attribute. */
+.hostreq-card [hidden] { display: none !important; }
+.hostreq-list { max-height: none; overflow: visible; }
+.hostreq-card { gap: 6px; }
+.hostreq-card.running { opacity: 0.8; }
+.hostreq-card input.yes { width: 110px; }
+.hostreq-card input.deny-reason { flex: 1; min-width: 140px; }
+.hostreq-meta { color: var(--fg-dim); word-break: break-all; }
+.hostreq-reason { font-size: 13px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid var(--warn); padding-left: 8px; }
+.hostreq-ctx { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.hostreq-checks { margin: 0; font-family: var(--mono); font-size: 11px; color: var(--fg-dim); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; max-height: 160px; overflow: auto; white-space: pre; }
+.hostreq-out { min-height: 0; max-height: 300px; flex: none; }
+.hostreq-recent:empty { display: none; }
+.hostreq-recent { border-top: 1px solid var(--line); padding-top: 4px; }
+.pr-row { border-top: 1px solid var(--line); padding: 6px 0; display: flex; flex-direction: column; gap: 2px; }
+.pr-row:first-child { border-top: 0; }
+.cicd-run { border-top: 1px solid var(--line); padding: 4px 0; }
+.cicd-run:first-child { border-top: 0; }
+.cv-cicd .filters { display: flex; gap: 4px; }

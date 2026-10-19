@@ -1,5 +1,5 @@
 // Colony window: the cockpit. Center tabs hold the native Mission Control views (Mission,
-// Plans, Queue, Inbox, Review, Git, Flight Log), one tab per agent run (its transcript),
+// Plans, Queue, Inbox, Review, Git, CI/CD, Flight Log), one tab per agent run (its transcript),
 // terminal tabs for the interactive vendor CLI and the queue runner, and the editor files.
 // Explorer on the left, shell terminals at the bottom. The kit's web panel stays reachable
 // under More as a fallback.
@@ -7,15 +7,21 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
+import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree } from "./filetree";
+import { CicdView, PullRequestsSection } from "./forge";
 import { GitView } from "./git";
+import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
+import { hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
+import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
+import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
@@ -306,11 +312,15 @@ const centerTerms = new Map<string, TermView>();
 let termCounter = 0;
 new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 
-async function openTermTab(argv: string[], label: string, tip: string, icon: string): Promise<{ id: string; view: TermView } | undefined> {
+/** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
+type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
+
+async function openTermTab(argv: string[], label: string, tip: string, icon: string, agent?: TermAgent): Promise<{ id: string; view: TermView } | undefined> {
   const id = `term:${++termCounter}`;
   const el = h("div", { class: "term-center" });
   const pane = h("div", { class: "term-pane" });
-  el.append(pane);
+  if (agent && workspace) el.append(new ContextStrip(workspace.root, agent.engine, (p) => void openInEditor(p)).el);
+  el.append(h("div", { class: "term-wrap" }, pane));
   $("views").append(el);
   const view = new TermView(pane);
   centerTerms.set(id, view);
@@ -330,10 +340,12 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
     close: () => {
       view.dispose();
       centerTerms.delete(id);
+      launches.dropTerm(id);
       return true;
     },
   });
   view.onExit = () => renderTabs();
+  if (agent && workspace) launches.addTerm({ tabId: id, kind: agent.kind, plan: agent.plan, backend: agent.backend, root: workspace.root, label, view, el });
   try {
     await view.spawn(argv);
   } catch (e) {
@@ -366,7 +378,7 @@ const host: CockpitHost = {
     try {
       const l = await api.termLaunch({ kind: "run-plan-all", engine, model: controls.model.value.trim(), dryRun: smokeDryRun });
       status(l.note);
-      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶");
+      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶", { kind: "queue", plan: "", backend: engine, engine });
     } catch (e) {
       status(`Run queue: ${errText(e)}`);
     }
@@ -381,7 +393,8 @@ const host: CockpitHost = {
     try {
       const l = await api.termLaunch({ kind: "interactive", engine, model: controls.model.value.trim(), prompt });
       if (l.note) status(l.note);
-      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘");
+      const vendor = l.label.split(" ")[0];
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: promptPlan(prompt), backend: vendor, engine: vendor });
     } catch (e) {
       status(`Open interactive: ${errText(e)}`);
     }
@@ -396,6 +409,7 @@ const host: CockpitHost = {
   copy: (text, what) => {
     void copyText(text).then((ok) => status(ok ? `Copied ${what}` : `Could not copy ${what}`));
   },
+  workspaceRoot: () => workspace?.root ?? "",
 };
 
 $("btn-run").addEventListener("click", () => void host.runPlan());
@@ -422,6 +436,16 @@ const reviewView = new ReviewView(
   status,
 );
 const gitView = new GitView(status, () => void tree.refresh(), host.copy);
+// Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
+const requests = new RequestsSection(status);
+gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
+const cicd = new CicdView(status);
+inbox.addSection(() => inboxRequests(() => showTab("git")));
+hostRequests.on((fresh) => {
+  renderTabs();
+  inbox.invalidate();
+  if (fresh.length) status(`Host request: ${fresh[0].summary}${fresh[0].reason ? ` (${fresh[0].reason})` : ""}: approve or deny it in the Git tab`);
+});
 
 function pinViews() {
   const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
@@ -441,7 +465,10 @@ function pinViews() {
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "⎇", "Git: branch flow, working tree, commit, push", gitView.el, gitView);
+  pin("git", "Git", "⎇", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
+    hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
+  );
+  pin("cicd", "CI/CD", "⟳", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
   pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
 }
 
@@ -460,6 +487,7 @@ function openRunTab(run: Run) {
         void reviewView.show(rv, rv.files[0] ?? { status: "M", path: "" }).catch(() => {});
       },
       status,
+      openInEditor: (p) => void openInEditor(p),
     });
     agentTabs.set(run.id, t);
   }
@@ -817,7 +845,7 @@ window.addEventListener(
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
-    } else if (!ev.shiftKey && !inTerm && /^[1-7]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "flight"][Number(key) - 1]);
+    } else if (!ev.shiftKey && !inTerm && /^[1-8]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "cicd", "flight"][Number(key) - 1]);
     else handled = false;
     if (handled) {
       ev.preventDefault();
@@ -986,6 +1014,9 @@ async function runSmoke(root: string, info: StartupInfo) {
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === "cursor" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
+    await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
+    await wait(1500);
+    await hostSmoke({ root, log, wait, until, shot, showTab, view, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab });
     const seen = new Map<number, string[]>();
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
@@ -1146,6 +1177,7 @@ async function runSmoke(root: string, info: StartupInfo) {
       );
       await log("interactive-tab", "argv" in l && /\/claude$/.test(l.argv[0]), { resolved: l, spawned: false, why: "the smoke never starts a real vendor session" });
     }
+    await smokeLive({ root, fixture, planFile, runId: run.id, log, wait, until, view, shot, host, activeTab: () => activeTab, closeTab, openInEditor, picker: controls.backend });
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");
@@ -1160,6 +1192,7 @@ async function runSmoke(root: string, info: StartupInfo) {
 // ---- boot ------------------------------------------------------------------------------
 shell.classList.add("no-folder");
 pinViews();
+void hostRequests.start().catch((e) => status(`Host requests: ${errText(e)}`));
 renderRecents();
 api
   .appInfo()

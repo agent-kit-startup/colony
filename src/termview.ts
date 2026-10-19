@@ -17,6 +17,9 @@ export class TermView {
   /** Everything the process printed (capped), for the code-path smoke. */
   output = "";
   onExit: (code: number | null) => void = () => {};
+  /** Every chunk the process printed, and every chunk the operator typed (./launches.ts). */
+  onOutput: (data: string) => void = () => {};
+  onInput: (data: string) => void = () => {};
 
   constructor(readonly pane: HTMLElement) {
     this.term = new Terminal({
@@ -40,6 +43,7 @@ export class TermView {
       if (m.kind === "data") {
         this.term.write(m.data);
         if (this.output.length < 64 * 1024) this.output += m.data;
+        this.onOutput(m.data);
       } else {
         this.exited = true;
         this.exitCode = m.code;
@@ -56,6 +60,7 @@ export class TermView {
       throw e;
     }
     this.term.onData((d) => {
+      this.onInput(d);
       if (!this.exited) api.ptyWrite(this.id, d).catch(() => {});
     });
     this.term.onResize(({ cols, rows }) => {

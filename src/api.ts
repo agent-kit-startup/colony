@@ -63,6 +63,8 @@ export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTick
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string }
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string }
+export interface ContextSource { label: string; kind: string; path: string; exists: boolean; bytes: number | null; lines: number | null; files: number | null; note: string }
+export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
 export interface TermLaunch { argv: string[]; label: string; bin: string; note: string }
 export interface GitFile { xy: string; path: string }
@@ -111,6 +113,7 @@ export const api = {
   settingsSetSkin: (skin: string) => invoke<string>("settings_set_skin", { skin }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
+  contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
   reviewTicks: () => invoke<TickReview[]>("review_ticks"),
   reviewFile: (runId: number, tick: number, path: string, oldPath?: string) =>
