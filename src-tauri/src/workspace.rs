@@ -93,6 +93,7 @@ pub fn open_workspace(state: State<'_, AppState>, path: String) -> Result<Worksp
         return Err(format!("Not a folder: {}", root.display()));
     }
     *state.workspace.lock().map_err(|_| "workspace lock poisoned")? = Some(root.clone());
+    crate::mcdata::mc_unsubscribe(&state);
     Ok(describe(&root))
 }
 
@@ -139,6 +140,64 @@ pub fn read_text_file(state: State<'_, AppState>, path: String) -> Result<String
 pub fn write_text_file(state: State<'_, AppState>, path: String, contents: String) -> Result<(), String> {
     let file = jail(&state, &path)?;
     std::fs::write(&file, contents).map_err(|e| format!("Cannot save {}: {e}", file.display()))
+}
+
+/// Write a new file, creating its missing parent folders. The nearest existing ancestor
+/// must resolve inside the workspace and the missing part may not hold `.` or `..`.
+#[tauri::command]
+pub fn create_text_file(state: State<'_, AppState>, path: String, contents: String) -> Result<String, String> {
+    let root = workspace_root(&state)?;
+    let file = jail_new(&root, Path::new(&path))?;
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&file, contents).map_err(|e| format!("Cannot save {}: {e}", file.display()))?;
+    Ok(file.display().to_string())
+}
+
+fn jail_new(root: &Path, p: &Path) -> Result<PathBuf, String> {
+    let candidate = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    let mut existing = candidate.as_path();
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        let name = existing.file_name().ok_or("Invalid path")?;
+        if name == "." || name == ".." {
+            return Err("Invalid path".into());
+        }
+        missing.push(name.to_os_string());
+        existing = existing.parent().ok_or("Invalid path")?;
+    }
+    if missing.is_empty() {
+        return Err(format!("Already exists: {}", candidate.display()));
+    }
+    let base = existing.canonicalize().map_err(|e| e.to_string())?;
+    if !base.starts_with(root) {
+        return Err(format!("Path is outside the workspace: {}", candidate.display()));
+    }
+    let mut out = base;
+    for name in missing.iter().rev() {
+        out.push(name);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jail_new;
+
+    #[test]
+    fn new_file_stays_in_the_workspace() {
+        let tmp = std::env::temp_dir().join(format!("colony-jail-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("ws")).unwrap();
+        let root = tmp.join("ws").canonicalize().unwrap();
+        assert_eq!(jail_new(&root, std::path::Path::new("a/b/c.md")).unwrap(), root.join("a/b/c.md"));
+        assert!(jail_new(&root, std::path::Path::new("../escape/x.md")).is_err());
+        assert!(jail_new(&root, &tmp.join("outside/x.md")).is_err());
+        assert!(jail_new(&root, std::path::Path::new("a/../../x.md")).is_err());
+        std::fs::write(root.join("here.md"), "x").unwrap();
+        assert!(jail_new(&root, std::path::Path::new("here.md")).is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 /// Directories skipped by quick open (build output and dependency trees).

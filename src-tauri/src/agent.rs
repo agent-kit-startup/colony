@@ -17,7 +17,7 @@ use tauri::State;
 use crate::{review, tools, workspace, AppState};
 
 /// `agent-kit run-plan --backend` values (kit 6.2.0: packages/cli/src/plan-loop/detect.ts).
-const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
+pub(crate) const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
 
 /// What the engine picker shows for each backend: the binary the kit resolves on PATH
 /// and how a HITL answer reaches the agent (driver protocol "Scope").
@@ -54,7 +54,7 @@ pub fn agent_backends() -> Vec<BackendChoice> {
 }
 
 /// `--model` is passed through to the backend: keep it to a plain model id.
-fn valid_model(m: &str) -> bool {
+pub(crate) fn valid_model(m: &str) -> bool {
     !m.is_empty() && m.len() <= 120 && !m.starts_with('-') && m.chars().all(|c| c.is_ascii_alphanumeric() || "._:/@[]-".contains(c))
 }
 

@@ -4,10 +4,12 @@ mod agent;
 mod dashboard;
 mod gitops;
 mod launch;
+mod mcdata;
 mod pty;
 mod review;
 mod settings;
 mod tools;
+mod vendor;
 mod workspace;
 
 use std::path::PathBuf;
@@ -23,6 +25,7 @@ pub struct AppState {
     pub ptys: pty::PtyRegistry,
     pub agents: agent::AgentRegistry,
     pub reviews: std::sync::Arc<review::ReviewStore>,
+    pub mc_feed: std::sync::Arc<mcdata::McFeed>,
     /// `<app config dir>/settings.json`, set once at startup.
     pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
@@ -40,6 +43,8 @@ struct StartupInfo {
     git: Option<String>,
     /// `COLONY_SMOKE=<log file>`: run the scripted code-path smoke after the folder opens.
     smoke: Option<String>,
+    /// `COLONY_SMOKE_SHOTS=1`: the smoke pauses at a few views for read-only screenshots.
+    smoke_shots: bool,
 }
 
 /// WebKitGTK's DMA-BUF renderer hangs on NVIDIA + Wayland (Colony UI benchmark, machine A).
@@ -180,6 +185,7 @@ pub fn run() {
         node: tools::node_bin().map(|p| p.display().to_string()),
         git: tools::git_bin().map(|p| p.display().to_string()),
         smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
+        smoke_shots: std::env::var("COLONY_SMOKE_SHOTS").as_deref() == Ok("1"),
     };
 
     let hook = mc_action_hook(startup.smoke.is_some());
@@ -195,8 +201,13 @@ pub fn run() {
             workspace::read_text_file,
             workspace::write_text_file,
             workspace::list_files,
+            workspace::create_text_file,
             dashboard::dashboard_start,
             dashboard::dashboard_stop,
+            mcdata::mc_snapshot,
+            mcdata::mc_config,
+            mcdata::mc_subscribe,
+            vendor::term_launch,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
