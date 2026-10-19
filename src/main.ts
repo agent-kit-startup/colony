@@ -1,36 +1,43 @@
-// Colony window: Mission Control home, explorer, editor tabs, terminals, agent and git panels.
+// Colony window: the cockpit. Center tabs hold the native Mission Control views (Mission,
+// Plans, Queue, Inbox, Review, Git, Flight Log), one tab per agent run (its transcript),
+// terminal tabs for the interactive vendor CLI and the queue runner, and the editor files.
+// Explorer on the left, shell terminals at the bottom. The kit's web panel stays reachable
+// under More as a fallback.
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import { AgentPanel } from "./agent";
-import { api, errText, focusPolicy, h, type StartupInfo, type WorkspaceInfo } from "./api";
+import { RunControls } from "./agent";
+import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
-import { GitPanel } from "./git";
+import { GitView } from "./git";
+import { InboxView } from "./inbox";
 import { decide, type McRecord } from "./mcactions";
-import { InboxPanel } from "./inbox";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
+import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
+import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
+import { TermView } from "./termview";
+import { AgentTab } from "./transcript";
+import { ago, copyText } from "./ui";
 
 const RECENTS_KEY = "colony.recentWorkspaces";
-const HOME_TAB = "__home__";
-const REVIEW_TAB = "__review__";
-const isFileTab = (id: string) => id !== HOME_TAB && id !== REVIEW_TAB;
 
 document.getElementById("app")!.innerHTML = `
-<div id="shell" class="no-right">
+<div id="shell">
   <header id="top">
     <span class="brand"><img src="./colony-icon.svg" alt="" width="18" height="18" /> Colony</span>
     <button id="btn-open" title="Open folder (Ctrl+O)">Open folder</button>
     <span id="ws-name" class="dim">No folder open</span>
     <span class="spacer"></span>
+    <button id="btn-run" class="primary" title="Run the active plan (agent-kit run-plan --events ndjson): the run opens as a tab with its transcript and gates">▶ Run plan</button>
+    <button id="btn-interactive" title="Open the engine's own CLI (claude or codex) in a terminal tab, on your login">⌘ Interactive</button>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
-    <button id="btn-editor" title="Open the current file (or the folder, from Mission Control) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
+    <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
     <button id="btn-term" class="toggle on" title="Terminal (Ctrl+\`)">Terminal</button>
-    <button id="btn-agent" class="toggle" title="Agent panel">Agent</button>
-    <button id="btn-inbox" class="toggle" title="Inbox: open decisions from every agent run">Inbox <span id="inbox-badge" class="badge warn" hidden></span></button>
-    <button id="btn-git" class="toggle" title="Git panel">Git</button>
-    <button id="btn-settings" class="icon" title="Colony settings (settings.json)">⚙</button>
+    <button id="btn-more" title="More">More ▾</button>
+    <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </header>
   <aside id="side">
     <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh">↻</button></div>
@@ -39,31 +46,32 @@ document.getElementById("app")!.innerHTML = `
   <main id="center">
     <div id="tabs" class="tabbar"></div>
     <div id="views">
-      <div id="view-home" class="view">
-        <iframe id="mc" title="Mission Control" allow="clipboard-read; clipboard-write"></iframe>
-        <div id="welcome">
-          <h1><img src="./colony-icon.svg" alt="" width="40" height="40" /> Colony</h1>
-          <p class="dim">Open a folder to start. Mission Control becomes the home tab for it.</p>
-          <button id="welcome-open" class="primary">Open folder</button>
-          <div id="recents"></div>
-        </div>
+      <div id="welcome" class="view">
+        <h1><img src="./colony-icon.svg" alt="" width="40" height="40" /> Colony</h1>
+        <p class="dim">Open a folder to start. Its Mission Control becomes the cockpit.</p>
+        <button id="welcome-open" class="primary">Open folder</button>
+        <div id="recents"></div>
       </div>
       <div id="view-editor" class="view" hidden></div>
       <div id="view-review" class="view" hidden></div>
     </div>
   </main>
-  <aside id="right">
-    <div class="tabbar"><button class="tab" data-panel="agent">Agent</button><button class="tab" data-panel="inbox">Inbox</button><button class="tab" data-panel="git">Git</button></div>
-    <div id="panel-agent" class="panel"></div>
-    <div id="panel-inbox" class="panel" hidden></div>
-    <div id="panel-git" class="panel" hidden></div>
-  </aside>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
     <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-env"></span></footer>
+</div>
+<div id="more-menu" class="menu" hidden>
+  <button data-more="web">Mission Control (web panel)</button>
+  <button data-more="run-elsewhere">Run plan in another folder…</button>
+  <button data-more="refresh">Reload Mission Control data</button>
+  <button data-more="terminal">New shell terminal</button>
+  <div class="menu-sep"></div>
+  <div class="menu-label">Skin</div>
+  <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
+  <button data-more="skin" data-skin="legacy">Legacy</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -72,92 +80,166 @@ const shell = $("shell");
 let msgTimer = 0;
 const status = (msg: string) => {
   $("st-msg").textContent = msg;
+  $("st-msg").title = msg;
   window.clearTimeout(msgTimer);
-  msgTimer = window.setTimeout(() => ($("st-msg").textContent = ""), 8000);
+  msgTimer = window.setTimeout(() => ($("st-msg").textContent = ""), 9000);
 };
 
 let workspace: WorkspaceInfo | null = null;
+let mcUrl = "";
 let mcOrigin = "";
-let activeTab = HOME_TAB;
-let reviewCount = 0;
 
-// ---- editor + tabs ---------------------------------------------------------------
+// ---- tabs ------------------------------------------------------------------------------
+interface Tab {
+  id: string;
+  label: string;
+  icon: string;
+  tip: string;
+  pinned: boolean;
+  el: HTMLElement;
+  badge?: () => { text: string; cls: string } | null;
+  cls?: () => string;
+  show?: () => void;
+  hide?: () => void;
+  /** Return false to keep the tab open. */
+  close?: () => Promise<boolean> | boolean;
+}
+const tabs = new Map<string, Tab>();
+const order: string[] = [];
+let activeTab = "mission";
+
+function addTab(t: Tab, focus = true) {
+  if (!tabs.has(t.id)) order.push(t.id);
+  tabs.set(t.id, t);
+  if (t.el.parentElement !== $("views")) $("views").append(t.el);
+  t.el.classList.add("view");
+  t.el.hidden = true;
+  if (focus) showTab(t.id);
+  else renderTabs();
+}
+
+function renderTabs() {
+  const bar = $("tabs");
+  if (!workspace) return bar.replaceChildren();
+  const els = order
+    .map((id) => tabs.get(id))
+    .filter((t): t is Tab => !!t)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+    .map((t) => {
+      const b = t.badge?.();
+      const el = h(
+        "button",
+        { class: `tab ${t.pinned ? "pin" : ""} ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
+        h("span", { class: "tab-icon" }, t.icon),
+        h("span", { class: "lbl" }, t.label),
+        ...(b ? [h("span", { class: `badge ${b.cls}`, ...(t.id === "inbox" && b.cls === "warn" ? { id: "inbox-badge" } : {}) }, b.text)] : []),
+      );
+      el.dataset.tab = t.id;
+      if (!t.pinned) {
+        const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, t.cls?.().includes("dirty") ? "●" : "×");
+        close.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          void closeTab(t.id);
+        });
+        el.append(close);
+      }
+      el.addEventListener("click", () => showTab(t.id));
+      return el;
+    });
+  const pins = els.filter((e) => e.classList.contains("pin"));
+  const docs = els.filter((e) => !e.classList.contains("pin"));
+  // Pinned views stay in place; only the document tabs (runs, terminals, files) scroll.
+  const docBar = h("div", { class: "tabs-docs" }, ...docs);
+  bar.replaceChildren(h("div", { class: "tabs-pins" }, ...pins), ...(docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
+  docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function showTab(id: string) {
+  const t = tabs.get(id);
+  if (!t || !workspace) return;
+  const prev = tabs.get(activeTab);
+  if (prev && prev !== t) {
+    prev.el.hidden = true;
+    prev.hide?.();
+  }
+  for (const other of tabs.values()) if (other !== t && other.el !== t.el) other.el.hidden = true;
+  activeTab = id;
+  t.el.hidden = false;
+  $("welcome").hidden = true;
+  t.show?.();
+  renderTabs();
+}
+
+async function closeTab(id: string) {
+  const t = tabs.get(id);
+  if (!t || t.pinned) return;
+  if (t.close && !(await t.close())) return;
+  tabs.delete(id);
+  order.splice(order.indexOf(id), 1);
+  if (t.el !== $("view-editor")) t.el.remove();
+  if (activeTab === id) {
+    const rest = order.filter((x) => !tabs.get(x)?.pinned);
+    showTab(rest.length ? rest[rest.length - 1] : "mission");
+  } else renderTabs();
+}
+
+// ---- editor ----------------------------------------------------------------------------
 const editors = new Editors($("view-editor"), () => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (p) => void openInEditor(p));
+const isFile = (id: string) => id.startsWith("/");
 
 function relPath(p: string) {
   return workspace && p.startsWith(`${workspace.root}/`) ? p.slice(workspace.root.length + 1) : p;
 }
 
-function renderTabs() {
-  const bar = $("tabs");
-  const home = h("button", { class: `tab home ${activeTab === HOME_TAB ? "active" : ""}`, title: "Mission Control" }, "◉ Mission Control");
-  home.addEventListener("click", () => showTab(HOME_TAB));
-  const n = reviewCount;
-  const review = h("button", { class: `tab home ${activeTab === REVIEW_TAB ? "active" : ""}`, title: "Per-tick review of agent runs" }, "◇ Review", ...(n ? [h("span", { class: "badge" }, String(n))] : []));
-  review.addEventListener("click", () => showTab(REVIEW_TAB));
-  const tabs = editors.paths().map((p) => {
-    const name = p.split("/").pop() ?? p;
-    const dirty = editors.isDirty(p);
-    const t = h("button", { class: `tab ${activeTab === p ? "active" : ""} ${dirty ? "dirty" : ""}`, title: relPath(p) }, name);
-    const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, dirty ? "●" : "×");
-    t.append(close);
-    t.addEventListener("click", (ev) => (ev.target === close ? void closeFile(p) : showTab(p)));
-    return t;
-  });
-  bar.replaceChildren(home, review, ...tabs);
-}
-
-function showTab(id: string) {
-  activeTab = id;
-  const home = id === HOME_TAB;
-  $("view-home").hidden = !home;
-  $("view-review").hidden = id !== REVIEW_TAB;
-  $("view-editor").hidden = !isFileTab(id);
-  if (id === REVIEW_TAB) requestAnimationFrame(() => reviewView.layout());
-  if (isFileTab(id)) {
-    editors.activate(id);
-    tree.setActive(id);
-    requestAnimationFrame(() => editors.layout());
-  }
-  renderTabs();
-}
-
 async function openFile(path: string) {
   try {
     await editors.open(path);
-    showTab(path);
   } catch (e) {
-    status(`${relPath(path)}: ${errText(e)}`);
+    return status(`${relPath(path)}: ${errText(e)}`);
   }
-}
-
-async function closeFile(path: string) {
-  if (editors.isDirty(path)) {
-    const ok = await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" });
-    if (!ok) return;
-  }
-  editors.close(path);
-  const rest = editors.paths();
-  showTab(rest.length ? rest[rest.length - 1] : HOME_TAB);
+  if (!tabs.has(path)) {
+    addTab(
+      {
+        id: path,
+        label: path.split("/").pop() ?? path,
+        icon: "",
+        tip: relPath(path),
+        pinned: false,
+        el: $("view-editor"),
+        cls: () => (editors.isDirty(path) ? "dirty" : ""),
+        show: () => {
+          editors.activate(path);
+          tree.setActive(path);
+          requestAnimationFrame(() => editors.layout());
+        },
+        close: async () => {
+          if (editors.isDirty(path) && !(await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" }))) return false;
+          editors.close(path);
+          return true;
+        },
+      },
+      true,
+    );
+  } else showTab(path);
 }
 
 async function saveActive() {
-  if (!isFileTab(activeTab)) return;
+  if (!isFile(activeTab)) return;
   try {
     const p = await editors.save(activeTab);
     if (p) status(`Saved ${relPath(p)}`);
-    void gitPanel.refresh();
+    if (p && p.endsWith("/settings.json") && !p.startsWith(`${workspace?.root}/`)) void loadSkin();
+    void gitView.panel.refresh();
   } catch (e) {
     status(`Save failed: ${errText(e)}`);
   }
 }
 
-// ---- open in my editor -------------------------------------------------------------
 /** Hand `path` (default: the active file, else the folder) to the user's own editor. */
 async function openInEditor(path?: string) {
   if (!workspace) return status("Open a folder first");
-  const target = path ?? (isFileTab(activeTab) ? activeTab : workspace.root);
+  const target = path ?? (isFile(activeTab) ? activeTab : workspace.root);
   if (editors.isDirty(target)) status(`${relPath(target)} has unsaved changes in Colony: save first (Ctrl+S)`);
   try {
     const launch = await api.openInEditor(target);
@@ -175,65 +257,15 @@ $("btn-editor").addEventListener("click", () => void openInEditor());
 $("btn-settings").addEventListener("click", async () => {
   try {
     await openFile(await api.settingsEnsure());
-    status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the Agent panel");
+    status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the engine picker");
   } catch (e) {
     status(`Settings: ${errText(e)}`);
   }
 });
 
-// ---- panels ------------------------------------------------------------------------
+// ---- terminals (bottom) ----------------------------------------------------------------
 const terminals = new Terminals($("term-tabs"), $("terms"), status);
 $("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => void terminals.create());
-const agentPanel = new AgentPanel($("panel-agent"), status);
-const reviewView = new ReviewView(
-  $("view-review"),
-  (n) => {
-    reviewCount = n;
-    renderTabs();
-  },
-  (p) => void openFile(p),
-  status,
-);
-const gitPanel = new GitPanel($("panel-git"), status, () => void tree.refresh());
-
-type RightPanel = "agent" | "inbox" | "git";
-const RIGHT_PANELS: RightPanel[] = ["agent", "inbox", "git"];
-function currentRight(): RightPanel | null {
-  if (shell.classList.contains("no-right")) return null;
-  return RIGHT_PANELS.find((p) => !$(`panel-${p}`).hidden) ?? null;
-}
-/** Show `panel` on the right; the same panel again hides the column (unless `keep`). */
-function setRight(panel: RightPanel | null, keep = false) {
-  const next = panel === currentRight() && !keep ? null : panel;
-  shell.classList.toggle("no-right", next === null);
-  for (const p of RIGHT_PANELS) {
-    $(`panel-${p}`).hidden = next !== p;
-    $(`btn-${p}`).classList.toggle("on", next === p);
-  }
-  for (const t of $("right").querySelectorAll<HTMLElement>(".tabbar .tab")) t.classList.toggle("active", t.dataset.panel === next);
-  if (next === "git") void gitPanel.refresh();
-  requestAnimationFrame(() => editors.layout());
-}
-for (const p of RIGHT_PANELS) $(`btn-${p}`).addEventListener("click", () => setRight(p));
-for (const t of $("right").querySelectorAll<HTMLElement>(".tabbar .tab")) {
-  t.addEventListener("click", () => setRight(t.dataset.panel as RightPanel, true));
-}
-const inbox = new InboxPanel(
-  $("panel-inbox"),
-  (n) => {
-    const badge = $("inbox-badge");
-    badge.hidden = n === 0;
-    badge.textContent = String(n);
-    const tab = $("right").querySelector<HTMLElement>('.tabbar .tab[data-panel="inbox"]');
-    if (tab) tab.textContent = n ? `Inbox (${n})` : "Inbox";
-  },
-  (runId) => {
-    agentPanel.select(runId);
-    setRight("agent", true);
-  },
-  status,
-);
-void inbox;
 
 function toggleTerminal(force?: boolean) {
   const show = force ?? shell.classList.contains("no-bottom");
@@ -250,7 +282,6 @@ function toggleTerminal(force?: boolean) {
 }
 $("btn-term").addEventListener("click", () => toggleTerminal());
 
-// Bottom panel resize.
 $("resizer").addEventListener("pointerdown", (down) => {
   const startY = down.clientY;
   const startH = $("bottom").getBoundingClientRect().height;
@@ -262,12 +293,280 @@ $("resizer").addEventListener("pointerdown", (down) => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     terminals.fitActive();
+    for (const v of centerTerms.values()) v.fit();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
 });
 
-// ---- quick open ------------------------------------------------------------------
+// ---- center terminal tabs: interactive vendor CLI, queue runner ------------------------
+const centerTerms = new Map<string, TermView>();
+let termCounter = 0;
+new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
+
+async function openTermTab(argv: string[], label: string, tip: string, icon: string): Promise<{ id: string; view: TermView } | undefined> {
+  const id = `term:${++termCounter}`;
+  const el = h("div", { class: "term-center" });
+  const pane = h("div", { class: "term-pane" });
+  el.append(pane);
+  $("views").append(el);
+  const view = new TermView(pane);
+  centerTerms.set(id, view);
+  addTab({
+    id,
+    label,
+    icon,
+    tip,
+    pinned: false,
+    el,
+    cls: () => (view.exited ? "exited" : ""),
+    show: () =>
+      requestAnimationFrame(() => {
+        view.fit();
+        view.focus();
+      }),
+    close: () => {
+      view.dispose();
+      centerTerms.delete(id);
+      return true;
+    },
+  });
+  view.onExit = () => renderTabs();
+  try {
+    await view.spawn(argv);
+  } catch (e) {
+    status(`${label}: ${errText(e)}`);
+    return;
+  }
+  return { id, view };
+}
+
+let confirmAction = (message: string, title: string) => ask(message, { title, kind: "info" });
+let smokeDryRun = false;
+
+// ---- cockpit host ----------------------------------------------------------------------
+const controls = new RunControls(status);
+const host: CockpitHost = {
+  status,
+  openRepoFile: (rel) => {
+    if (!workspace) return;
+    void openFile(rel.startsWith("/") ? rel : `${workspace.root}/${rel}`);
+  },
+  runPlan: async () => {
+    if (!workspace) return status("Open a folder first");
+    return controls.start();
+  },
+  runQueue: async () => {
+    if (!workspace) return status("Open a folder first");
+    const engine = controls.backend.value;
+    const ok = await confirmAction(`Start agent-kit run-plan-all with ${engine} in ${workspace.name}? It runs the HANDOFF queue in a terminal tab; answer its numbered gates there. It never runs /git-prod.`, "Run queue");
+    if (!ok) return status("Queue run not started");
+    try {
+      const l = await api.termLaunch({ kind: "run-plan-all", engine, model: controls.model.value.trim(), dryRun: smokeDryRun });
+      status(l.note);
+      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶");
+    } catch (e) {
+      status(`Run queue: ${errText(e)}`);
+    }
+  },
+  interactive: async (prompt, why) => {
+    if (!workspace) return status("Open a folder first");
+    const engine = controls.backend.value;
+    if (prompt) {
+      const ok = await confirmAction(`${why ? `${why}\n\n` : ""}Open your agent (${engine}) in a terminal tab with ${prompt}? It runs on your own login.`, "Ask agent");
+      if (!ok) return status("Agent not opened");
+    }
+    try {
+      const l = await api.termLaunch({ kind: "interactive", engine, model: controls.model.value.trim(), prompt });
+      if (l.note) status(l.note);
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘");
+    } catch (e) {
+      status(`Open interactive: ${errText(e)}`);
+    }
+  },
+  showTab,
+  focusRun: (runId) => {
+    const run = runs.runs.get(runId);
+    if (!run) return;
+    if (!tabs.has(`run:${runId}`)) openRunTab(run);
+    else showTab(`run:${runId}`);
+  },
+  copy: (text, what) => {
+    void copyText(text).then((ok) => status(ok ? `Copied ${what}` : `Could not copy ${what}`));
+  },
+};
+
+$("btn-run").addEventListener("click", () => void host.runPlan());
+$("btn-interactive").addEventListener("click", () => void host.interactive());
+
+// ---- views -----------------------------------------------------------------------------
+const mission = new MissionView(host, controls);
+const plans = new PlansView(host);
+const queue = new QueueView(host);
+const flight = new FlightLogView(host);
+let inboxCount = { gates: 0, attention: 0 };
+const inbox = new InboxView(host, (gates, attention) => {
+  inboxCount = { gates, attention };
+  renderTabs();
+});
+let reviewCount = 0;
+const reviewView = new ReviewView(
+  $("view-review"),
+  (n) => {
+    reviewCount = n;
+    renderTabs();
+  },
+  (p) => void openFile(p),
+  status,
+);
+const gitView = new GitView(status, () => void tree.refresh(), host.copy);
+
+function pinViews() {
+  const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
+    addTab({ id, label, icon, tip, pinned: true, el, show: () => v.show(), hide: () => v.hide(), badge }, false);
+  pin("mission", "Mission", "◉", "Mission: the active plan, what needs you, runs, queue, activity", mission.el, mission);
+  pin("plans", "Plans", "☰", "Plans and backlog (Mission Control snapshot)", plans.el, plans);
+  pin("queue", "Queue", "⇶", "run-plan-all queue", queue.el, queue);
+  pin("inbox", "Inbox", "▣", "Inbox: live gates from every run, attention items, gate exits", inbox.el, inbox, () =>
+    inboxCount.gates ? { text: String(inboxCount.gates), cls: "warn" } : inboxCount.attention ? { text: String(inboxCount.attention), cls: "muted" } : null,
+  );
+  pin(
+    "review",
+    "Review",
+    "◇",
+    "Per-tick review of agent runs",
+    $("view-review"),
+    { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
+    () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
+  );
+  pin("git", "Git", "⎇", "Git: branch flow, working tree, commit, push", gitView.el, gitView);
+  pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
+}
+
+// Agent tabs: every run opens (and focuses) its own tab with the transcript.
+const agentTabs = new Map<number, AgentTab>();
+function openRunTab(run: Run) {
+  let t = agentTabs.get(run.id);
+  if (!t) {
+    t = new AgentTab(run, {
+      openRepoFile: (rel, root) => {
+        if (workspace && root === workspace.root) host.openRepoFile(rel);
+        else status(`${rel} is in ${root}, outside the opened folder`);
+      },
+      showReview: (rv: TickReview) => {
+        showTab("review");
+        void reviewView.show(rv, rv.files[0] ?? { status: "M", path: "" }).catch(() => {});
+      },
+      status,
+    });
+    agentTabs.set(run.id, t);
+  }
+  const tab = t;
+  addTab({
+    id: `run:${run.id}`,
+    label: `#${run.id} ${run.plan ? run.plan.replace(/\.plan\.md$/, "") : run.name}`,
+    icon: "▶",
+    tip: `${run.cmd}\n${run.root}`,
+    pinned: false,
+    el: tab.el,
+    cls: () => (run.gate ? "run-gate" : run.running ? "run-live" : "exited"),
+    badge: () => (run.gate ? { text: "gate", cls: "warn" } : null),
+    show: () => {
+      if (run.gate) requestAnimationFrame(() => tab.scrollToGate());
+    },
+    close: async () => {
+      if (run.running && !(await ask(`Run #${run.id} is still running. Kill it?`, { title: "Colony", kind: "warning" }))) return false;
+      if (run.running) await runs.kill(run.id).catch(() => {});
+      tab.dispose();
+      agentTabs.delete(run.id);
+      return true;
+    },
+  });
+}
+runs.on((c) => {
+  if (c.kind === "state" && runs.runs.has(c.run.id) && !agentTabs.has(c.run.id) && c.run.running) openRunTab(c.run);
+  if (c.kind === "state" || c.kind === "gate") {
+    const t = tabs.get(`run:${c.run.id}`);
+    if (t && c.run.plan) t.label = `#${c.run.id} ${c.run.plan.replace(/\.plan\.md$/, "")}`;
+    renderTabs();
+  }
+});
+
+// ---- More menu -------------------------------------------------------------------------
+const menu = $("more-menu");
+$("btn-more").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  const r = $("btn-more").getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  menu.hidden = !menu.hidden;
+});
+window.addEventListener("click", () => (menu.hidden = true));
+menu.addEventListener("click", (ev) => {
+  const what = (ev.target as HTMLElement).dataset.more;
+  menu.hidden = true;
+  if (what === "web") openWebPanel();
+  else if (what === "run-elsewhere") void controls.startElsewhere();
+  else if (what === "refresh") void snapshot.refresh();
+  else if (what === "skin") {
+    const next = (ev.target as HTMLElement).dataset.skin as Skin;
+    void setSkin(next).then(
+      () => status(`Skin: ${SKINS.find((x) => x.id === next)?.label} (saved in settings.json)`),
+      (e) => status(`Skin: ${errText(e)}`),
+    );
+  }
+  else if (what === "terminal") {
+    toggleTerminal(true);
+    void terminals.create();
+  }
+});
+
+function renderSkinMenu() {
+  for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
+    const on = b.dataset.skin === skin();
+    b.classList.toggle("on", on);
+    b.textContent = `${on ? "✓ " : ""}${SKINS.find((x) => x.id === b.dataset.skin)?.label}`;
+  }
+}
+onSkin(() => {
+  renderSkinMenu();
+  // The web panel follows: reload it with the matching kit skin.
+  if (mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
+});
+
+/** The web panel URL; `colony-skin` makes the frame hook select the matching kit skin. */
+function webPanelUrl() {
+  const u = new URL(mcUrl);
+  u.searchParams.set("colony-skin", kitSkinValue(skin()));
+  return u.toString();
+}
+
+const mcFrame = h("iframe", { id: "mc", title: "Mission Control (web panel)", allow: "clipboard-read; clipboard-write" });
+function openWebPanel() {
+  if (!workspace) return;
+  if (!mcUrl) return status("Mission Control server is not running");
+  if (!mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
+  if (!tabs.has("web")) addTab({ id: "web", label: "Mission Control (web)", icon: "◎", tip: `The kit's web panel, ${mcUrl} (fallback; actions copy unless allowlisted)`, pinned: false, el: h("div", { class: "web-view" }, mcFrame) });
+  else showTab("web");
+}
+
+// ---- status bar: Mission Control feed --------------------------------------------------
+function renderFeed() {
+  const f = snapshot.feed;
+  const el = $("st-mc");
+  if (!workspace) return (el.textContent = "");
+  const v = snapshot.data?.dashboardDataVersion ? ` · data ${snapshot.data.dashboardDataVersion}` : "";
+  el.textContent = f.error && !snapshot.data ? "Mission Control: failed" : `Mission Control ${f.connected ? "● live" : "○ offline"}${f.at ? ` · ${ago(f.at)}` : ""}${v}`;
+  el.title = [f.detail, f.error ?? "", mcUrl, `${f.updates} live updates`].filter(Boolean).join("\n");
+  el.classList.toggle("bad", !!f.error && !snapshot.data);
+}
+snapshot.on((why) => {
+  renderFeed();
+  if (why === "data") renderTabs();
+});
+setInterval(renderFeed, 5000);
+
+// ---- quick open ------------------------------------------------------------------------
 let quickFiles: string[] = [];
 let quickSel = 0;
 async function showQuick() {
@@ -286,8 +585,7 @@ function quickMatches(): string[] {
   for (const f of quickFiles) {
     const lf = f.toLowerCase();
     const base = lf.split("/").pop() ?? lf;
-    const idx = lf.indexOf(q);
-    if (idx < 0) continue;
+    if (lf.indexOf(q) < 0) continue;
     scored.push([(base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + lf.length, f]);
   }
   scored.sort((a, b) => a[0] - b[0]);
@@ -307,9 +605,7 @@ function renderQuick() {
     }),
   );
 }
-function hideQuick() {
-  $("quick").hidden = true;
-}
+const hideQuick = () => ($("quick").hidden = true);
 function pickQuick(rel: string) {
   hideQuick();
   if (workspace) void openFile(`${workspace.root}/${rel}`);
@@ -331,7 +627,7 @@ $("quick-input").addEventListener("keydown", (ev) => {
 $("quick-input").addEventListener("blur", () => setTimeout(hideQuick, 100));
 $("btn-quick").addEventListener("click", () => void showQuick());
 
-// ---- workspace ---------------------------------------------------------------------
+// ---- workspace -------------------------------------------------------------------------
 function recents(): string[] {
   try {
     return JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]");
@@ -377,36 +673,54 @@ async function openWorkspace(path: string) {
     return status(errText(e));
   }
   remember(workspace.root);
+  // Files, terminal tabs and the web panel belong to the folder; agent runs keep their
+  // tabs (a run may be in another folder, and closing one would kill it).
+  for (const id of [...order]) {
+    const t = tabs.get(id);
+    if (!t || t.pinned || id.startsWith("run:")) continue;
+    centerTerms.get(id)?.dispose();
+    centerTerms.delete(id);
+    tabs.delete(id);
+    order.splice(order.indexOf(id), 1);
+    if (t.el !== $("view-editor")) t.el.remove();
+  }
   editors.closeAll();
   terminals.closeAll();
+  snapshot.reset();
+  mcUrl = "";
+  mcOrigin = "";
+  mcFrame.removeAttribute("src");
   document.title = `${workspace.name} · Colony`;
   $("ws-name").textContent = workspace.root;
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
-  showTab(HOME_TAB);
+  shell.classList.remove("no-folder");
+  showTab("mission");
   await tree.setRoot(workspace.root);
-  await agentPanel.loadWorkspace();
+  await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
-  void gitPanel.refresh();
   if (!workspace.hasKit) status("No Agent Kit in this folder: Mission Control shows git and repo data only (agent-kit install adds plans and HANDOFF)");
   $("st-mc").textContent = "Mission Control: starting…";
   try {
     const mc = await api.dashboardStart();
+    mcUrl = mc.url;
     mcOrigin = new URL(mc.url).origin;
-    $<HTMLIFrameElement>("mc").src = mc.url;
-    $("st-mc").textContent = `Mission Control ${mc.url}`;
     $("st-mc").title = `${mc.servePath}\nlog: ${mc.logPath}`;
+    await snapshot.connect();
   } catch (e) {
-    $("st-mc").textContent = "Mission Control: failed";
+    snapshot.feed.error = errText(e);
+    renderFeed();
+    mission.invalidate();
     status(`Mission Control: ${errText(e)}`);
   }
 }
 
-// Mission Control action seam (src-tauri/src/lib.rs hook, src/mcactions.ts allowlist): the
-// frame offers each copy record here first; `handled: false` makes the frame copy as before.
+// Mission Control web panel action seam (src-tauri/src/lib.rs hook, src/mcactions.ts
+// allowlist): the frame offers each copy record here first; `handled: false` makes the
+// frame copy as before.
 type McReply = { handled: boolean; ok?: boolean; message?: string };
 let confirmMcRun = async (plan: string | null) => {
-  const engine = agentPanel.backend.value;
+  const engine = controls.backend.value;
   const named = plan ? ` Mission Control named ${plan}; agent-kit run-plan runs the folder's active plan.` : "";
   return ask(`Start an Agent run of the active plan in ${workspace?.name ?? "this folder"} with ${engine}?${named}`, { title: "Mission Control", kind: "info" });
 };
@@ -415,18 +729,16 @@ async function hostMcAction(record: McRecord): Promise<McReply> {
   if (d.action === "open-file" && workspace) {
     const abs = `${workspace.root}/${d.path}`;
     try {
-      await editors.open(abs);
-      showTab(abs);
-      return { handled: true, message: `Opened ${d.path} in Colony` };
+      await openFile(abs);
+      return editors.active === abs ? { handled: true, message: `Opened ${d.path} in Colony` } : { handled: false };
     } catch {
       return { handled: false };
     }
   }
   if (d.action === "run-plan" && workspace) {
-    setRight("agent", true);
     void confirmMcRun(d.plan).then(async (yes) => {
       if (!yes) return status("Mission Control: run not started");
-      await agentPanel.start();
+      await controls.start();
     });
     return { handled: true, message: "Confirm the run in Colony" };
   }
@@ -435,8 +747,7 @@ async function hostMcAction(record: McRecord): Promise<McReply> {
   return { handled: false };
 }
 window.addEventListener("message", (ev) => {
-  const frame = $<HTMLIFrameElement>("mc");
-  if (!mcOrigin || ev.origin !== mcOrigin || ev.source !== frame.contentWindow || ev.data?.colony !== "mc-action") return;
+  if (!mcOrigin || ev.origin !== mcOrigin || ev.source !== mcFrame.contentWindow || ev.data?.colony !== "mc-action") return;
   const port = ev.ports[0];
   const a = ev.data.action ?? {};
   const record: McRecord = { kind: String(a.kind ?? ""), text: String(a.text ?? ""), subject: String(a.subject ?? ""), destination: String(a.destination ?? "") };
@@ -446,9 +757,23 @@ window.addEventListener("message", (ev) => {
   );
 });
 
-/** COLONY_SMOKE: run `perform()` inside the Mission Control frame and wait for its result. */
+/** COLONY_SMOKE: the kit skin the web panel frame shows (data-dashboard-skin). */
+function frameSkinNow(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve("timeout"), 3000);
+    const onMsg = (ev: MessageEvent) => {
+      if (ev.origin !== mcOrigin || ev.data?.colony !== "mc-smoke-skin-result") return;
+      clearTimeout(timer);
+      window.removeEventListener("message", onMsg);
+      resolve(ev.data.skin ?? null);
+    };
+    window.addEventListener("message", onMsg);
+    mcFrame.contentWindow?.postMessage({ colony: "mc-smoke-skin" }, mcOrigin);
+  });
+}
+
+/** COLONY_SMOKE: run `perform()` inside the web panel frame and wait for its result. */
 function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
-  const frame = $<HTMLIFrameElement>("mc");
   const id = Math.random().toString(36).slice(2);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ timeout: true }), 4000);
@@ -459,28 +784,29 @@ function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
       resolve(ev.data.error ? { error: ev.data.error } : ev.data.result);
     };
     window.addEventListener("message", onMsg);
-    frame.contentWindow?.postMessage({ colony: "mc-smoke-perform", id, action }, mcOrigin);
+    mcFrame.contentWindow?.postMessage({ colony: "mc-smoke-perform", id, action }, mcOrigin);
   });
 }
 
-// ---- keyboard ----------------------------------------------------------------------
+// ---- keyboard --------------------------------------------------------------------------
 window.addEventListener(
   "keydown",
   (ev) => {
     if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    const inTerm = terminals.hasFocus();
+    const inTerm = terminals.hasFocus() || !!centerTerms.get(activeTab)?.hasFocus();
     const key = ev.key.toLowerCase();
     let handled = true;
-    if (ev.code === "Backquote") toggleTerminal(inTerm ? false : true);
+    if (ev.code === "Backquote") toggleTerminal(!terminals.hasFocus());
     else if (key === "s" && !ev.shiftKey) void saveActive();
     else if (key === "o" && !ev.shiftKey && !inTerm) void pickFolder();
     else if (key === "p" && !ev.shiftKey && !inTerm) void showQuick();
-    else if (key === "w" && !ev.shiftKey && !inTerm && isFileTab(activeTab)) void closeFile(activeTab);
+    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
     else if (key === "e" && ev.shiftKey) void openInEditor();
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
-    } else handled = false;
+    } else if (!ev.shiftKey && !inTerm && /^[1-7]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "flight"][Number(key) - 1]);
+    else handled = false;
     if (handled) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -494,22 +820,70 @@ window.addEventListener("beforeunload", (ev) => {
 });
 
 // ---- code-path smoke (COLONY_SMOKE=<log>): no human input, every step logged -------------
-async function runSmoke(root: string) {
-  const log = (step: string, ok: boolean, detail: unknown = "") =>
-    api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
+async function runSmoke(root: string, info: StartupInfo) {
+  const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (cond: () => boolean, ms: number) => {
+    for (let i = 0; i < ms / 200 && !cond(); i++) await wait(200);
+    return cond();
+  };
+  const view = (id: string) => tabs.get(id)!.el;
+  // Optional screenshots: log a `pause` step and wait for <root>/.git/colony-shot-<name> (the
+  // runner takes a read-only grim capture of this window, then writes that file).
+  const shot = async (name: string) => {
+    if (!info.smokeShots) return;
+    await log("pause", true, name);
+    for (let i = 0; i < 75; i++) {
+      await wait(200);
+      if (await api.readTextFile(`${root}/.git/colony-shot-${name}`).then(() => true, () => false)) return;
+    }
+  };
   try {
     await log("workspace", true, root);
     await log("tree", $("tree").querySelectorAll(".tree-row").length > 0, `${$("tree").querySelectorAll(".tree-row").length} rows`);
-    const frame = $<HTMLIFrameElement>("mc");
-    const loaded = await Promise.race([
-      new Promise<boolean>((r) => frame.addEventListener("load", () => r(true), { once: true })),
-      wait(8000).then(() => false),
-    ]);
-    await log("mission-control", !!frame.src && (loaded || frame.src.startsWith("http://127.0.0.1:")), { src: frame.src, loadEvent: loaded });
+    // Native views from the kit server's snapshot (GET + SSE through the Rust proxy).
+    const gotData = await until(() => !!snapshot.data, 20000);
+    const d = snapshot.data ?? {};
+    await log("mc-snapshot", gotData && typeof d.dashboardDataVersion === "string", { version: d.dashboardDataVersion, plans: snapshot.plans().length, branch: snapshot.git.branch, feed: snapshot.feed });
+    showTab("mission");
+    await wait(300);
+    const hero = view("mission").querySelector(".hero")?.textContent ?? "";
+    await log("view-mission", activeTab === "mission" && !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]'), { hero: hero.slice(0, 160), cards: view("mission").querySelectorAll(".card").length });
+    showTab("plans");
+    view("plans").querySelector<HTMLButtonElement>('button[data-filter="all"]')?.click();
+    await wait(200);
+    const rowsBefore = view("plans").querySelectorAll(".plan-row").length;
+    await log("view-plans", rowsBefore === snapshot.plans().length, { rows: rowsBefore, snapshot: snapshot.plans().length });
+    const rendered: Record<string, number> = {};
+    for (const id of ["queue", "inbox", "git", "flight"]) {
+      showTab(id);
+      await wait(150);
+      rendered[id] = view(id).querySelectorAll(".card, .hero, .q-row, .fl-card").length;
+    }
+    const gitText = view("git").querySelector(".git-repo")?.textContent ?? "";
+    await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
+    showTab("plans");
+    await wait(200);
+    await shot("plans");
+    // Live update: a new plan file under .cursor/ reaches the Plans view over SSE. Its one
+    // to-do is already completed, so a real `agent-kit run-plan` later in the smoke finds
+    // nothing to do (plan exhausted) and never starts an agent.
+    const updatesBefore = snapshot.feed.updates;
+    const genBefore = String(d.generatedAt ?? "");
+    const planFile = "colony-sse-smoke.plan.md";
+    await api.createTextFile(
+      `${root}/.cursor/plans/${planFile}`,
+      `---\nname: Colony SSE smoke\noverview: "Written by the Colony code-path smoke to check the live update."\ntodos:\n  - id: sse-check\n    content: "Appear in the Plans view without a reload"\n    status: completed\n---\n\n# Colony SSE smoke\n`,
+    ).catch((e) => log("sse-write", false, errText(e)));
+    showTab("plans");
+    const arrived = await until(() => snapshot.plans().some((p) => p.file === planFile) && snapshot.feed.updates > updatesBefore, 30000);
+    await wait(300);
+    const row = view("plans").querySelector(`.plan-row[data-plan="${planFile}"]`);
+    await log("sse-update", arrived && !!row && String(snapshot.data?.generatedAt) !== genBefore, { updates: `${updatesBefore} -> ${snapshot.feed.updates}`, generatedAt: `${genBefore} -> ${snapshot.data?.generatedAt}`, row: !!row, connected: snapshot.feed.connected });
+    // Editor, terminal, Open in my editor (unchanged).
     const file = `${root}/README.md`;
     await openFile(file);
-    await log("editor-open", editors.active === file, relPath(file));
+    await log("editor-open", editors.active === file && activeTab === file, relPath(file));
     const model = editors.editor.getModel();
     const line = `\nEdited in Colony (code-path smoke ${Date.now()}).\n`;
     model?.setValue(`${model.getValue()}${line}`);
@@ -526,7 +900,6 @@ async function runSmoke(root: string) {
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
-    // Open in my editor (run the smoke with EDITOR=packaging/smoke/fake-editor.sh).
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
@@ -534,7 +907,7 @@ async function runSmoke(root: string) {
       proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
     }
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
-    // Mission Control host actions: the allowlist, then the real frame -> host round trip.
+    // The web panel stays reachable as a fallback (More), with its allowlisted host actions.
     const cases: [McRecord, string][] = [
       [{ kind: "copy", text: "README.md", subject: "path", destination: "filePicker" }, "open-file"],
       [{ kind: "copy", text: "../etc/passwd", subject: "path", destination: "filePicker" }, "copy"],
@@ -547,22 +920,48 @@ async function runSmoke(root: string) {
     ];
     const verdicts = cases.map(([r, want]) => ({ text: r.text, got: decide(r).action, want }));
     await log("mc-allowlist", verdicts.every((v) => v.got === v.want), verdicts);
-    showTab(HOME_TAB);
+    const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
+    openWebPanel();
+    const frameOk = await Promise.race([loaded, wait(8000).then(() => false)]);
+    await log("mission-control-web", activeTab === "web" && mcFrame.src.startsWith("http://127.0.0.1:"), { src: mcFrame.src, loadEvent: frameOk });
+    await wait(1500);
+    const webSkin = await frameSkinNow();
+    await log("mc-web-skin", webSkin === "cursor", { skin: webSkin, src: mcFrame.src });
     const opened = await mcPerformInFrame({ kind: "copy", text: "smoke.txt", subject: "path smoke.txt", destination: "filePicker" });
     await log("mc-open-file", editors.active === `${root}/smoke.txt` && activeTab === `${root}/smoke.txt`, { result: opened, active: editors.active ? relPath(editors.active) : null });
     let asked = "";
     const realConfirm = confirmMcRun;
     confirmMcRun = async (plan) => {
       asked = `asked (plan ${plan ?? "none"})`;
-      return false; // the smoke never starts a run from Mission Control
+      return false; // the smoke never starts a run from the web panel
     };
     const runReply = await mcPerformInFrame({ kind: "copy", text: "/run-plan demo.plan.md", subject: "/run-plan", destination: "chatInput" });
     await wait(200);
     confirmMcRun = realConfirm;
     await log("mc-run-plan", asked === "asked (plan demo.plan.md)" && runs.list().length === 0, { result: runReply, asked });
-    // Harmless text: the fallback may really write the clipboard.
     const copied = await mcPerformInFrame({ kind: "copy", text: "colony smoke copy fallback", subject: "smoke text", destination: "terminal", toastMessage: "Copied smoke text" });
     await log("mc-copy-fallback", JSON.stringify(copied).includes("Colony") && !JSON.stringify(copied).includes("Opened"), copied);
+    // Skins: Legacy from the More menu (same handler as the operator's click), saved in
+    // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
+    const pickSkin = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="skin"][data-skin="${id}"]`)?.click();
+    const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const frameLoad = () => new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
+    let reloaded = frameLoad();
+    pickSkin("legacy");
+    await Promise.race([reloaded, wait(8000)]);
+    await wait(800);
+    const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const savedSkin = ((await api.settingsGet()).settings as { ui?: { skin?: string } } | null)?.ui?.skin;
+    const frameSkin = await frameSkinNow();
+    showTab("mission");
+    await wait(200);
+    await shot("legacy");
+    reloaded = frameLoad();
+    pickSkin("bare-metal");
+    await Promise.race([reloaded, wait(8000)]);
+    await wait(800);
+    const backSkin = await frameSkinNow();
+    await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === "cursor" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     const seen = new Map<number, string[]>();
@@ -575,50 +974,59 @@ async function runSmoke(root: string) {
       el.value = v;
       el.dispatchEvent(new Event("change"));
     };
-    pick(agentPanel.backend, "codex");
-    pick(agentPanel.onLimit, "claude");
-    pick(agentPanel.model, "smoke-model");
-    pick(agentPanel.ticks, "1");
+    pick(controls.backend, "codex");
+    pick(controls.onLimit, "claude");
+    pick(controls.model, "smoke-model");
+    pick(controls.ticks, "1");
     await wait(300);
     const remembered = await api.settingsWorkspace();
     await log("engine-remembered", remembered.backend === "codex" && remembered.onLimit === "claude" && remembered.model === "smoke-model", remembered);
-    const run = await agentPanel.start();
-    if (!run) throw new Error("agent run did not start");
-    for (let i = 0; i < 100 && run.running && !run.gate; i++) await wait(200);
-    // Fixture driver (COLONY_AGENT_KIT_BIN=packaging/smoke/fake-agent-kit.sh): answer its
-    // gate through the same button the operator clicks.
+    // A view action starts the run: the Mission view's Run plan button, same click handler
+    // as the operator's. The run must open and focus its own agent tab.
+    showTab("mission");
+    const before = runs.list().length;
+    view("mission").querySelector<HTMLButtonElement>('[data-act="run-plan"]')?.click();
+    await until(() => runs.list().length > before, 10000);
+    const run = runs.list()[before];
+    if (!run) throw new Error("the Mission view's Run plan did not start a run");
+    await log("view-action-run", activeTab === `run:${run.id}` && !!view(`run:${run.id}`).querySelector(".tr"), { activeTab, cmd: run.cmd });
+    await until(() => !run.running || !!run.gate, 20000);
     const fixture = run.plan === "smoke-fixture.plan.md";
     const second: { run?: Run; root: string } = { root: root.replace(/\/repo$/, "/repo2") };
     if (run.gate && fixture) {
-      // A second run (another folder, another engine) so the Inbox aggregates two gates.
       const dup = await runs.start({ backend: "claude", maxTicks: 1 }).then(
         () => "started",
         (e) => errText(e),
       );
       await log("one-run-per-folder", dup.includes("already active"), dup);
       second.run = await runs.start({ backend: "claude", maxTicks: 1, cwd: second.root }).catch(() => undefined);
-      for (let i = 0; i < 50 && second.run?.running && !second.run.gate; i++) await wait(200);
+      await until(() => !second.run?.running || !!second.run?.gate, 10000);
+      showTab(`run:${run.id}`);
     }
     if (run.gate) {
-      // Answer from the Inbox cards (same handler as the operator's click).
-      setRight("inbox", true);
+      // The gate shows inline in the run's own tab, and in the Inbox with the other run's.
+      const runEl = view(`run:${run.id}`);
+      const inline = runEl.querySelector<HTMLElement>(`.tr-gate[data-ask="${run.gate.askId}"]`);
+      const inlineButtons = inline ? [...inline.querySelectorAll<HTMLButtonElement>(".gate-buttons button")].map((b) => b.textContent) : [];
+      await log("agent-tab-gate", !!inline && inlineButtons.length === run.gate.labels.length && runEl.querySelector(".chip")?.textContent === "waiting for you", { askId: run.gate.askId, buttons: inlineButtons });
+      await shot("gate");
       const badge = $("inbox-badge");
-      const cards = [...$("panel-inbox").querySelectorAll<HTMLElement>(".inbox-card")];
-      await log("inbox-open", !badge.hidden && Number(badge.textContent) === cards.length && cards.length === (second.run ? 2 : 1), {
-        badge: badge.textContent,
-        cards: cards.map((c) => `${c.dataset.run}:${c.dataset.ask} ${c.querySelector(".inbox-meta span")?.textContent}`),
+      const cards = [...inbox.el.querySelectorAll<HTMLElement>(".inbox-card")];
+      await log("inbox-open", !!badge && Number(badge.textContent) === cards.length && cards.length === (second.run ? 2 : 1), {
+        badge: badge?.textContent,
+        cards: cards.map((c) => `${c.dataset.run}:${c.dataset.ask}`),
       });
-      const answer = (r: Run, n: number) =>
-        $("panel-inbox").querySelector<HTMLButtonElement>(`.inbox-card[data-run="${r.id}"] .gate-buttons button[data-reply="${n}"]`)?.click();
-      if (second.run) answer(second.run, 2);
-      answer(run, 1);
+      // The second run is answered from the Inbox, the first from its agent tab.
+      if (second.run) inbox.el.querySelector<HTMLButtonElement>(`.inbox-card[data-run="${second.run.id}"] .gate-buttons button[data-reply="2"]`)?.click();
+      inline?.querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]')?.click();
       await wait(400);
-      await log("inbox-cleared", !run.gate && !second.run?.gate && badge.hidden && !$("panel-inbox").querySelector(".inbox-card"), { badgeHidden: badge.hidden });
+      await log("inbox-cleared", !run.gate && !second.run?.gate && !$("inbox-badge") && !inbox.el.querySelector(".inbox-card"), { badge: $("inbox-badge")?.textContent ?? null });
     }
-    for (let i = 0; i < 100 && run.running; i++) await wait(200);
+    await until(() => !run.running, 20000);
     off();
     const events = seen.get(run.id) ?? [];
     await log("agent-driver", events.includes("run_end") && !run.running, { cmd: run.cmd, events, exitCode: run.exitCode });
+    const runEl = view(`run:${run.id}`);
     if (fixture) {
       const args = run.rows.find((r) => r.text.startsWith("fixture args:"))?.text ?? "";
       await log("engine-used", run.backend === "codex" && args === "fixture args: backend=codex on-limit=claude model=smoke-model", { backend: run.backend, args });
@@ -631,20 +1039,94 @@ async function runSmoke(root: string) {
       }
       await log("gate-answer", sent.type === "hitl_reply" && sent.askId === "smoke-gate" && sent.reply === 1 && !run.gate, reply.trim());
       if (second.run) {
-        for (let i = 0; i < 50 && second.run.running; i++) await wait(200);
+        await until(() => !second.run?.running, 10000);
         const r2 = second.run.rows.find((r) => r.text.startsWith("fixture reply:"))?.text ?? "";
         await log("gate-answer-second-run", r2.includes('"reply":2') && r2.includes('"askId":"smoke-gate"') && second.run.backend === "claude", { reply: r2, backend: second.run.backend, exit: second.run.exitCode });
       }
+      // Transcript: prose, a collapsible tool call with its result, the tick summary.
+      const tool = runEl.querySelector<HTMLElement>(".tr-tool");
+      const summary = runEl.querySelector(".tr-sum")?.textContent ?? "";
+      const transcript = {
+        prose: runEl.querySelectorAll(".tr-msg .prose p").length,
+        tool: tool?.querySelector(".tool-name")?.textContent ?? null,
+        toolResult: tool?.querySelector(".tool-result")?.textContent?.trim() ?? null,
+        answered: runEl.querySelector(".tr-gate.answered .gate-title")?.textContent ?? null,
+        summary: summary.slice(0, 120),
+        end: !!runEl.querySelector(".tr-end"),
+      };
+      await log("agent-transcript", transcript.prose > 0 && tool?.tagName === "DETAILS" && !!transcript.toolResult?.includes("fixture-tick.txt") && summary.includes("LOOP_TICK_RESULT: done") && !!transcript.answered?.includes("1 | Ship it") && transcript.end, transcript);
+      showTab(`run:${run.id}`);
+      await wait(200);
+      await shot("transcript");
       const rv = run.reviews[0];
       const files = (rv?.files ?? []).map((f) => `${f.status} ${f.path}`).sort();
       await log("tick-review", !!rv && rv.finished && files.join(",") === "A fixture-tick.txt,A gate-reply.json,M README.md", { tick: rv?.tick, files, result: rv?.resultLine });
       if (rv) {
-        showTab(REVIEW_TAB);
+        showTab("review");
         const v = await reviewView.show(rv, rv.files.find((f) => f.path === "fixture-tick.txt") ?? rv.files[0]);
         await wait(500);
         await log("review-diff", v.before === null && v.after === "written by the fixture tick\nanswered\n", { before: v.before, after: v.after, rows: $("view-review").querySelectorAll(".rv-file").length });
+        await shot("review");
       }
+    } else {
+      await log("agent-transcript", !!runEl.querySelector(".tr-end, .tr-line"), { lines: runEl.querySelectorAll(".tr > *").length, end: runEl.querySelector(".tr-end")?.textContent ?? null });
     }
+    // Queue runner from the Queue view (fixture: the fake CLI; real: --dry-run, no agent).
+    const realConfirmAction = confirmAction;
+    let confirmed = "";
+    confirmAction = async (m) => {
+      confirmed = m;
+      return true;
+    };
+    smokeDryRun = !fixture;
+    showTab("queue");
+    const qBtn = view("queue").querySelector<HTMLButtonElement>('[data-act="run-queue"]');
+    const termsBefore = centerTerms.size;
+    qBtn?.click();
+    await until(() => centerTerms.size > termsBefore, 5000);
+    const qTab = activeTab;
+    const qView = centerTerms.get(qTab);
+    await until(() => !!qView?.exited, 30000);
+    const qOut = (qView?.output ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+    await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && (fixture ? qOut.includes("fixture run-plan-all backend=codex") : qView?.exitCode === 0 && qOut.length > 0), { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
+    smokeDryRun = false;
+    // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
+    // real: the argv is resolved, the real vendor CLI is not started by the smoke).
+    pick(controls.backend, "claude");
+    if (fixture) {
+      // The Mission view's button (no prompt), then a Plans-view style launch with a kit
+      // command as the first prompt (same host call the Run…/Edit…/Resume… buttons make).
+      showTab("mission");
+      const iBtn = view("mission").querySelector<HTMLButtonElement>('[data-act="interactive"]');
+      const tBefore = centerTerms.size;
+      iBtn?.click();
+      await until(() => centerTerms.size > tBefore, 5000);
+      const iTab = activeTab;
+      const iView = centerTerms.get(iTab);
+      await until(() => (iView?.output ?? "").includes("fake claude ready"), 8000);
+      const iProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
+      await shot("interactive");
+      await closeTab(iTab);
+      confirmed = "";
+      const p = (await host.interactive(`/run-plan ${planFile}`, "smoke")) as { id: string; view: TermView } | undefined;
+      await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
+      const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
+      await log(
+        "interactive-tab",
+        !!iBtn && iTab.startsWith("term:") && iProof.includes("args: --model smoke-model\n") && iProof.includes(`cwd: ${root}`) && pProof.includes(`args: --model smoke-model /run-plan ${planFile}`) && confirmed.includes(`/run-plan ${planFile}`),
+        { tab: tabs.get(iTab)?.label, proof: iProof.trim(), promptTab: p ? tabs.get(p.id)?.label : null, promptProof: pProof.trim() },
+      );
+      if (p) await closeTab(p.id);
+    } else {
+      const l = await api.termLaunch({ kind: "interactive", engine: "claude" }).then(
+        (x) => x,
+        (e) => ({ error: errText(e) }),
+      );
+      await log("interactive-tab", "argv" in l && /\/claude$/.test(l.argv[0]), { resolved: l, spawned: false, why: "the smoke never starts a real vendor session" });
+    }
+    confirmAction = realConfirmAction;
+    showTab("mission");
+    await shot("mission");
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));
@@ -653,18 +1135,20 @@ async function runSmoke(root: string) {
   await api.smokeExit();
 }
 
-// ---- boot --------------------------------------------------------------------------
-renderTabs();
+// ---- boot ------------------------------------------------------------------------------
+shell.classList.add("no-folder");
+pinViews();
 renderRecents();
 api
   .appInfo()
   .then(async (info: StartupInfo) => {
     $("st-env").textContent = `v${info.version} · DMA-BUF ${info.webkitDmabuf}`;
     $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("agent-kit CLI not found on PATH: Mission Control and the Agent panel need it");
+    if (!info.agentKit) status("agent-kit CLI not found on PATH: Mission Control and agent runs need it");
     if (info.smoke) focusPolicy.enabled = false;
+    await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];
     if (start) await openWorkspace(start);
-    if (info.smoke && workspace) await runSmoke(workspace.root);
+    if (info.smoke && workspace) await runSmoke(workspace.root, info);
   })
   .catch((e) => status(errText(e)));

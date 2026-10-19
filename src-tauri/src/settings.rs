@@ -38,16 +38,36 @@ pub struct WorkspaceSettings {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Look of the whole window. `skin`: `bare-metal` (default) or `legacy`; Colony also
+/// selects the matching skin of the Mission Control web panel.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skin: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+pub const SKINS: &[&str] = &["bare-metal", "legacy"];
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub editor: EditorSettings,
+    #[serde(skip_serializing_if = "is_default_ui")]
+    pub ui: UiSettings,
     pub workspaces: BTreeMap<String, WorkspaceSettings>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+fn is_default_ui(u: &UiSettings) -> bool {
+    u.skin.is_none() && u.extra.is_empty()
+}
+
 const TEMPLATE: &str = r#"{
+  "ui": { "skin": "bare-metal" },
   "editor": {},
   "workspaces": {}
 }
@@ -142,6 +162,19 @@ pub fn settings_set_workspace(state: State<'_, AppState>, patch: serde_json::Val
     Ok(ws)
 }
 
+/// Remember the window skin (`bare-metal` or `legacy`).
+#[tauri::command]
+pub fn settings_set_skin(state: State<'_, AppState>, skin: String) -> Result<String, String> {
+    if !SKINS.contains(&skin.as_str()) {
+        return Err(format!("Unknown skin: {skin} (bare-metal or legacy)"));
+    }
+    let path = settings_path(&state)?;
+    let mut s = load(&path)?;
+    s.ui.skin = Some(skin.clone());
+    save(&path, &s)?;
+    Ok(skin)
+}
+
 #[tauri::command]
 pub fn settings_workspace(state: State<'_, AppState>) -> Result<WorkspaceSettings, String> {
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
@@ -166,6 +199,15 @@ mod tests {
         assert_eq!(back["future"], 1);
         assert_eq!(back["workspaces"]["/r"]["x"], 2);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn skin_round_trips_and_default_omits_ui() {
+        let s: Settings = serde_json::from_str(r#"{"ui":{"skin":"legacy","x":1}}"#).unwrap();
+        assert_eq!(s.ui.skin.as_deref(), Some("legacy"));
+        assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["x"], 1);
+        let d = serde_json::to_value(Settings::default()).unwrap();
+        assert!(d.get("ui").is_none());
     }
 
     #[test]

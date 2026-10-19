@@ -5,6 +5,7 @@
 # agent. One tick: edit two files, open gate `smoke-gate`, wait for one stdin line.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
+cmd=${1:-}
 backend=cursor-agent max=10 cwd=.
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -17,6 +18,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 cd "$cwd" || exit 1
+if [ "$cmd" = run-plan-all ]; then
+  # Queue runner stand-in (a PTY tab in Colony): print one line and leave a proof file.
+  echo "fixture run-plan-all backend=$backend"
+  printf 'run-plan-all backend=%s\n' "$backend" > run-plan-all-proof.txt
+  exit 0
+fi
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
 
@@ -25,7 +32,11 @@ ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture args: backend=$bac
 sleep 1
 ev "\"type\":\"tick_start\",\"tick\":1,\"maxTicks\":$max,\"pending\":1,\"log\":\".cursor/loop-logs/tick-fixture.log\",\"prompt\":\"TICK_PROMPT fixture\",\"backend\":\"$backend\""
 ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Fixture tick: editing fixture-tick.txt and README.md.\"}]}}"
+ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_fixture1\",\"name\":\"Bash\",\"input\":{\"command\":\"printf 'written by the fixture tick' > fixture-tick.txt\"}}]}}"
 printf 'written by the fixture tick\n' > fixture-tick.txt
+ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_fixture1\",\"content\":\"wrote fixture-tick.txt\"}]}}"
+ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Both files are written. **One decision** before I finish:\\n\\n- Ship it: keep the change\\n- Hold: stop here\\n\\nHITL_GATE: smoke-gate | Ship it | Hold\"}]}}"
+
 printf '\nFixture tick line.\n' >> README.md
 ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-gate\",\"labels\":[\"Ship it\",\"Hold\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-gate | Ship it | Hold\""
 if ! IFS= read -r reply; then

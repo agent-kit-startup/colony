@@ -10,6 +10,7 @@ export interface StartupInfo {
   node: string | null;
   git: string | null;
   smoke: string | null;
+  smokeShots: boolean;
 }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }
@@ -39,6 +40,8 @@ export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTick
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string }
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string }
+export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
+export interface TermLaunch { argv: string[]; label: string; bin: string; note: string }
 export interface GitFile { xy: string; path: string }
 export interface GitStatus { isRepo: boolean; branch: string; header: string; prodBranch: boolean; files: GitFile[] }
 
@@ -51,7 +54,13 @@ export const api = {
   listFiles: () => invoke<string[]>("list_files"),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
+  createTextFile: (path: string, contents: string) => invoke<string>("create_text_file", { path, contents }),
   dashboardStart: () => invoke<DashboardInfo>("dashboard_start"),
+  mcSnapshot: () => invoke<string>("mc_snapshot"),
+  mcConfig: () => invoke<string | null>("mc_config"),
+  mcSubscribe: (onEvent: Channel<McEvent>) => invoke<void>("mc_subscribe", { onEvent }),
+  termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; dryRun?: boolean }) =>
+    invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, dryRun: o.dryRun ?? null }),
   ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[]) =>
     invoke<number>("pty_spawn", { cols, rows, command: command ?? null, onEvent }),
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
@@ -72,6 +81,7 @@ export const api = {
   agentKill: (runId: number) => invoke<void>("agent_kill", { runId }),
   settingsGet: () => invoke<SettingsInfo>("settings_get"),
   settingsEnsure: () => invoke<string>("settings_ensure"),
+  settingsSetSkin: (skin: string) => invoke<string>("settings_set_skin", { skin }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),

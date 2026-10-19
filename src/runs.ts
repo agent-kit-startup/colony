@@ -5,11 +5,21 @@
 import { api, Channel, errText, type AgentEvent, type TickReview } from "./api";
 
 const MAX_ROWS = 3000;
+const MAX_ITEMS = 6000;
 
 // biome-ignore lint: event payloads are open JSON
 export type Ev = Record<string, any>;
 
 export interface Row { text: string; cls: string }
+/** Everything a run produced, in order, for the transcript (agent tab). */
+export type RunItem =
+  | { kind: "ev"; ev: Ev }
+  | { kind: "raw"; line: string }
+  | { kind: "stderr"; line: string }
+  | { kind: "review"; review: TickReview }
+  | { kind: "reply"; askId: string; shown: string }
+  | { kind: "error"; text: string }
+  | { kind: "exit"; code: number | null };
 export interface Gate { runId: number; askId: string; labels: string[]; line: string; tick: number; detection: string; at: string }
 export interface Run {
   id: number;
@@ -21,6 +31,7 @@ export interface Run {
   running: boolean;
   exitCode: number | null | undefined;
   rows: Row[];
+  items: RunItem[];
   gate: Gate | null;
   reviews: TickReview[];
   startedAt: string;
@@ -31,6 +42,7 @@ export type RunChange =
   | { kind: "gate"; run: Run }
   | { kind: "state"; run: Run }
   | { kind: "event"; run: Run; ev: Ev }
+  | { kind: "item"; run: Run; item: RunItem }
   | { kind: "review"; run: Run; review: TickReview };
 
 /** One display line per agent stream-json event (mirrors the benchmark derivation). */
@@ -45,7 +57,7 @@ function agentLine(e: Ev): Row | null {
     const tool = e.message.content.find((c: Ev) => c.type === "tool_use");
     if (tool) {
       const arg = tool.input?.command ?? tool.input?.file_path ?? tool.input?.pattern ?? "";
-      return { text: `⚙ ${tool.name}${arg ? ` ${String(arg).slice(0, 160)}` : ""}`, cls: "ag-tool" };
+      return { text: `› ${tool.name}${arg ? ` ${String(arg).slice(0, 160)}` : ""}`, cls: "ag-tool" };
     }
     return null;
   }
@@ -102,6 +114,7 @@ class RunStore {
       running: true,
       exitCode: undefined,
       rows: [],
+      items: [],
       gate: null,
       reviews: [],
       startedAt: new Date().toISOString(),
@@ -119,6 +132,7 @@ class RunStore {
     if (!run?.gate || run.gate.askId !== askId) throw new Error("That gate is no longer open");
     await api.agentReply(runId, askId, reply);
     this.row(run, `answered ${askId}: ${shown}`, "ag-reply");
+    this.item(run, { kind: "reply", askId, shown });
     this.setGate(run, null);
   }
 
@@ -145,15 +159,31 @@ class RunStore {
     this.emit({ kind: "row", run, row });
   }
 
+  private item(run: Run, item: RunItem) {
+    run.items.push(item);
+    if (run.items.length > MAX_ITEMS) run.items.splice(0, run.items.length - MAX_ITEMS);
+    this.emit({ kind: "item", run, item });
+  }
+
+  /** A note in the transcript that is not from the driver (e.g. a failed answer). */
+  note(runId: number, text: string) {
+    const run = this.runs.get(runId);
+    if (run) this.item(run, { kind: "error", text });
+  }
+
   private setGate(run: Run, gate: Gate | null) {
     run.gate = gate;
     this.emit({ kind: "gate", run });
   }
 
   private onMessage(run: Run, m: AgentEvent) {
-    if (m.kind === "stderr") return this.row(run, m.line, "ag-stderr");
+    if (m.kind === "stderr") {
+      this.item(run, { kind: "stderr", line: m.line });
+      return this.row(run, m.line, "ag-stderr");
+    }
     if (m.kind === "review") {
       run.reviews.push(m.review);
+      this.item(run, { kind: "review", review: m.review });
       const n = m.review.files.length;
       this.row(run, `◇ tick ${m.review.tick} review: ${n} file${n === 1 ? "" : "s"} changed${m.review.finished ? "" : " (tick did not finish)"}`, "ag-dim");
       this.emit({ kind: "review", run, review: m.review });
@@ -163,6 +193,7 @@ class RunStore {
       run.running = false;
       run.exitCode = m.code;
       if (run.gate) this.setGate(run, null);
+      this.item(run, { kind: "exit", code: m.code });
       this.row(run, `process exited ${m.code ?? "(signal)"}`, "ag-dim");
       this.emit({ kind: "state", run });
       return;
@@ -171,9 +202,15 @@ class RunStore {
     try {
       ev = JSON.parse(m.line);
     } catch {
+      this.item(run, { kind: "raw", line: m.line });
       return this.row(run, m.line, "ag-dim");
     }
     this.emit({ kind: "event", run, ev });
+    this.apply(run, ev, m.line);
+    this.item(run, { kind: "ev", ev });
+  }
+
+  private apply(run: Run, ev: Ev, line: string) {
     switch (ev.type) {
       case "run_start":
         run.plan = String(ev.plan ?? "");
@@ -216,7 +253,7 @@ class RunStore {
         if (run.gate) this.setGate(run, null);
         return this.row(run, `■ run ended · exit ${ev.exitCode} · ${ev.reason} · ${ev.ticks} ticks · ${ev.pending} pending`, "ag-head");
       default:
-        return this.row(run, m.line, "ag-dim");
+        return this.row(run, line, "ag-dim");
     }
   }
 }

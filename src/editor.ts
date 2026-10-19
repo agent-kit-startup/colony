@@ -21,7 +21,7 @@ monaco.editor.defineTheme("colony-dark", {
   base: "vs-dark",
   inherit: true,
   rules: [],
-  colors: { "editor.background": "#15171c", "editorGutter.background": "#15171c" },
+  colors: { "editor.background": "#141414", "editorGutter.background": "#141414" },
 });
 
 interface Doc {

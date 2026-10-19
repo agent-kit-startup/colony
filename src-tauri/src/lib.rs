@@ -4,10 +4,12 @@ mod agent;
 mod dashboard;
 mod gitops;
 mod launch;
+mod mcdata;
 mod pty;
 mod review;
 mod settings;
 mod tools;
+mod vendor;
 mod workspace;
 
 use std::path::PathBuf;
@@ -23,6 +25,7 @@ pub struct AppState {
     pub ptys: pty::PtyRegistry,
     pub agents: agent::AgentRegistry,
     pub reviews: std::sync::Arc<review::ReviewStore>,
+    pub mc_feed: std::sync::Arc<mcdata::McFeed>,
     /// `<app config dir>/settings.json`, set once at startup.
     pub settings_path: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
@@ -40,6 +43,8 @@ struct StartupInfo {
     git: Option<String>,
     /// `COLONY_SMOKE=<log file>`: run the scripted code-path smoke after the folder opens.
     smoke: Option<String>,
+    /// `COLONY_SMOKE_SHOTS=1`: the smoke pauses at a few views for read-only screenshots.
+    smoke_shots: bool,
 }
 
 /// WebKitGTK's DMA-BUF renderer hangs on NVIDIA + Wayland (Colony UI benchmark, machine A).
@@ -98,7 +103,8 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
 }
 
 /// Mission Control action seam (embeddable contract): defined only inside the Mission
-/// Control iframe on 127.0.0.1, before the panel script runs. Every record (always
+/// Control iframe on 127.0.0.1, before the panel script runs. It also selects the panel's
+/// skin that matches Colony's (passed in the frame URL). Every record (always
 /// `kind: "copy"`) is first offered to the Colony window over a MessageChannel; the window
 /// runs a real host action only for an allowlisted record (open a repo file, start a
 /// plan run after a native confirmation; src/mcactions.ts) and answers `handled`.
@@ -107,6 +113,13 @@ const MC_ACTION_HOOK: &str = r#"
 (function () {
   try {
     if (window === window.top || location.hostname !== '127.0.0.1') return;
+    // One look across Colony and Mission Control: Colony loads the panel with
+    // `?colony-skin=<kit skin value>` (src/skin.ts kitSkinValue) and the panel restores its
+    // skin from this key before first paint. Unknown values are ignored.
+    try {
+      var want = new URLSearchParams(location.search).get('colony-skin');
+      if (want === 'cursor' || want === 'legacy' || want === 'bare-metal') localStorage.setItem('agent-kit:dashboard-skin', want);
+    } catch (e) {}
     var copy = function (action) {
       var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
       try {
@@ -153,6 +166,10 @@ const MC_ACTION_HOOK: &str = r#"
 /// smoke covers the frame -> host -> frame round trip without clicking in the page.
 const MC_SMOKE_BRIDGE: &str = r#"
     window.addEventListener('message', function (ev) {
+      if (ev.source === window.top && ev.data && ev.data.colony === 'mc-smoke-skin') {
+        window.top.postMessage({ colony: 'mc-smoke-skin-result', skin: document.documentElement.getAttribute('data-dashboard-skin') }, '*');
+        return;
+      }
       if (ev.source !== window.top || !ev.data || ev.data.colony !== 'mc-smoke-perform') return;
       var id = ev.data.id;
       hook.perform(ev.data.action).then(
@@ -180,6 +197,7 @@ pub fn run() {
         node: tools::node_bin().map(|p| p.display().to_string()),
         git: tools::git_bin().map(|p| p.display().to_string()),
         smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
+        smoke_shots: std::env::var("COLONY_SMOKE_SHOTS").as_deref() == Ok("1"),
     };
 
     let hook = mc_action_hook(startup.smoke.is_some());
@@ -195,8 +213,13 @@ pub fn run() {
             workspace::read_text_file,
             workspace::write_text_file,
             workspace::list_files,
+            workspace::create_text_file,
             dashboard::dashboard_start,
             dashboard::dashboard_stop,
+            mcdata::mc_snapshot,
+            mcdata::mc_config,
+            mcdata::mc_subscribe,
+            vendor::term_launch,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -214,6 +237,7 @@ pub fn run() {
             settings::settings_ensure,
             settings::settings_workspace,
             settings::settings_set_workspace,
+            settings::settings_set_skin,
             launch::open_in_editor,
             review::review_ticks,
             review::review_file,

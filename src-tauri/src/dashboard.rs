@@ -19,6 +19,12 @@ pub struct DashboardServer {
     serve: PathBuf,
 }
 
+impl DashboardServer {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
 impl Drop for DashboardServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
