@@ -37,6 +37,8 @@ pub struct DashboardInfo {
 
 /// `COLONY_DASHBOARD_SERVE`, else `realpath(agent-kit)/../../dashboard/serve.mjs`
 /// (the npm package layout: `<pkg>/dist/cli.js` next to `<pkg>/dashboard/`).
+/// A version-manager shim (mise: `shims/agent-kit -> /usr/bin/mise`) is resolved
+/// through `mise which agent-kit`; the last fallback is `npm root -g`.
 fn serve_script() -> Result<PathBuf, String> {
     if let Some(p) = std::env::var_os("COLONY_DASHBOARD_SERVE") {
         let p = PathBuf::from(p);
@@ -44,13 +46,43 @@ fn serve_script() -> Result<PathBuf, String> {
     }
     let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH (install @dadado/agent-kit-cli)")?;
     let real = bin.canonicalize().map_err(|e| e.to_string())?;
-    for anc in real.ancestors().skip(1).take(3) {
-        let cand = anc.join("dashboard/serve.mjs");
-        if cand.is_file() {
-            return Ok(cand);
+    if let Some(found) = serve_next_to(&real) {
+        return Ok(found);
+    }
+    if real.file_name().is_some_and(|n| n == "mise") {
+        if let Some(found) = command_stdout(&real, &["which", "agent-kit"])
+            .and_then(|p| PathBuf::from(p).canonicalize().ok())
+            .and_then(|p| serve_next_to(&p))
+        {
+            return Ok(found);
         }
     }
+    if let Some(found) = tools::find_bin("npm", None)
+        .and_then(|npm| command_stdout(&npm, &["root", "-g"]))
+        .map(|root| PathBuf::from(root).join("@dadado/agent-kit-cli/dashboard/serve.mjs"))
+        .filter(|p| p.is_file())
+    {
+        return Ok(found);
+    }
     Err(format!("dashboard/serve.mjs not found next to {}", real.display()))
+}
+
+fn serve_next_to(real: &std::path::Path) -> Option<PathBuf> {
+    real.ancestors()
+        .skip(1)
+        .take(3)
+        .map(|anc| anc.join("dashboard/serve.mjs"))
+        .find(|cand| cand.is_file())
+}
+
+/// First line of a short helper command's stdout, or None on any failure.
+fn command_stdout(bin: &std::path::Path, args: &[&str]) -> Option<String> {
+    let out = Command::new(bin).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
+    (!line.is_empty()).then_some(line)
 }
 
 fn free_port() -> Result<u16, String> {
