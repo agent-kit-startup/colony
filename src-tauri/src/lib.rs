@@ -103,7 +103,8 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
 }
 
 /// Mission Control action seam (embeddable contract): defined only inside the Mission
-/// Control iframe on 127.0.0.1, before the panel script runs. Every record (always
+/// Control iframe on 127.0.0.1, before the panel script runs. It also selects the panel's
+/// skin that matches Colony's (passed in the frame URL). Every record (always
 /// `kind: "copy"`) is first offered to the Colony window over a MessageChannel; the window
 /// runs a real host action only for an allowlisted record (open a repo file, start a
 /// plan run after a native confirmation; src/mcactions.ts) and answers `handled`.
@@ -112,6 +113,13 @@ const MC_ACTION_HOOK: &str = r#"
 (function () {
   try {
     if (window === window.top || location.hostname !== '127.0.0.1') return;
+    // One look across Colony and Mission Control: Colony loads the panel with
+    // `?colony-skin=<kit skin value>` (src/skin.ts kitSkinValue) and the panel restores its
+    // skin from this key before first paint. Unknown values are ignored.
+    try {
+      var want = new URLSearchParams(location.search).get('colony-skin');
+      if (want === 'cursor' || want === 'legacy' || want === 'bare-metal') localStorage.setItem('agent-kit:dashboard-skin', want);
+    } catch (e) {}
     var copy = function (action) {
       var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
       try {
@@ -158,6 +166,10 @@ const MC_ACTION_HOOK: &str = r#"
 /// smoke covers the frame -> host -> frame round trip without clicking in the page.
 const MC_SMOKE_BRIDGE: &str = r#"
     window.addEventListener('message', function (ev) {
+      if (ev.source === window.top && ev.data && ev.data.colony === 'mc-smoke-skin') {
+        window.top.postMessage({ colony: 'mc-smoke-skin-result', skin: document.documentElement.getAttribute('data-dashboard-skin') }, '*');
+        return;
+      }
       if (ev.source !== window.top || !ev.data || ev.data.colony !== 'mc-smoke-perform') return;
       var id = ev.data.id;
       hook.perform(ev.data.action).then(
@@ -225,6 +237,7 @@ pub fn run() {
             settings::settings_ensure,
             settings::settings_workspace,
             settings::settings_set_workspace,
+            settings::settings_set_skin,
             launch::open_in_editor,
             review::review_ticks,
             review::review_file,

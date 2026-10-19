@@ -1,5 +1,7 @@
 // Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
 import { api, errText, h, type GitStatus } from "./api";
+import { obj, snapshot, str } from "./snapshot";
+import { btn, card, chip, empty } from "./ui";
 
 export class GitPanel {
   private branch = h("strong");
@@ -112,5 +114,85 @@ export class GitPanel {
       this.pushBtn.disabled = false;
       await this.refresh();
     }
+  }
+}
+
+/**
+ * Git center tab: the snapshot's branch flow and graph, the working tree panel above, and
+ * the production promotion card. Colony never runs /git-prod or any prod promotion: the
+ * card only reveals the command after a typed yes, for the operator's own agent session.
+ */
+export class GitView {
+  readonly el: HTMLElement;
+  readonly panel: GitPanel;
+  private repo = h("div", { class: "git-repo" });
+  private dirty = true;
+  visible = false;
+
+  constructor(status: (msg: string) => void, onCommitted: () => void, private copy: (text: string, what: string) => void) {
+    const work = h("section", { class: "card git-work" }, h("div", { class: "card-title" }, "Working tree"));
+    this.panel = new GitPanel(work, status, onCommitted);
+    this.el = h("div", { class: "cv cv-git" }, h("div", { class: "cv-body git-grid" }, h("div", { class: "git-left" }, this.repo, this.prodCard()), work));
+    snapshot.on((why) => {
+      if (why !== "data") return;
+      this.dirty = true;
+      if (this.visible) this.renderRepo();
+    });
+  }
+
+  show() {
+    this.visible = true;
+    if (this.dirty) this.renderRepo();
+    void this.panel.refresh();
+  }
+
+  hide() {
+    this.visible = false;
+  }
+
+  private renderRepo() {
+    this.dirty = false;
+    const g = snapshot.git;
+    if (!snapshot.data) {
+      this.repo.replaceChildren(card("Repository", empty("Waiting for Mission Control data…")));
+      return;
+    }
+    const flow = obj(g.flow);
+    const ab = (label: string, x: unknown) => {
+      const o = obj(x);
+      return o.ahead === undefined && o.behind === undefined ? null : h("div", { class: "row" }, h("span", { class: "dim grow" }, label), h("span", { class: "mono" }, `↑${o.ahead ?? 0} ↓${o.behind ?? 0}`));
+    };
+    const graph: string[] = Array.isArray(g.graph) ? g.graph.map(String) : [];
+    this.repo.replaceChildren(
+      card(
+        "Repository",
+        h("div", { class: "row" }, h("strong", {}, `⎇ ${str(g.branch, "?")}`), chip(g.dirty ? `${g.dirtyCount ?? "?"} changed` : "clean", g.dirty ? "chip-gate" : "chip-done"), h("span", { class: "dim" }, `↑${g.ahead ?? 0} ↓${g.behind ?? 0} upstream`)),
+        ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
+        ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
+        ...(graph.length ? [h("pre", { class: "git-graph" }, graph.slice(0, 40).join("\n"))] : []),
+      ),
+    );
+  }
+
+  private prodCard(): HTMLElement {
+    const yes = h("input", { type: "text", placeholder: "type yes", class: "yes" });
+    const out = h("div", { class: "hint" });
+    const reveal = btn("Show /git-prod", () => {
+      if (yes.value.trim() !== "yes") {
+        out.textContent = "Production promotion: type yes first. Colony shows the command; it never runs it.";
+        return;
+      }
+      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (⌘ Open interactive) and answer its gate there.");
+      this.copy("/git-prod", "/git-prod");
+      yes.value = "";
+    });
+    return h(
+      "section",
+      { class: "card prod-card" },
+      h("div", { class: "card-title" }, "Production promotion"),
+      h("div", { class: "hint warn" }, "Never run from Colony or from a headless tick. /git-prod stays an operator action in your own agent session."),
+      h("div", { class: "prod-confirm" }, yes, reveal),
+      out,
+    );
   }
 }
