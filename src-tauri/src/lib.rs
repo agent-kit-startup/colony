@@ -2,6 +2,7 @@
 
 mod agent;
 mod branchrule;
+mod context;
 mod dashboard;
 mod forge;
 mod gitops;
@@ -259,6 +260,7 @@ pub fn run() {
             settings::settings_set_workspace,
             settings::settings_set_skin,
             launch::open_in_editor,
+            context::context_sources,
             review::review_ticks,
             review::review_file,
             review::review_patch,

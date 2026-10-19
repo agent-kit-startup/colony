@@ -5,7 +5,8 @@
 // Nothing here runs /git-prod or any production promotion.
 import { h } from "./api";
 import { gateControls, type RunControls } from "./agent";
-import { type Run, runLabel, runs } from "./runs";
+import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
+import { runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { prose } from "./transcript";
 import { ago, bar, btn, card, chip, empty, lifecycleChip, rerender } from "./ui";
@@ -22,6 +23,8 @@ export interface CockpitHost {
   showTab(id: string): void;
   focusRun(runId: number): void;
   copy(text: string, what: string): void;
+  /** The opened folder (launches in other folders do not move its Mission view). */
+  workspaceRoot(): string;
 }
 
 /** Base: a scrollable center view that re-renders on snapshot or run changes while shown. */
@@ -56,16 +59,36 @@ abstract class View {
     this.visible = false;
   }
 
-  /** Re-render now, unless the operator is typing in this view (then on blur). */
+  /**
+   * Re-render now, unless the operator is typing in a field this view rebuilds (then on
+   * blur). A field the view keeps across renders (`keepsFocus`, e.g. the engine picker)
+   * does not hold the view back: it is re-attached and gets its focus back.
+   */
   flush(force = false) {
     if (!this.dirty) return;
     const a = document.activeElement as HTMLElement | null;
-    if (!force && a && this.el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) {
-      a.addEventListener("blur", () => this.flush(), { once: true });
+    const field = a && this.el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) ? a : null;
+    const kept = !!field && this.keepsFocus(field);
+    if (!force && field && !kept) {
+      field.addEventListener("blur", () => this.flush(), { once: true });
       return;
     }
     this.dirty = false;
+    const sel = kept && field instanceof HTMLInputElement ? [field.selectionStart, field.selectionEnd] : null;
     rerender(this.el, () => this.body.replaceChildren(...this.render()));
+    if (kept && field && field.isConnected && document.activeElement !== field) {
+      field.focus({ preventScroll: true });
+      try {
+        if (sel && field instanceof HTMLInputElement) field.setSelectionRange(sel[0], sel[1]);
+      } catch {
+        /* number inputs have no selection */
+      }
+    }
+  }
+
+  /** Form fields that survive a re-render (the same node is re-attached). */
+  protected keepsFocus(_el: HTMLElement): boolean {
+    return false;
   }
 
   protected abstract render(): Node[];
@@ -82,17 +105,60 @@ function todoLine(label: string, t: { id: string; content: string } | null): HTM
   return h("div", { class: "todo-line" }, h("span", { class: "dim" }, label), h("code", {}, t.id), h("span", { class: "clamp-2", title: t.content }, t.content));
 }
 
-function runRow(r: Run, host: CockpitHost): HTMLElement {
-  const state = r.gate ? "gate" : r.running ? "running" : r.exitCode === 0 ? "done" : "failed";
-  const row = h("div", { class: "row click" }, chip(r.gate ? "waiting" : r.running ? "running" : `exit ${r.exitCode ?? "-"}`, `chip-${state}`), h("span", { class: "grow ellipsis" }, runLabel(r)), h("span", { class: "dim" }, ago(r.startedAt)));
-  row.addEventListener("click", () => host.focusRun(r.id));
+const KIND_LABEL: Record<Launch["kind"], string> = { driver: "▶ run-plan", interactive: "⌘ interactive", queue: "⇶ run-plan-all" };
+const planName = (f: string) => f.replace(/\.plan\.md$/, "");
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function stateChip(l: Launch): HTMLElement {
+  if (l.state === "ended") return chip(`ended · exit ${l.exitCode ?? "signal"}`, l.exitCode === 0 ? "chip-done" : "chip-failed");
+  if (l.state === "gate") return chip("awaiting gate", "chip-gate");
+  return chip(l.state, l.state === "running" ? "chip-running" : "chip-backlog");
+}
+
+/** One Colony launch (driver run or agent terminal tab); a click focuses its tab. */
+function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLElement {
+  const gateTip = l.gate ? `\nopen gate ${l.gate}${l.kind === "driver" ? "" : " (seen in the terminal output)"}` : "";
+  const row = h(
+    "div",
+    { class: "row click run-row", title: `${l.label} · ${l.root}${gateTip}${kit ? `\nkit reports: ${kit.label}` : ""}` },
+    stateChip(l),
+    h("span", { class: "dim small run-kind" }, KIND_LABEL[l.kind]),
+    h("span", { class: "grow ellipsis" }, h("strong", {}, l.plan ? planName(l.plan) : l.kind === "interactive" ? "no plan" : "HANDOFF plan"), h("span", { class: "dim" }, ` · ${l.backend}`)),
+    ...(kit ? [chip("kit sees it", "chip-done")] : []),
+    h("span", { class: "dim small", title: l.startedAt }, `${clock(l.startedAt)} · ${elapsed(l.startedAt)}`),
+  );
+  row.dataset.launch = l.tabId;
+  row.dataset.state = l.state;
+  row.dataset.plan = l.plan;
+  row.addEventListener("click", () => (l.runId !== undefined ? host.focusRun(l.runId) : host.showTab(l.tabId)));
   return row;
+}
+
+/**
+ * The queue is held when HANDOFF names another plan than the queue cursor while the queue
+ * status still says running: a run outside the queue took HANDOFF over.
+ */
+function queueHold(q: Record<string, unknown>, queue: string[], cursor: number): { plan: string; inQueue: boolean } | null {
+  const active = snapshot.activePlanFile;
+  if (cursor < 0 || cursor >= queue.length || !active || queue[cursor] === active || !/\brunning\b/i.test(str(q.status))) return null;
+  return { plan: active, inQueue: queue.includes(active) };
+}
+
+function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string): string {
+  return hold.inQueue
+    ? `HANDOFF is on ${planName(hold.plan)} while the queue cursor still points at ${planName(cursorPlan)}.`
+    : `Held by an out-of-queue run: HANDOFF is on ${planName(hold.plan)}, not on the queue cursor ${planName(cursorPlan)}.`;
 }
 
 // ---- Mission -------------------------------------------------------------------------
 export class MissionView extends View {
   constructor(host: CockpitHost, private controls: RunControls) {
     super(host, "cv-mission");
+    launches.on(() => this.invalidate());
+  }
+
+  protected keepsFocus(el: HTMLElement): boolean {
+    return this.controls.el.contains(el);
   }
 
   protected render(): Node[] {
@@ -109,7 +175,11 @@ export class MissionView extends View {
     const now = snapshot.now;
     const plan = snapshot.activePlanFile;
     const sys = snapshot.system;
-    const pr = obj(now.progress);
+    // A run Colony launched on another plan than HANDOFF's: show it as the active run
+    // until HANDOFF (and so the snapshot) switches to it.
+    const pend = snapshot.data ? launches.pending(this.host.workspaceRoot()) : null;
+    const pp = pend ? snapshot.plans().find((p) => p.file === pend.plan) : undefined;
+    const pr = pend ? (pp?.progress ?? {}) : obj(now.progress);
     const total = Number(pr.total) || 0;
     const done = Number(pr.completed) || 0;
     const actions = h(
@@ -118,22 +188,40 @@ export class MissionView extends View {
       btn("▶ Run plan", () => void this.host.runPlan(), { class: "primary", "data-act": "run-plan", title: "agent-kit run-plan --events ndjson on the active plan; the run opens as a tab with its transcript and gates" }),
       btn("⇶ Run queue", () => void this.host.runQueue(), { "data-act": "run-queue", title: "agent-kit run-plan-all in a terminal tab (the kit has no driver mode for the queue runner)" }),
       btn("⌘ Open interactive", () => void this.host.interactive(), { "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
-      ...(plan ? [btn("Open plan", () => this.host.openRepoFile(str(now.planPath) || `.cursor/plans/${plan}`))] : []),
+      ...(pend ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`))] : plan ? [btn("Open plan", () => this.host.openRepoFile(str(now.planPath) || `.cursor/plans/${plan}`))] : []),
       ...(snapshot.data && str(now.sourcePath) ? [btn("Open HANDOFF", () => this.host.openRepoFile(str(now.sourcePath)))] : []),
     );
-    const title = plan ? str(now.planId) || plan : snapshot.data ? "No active plan" : "Mission";
+    const title = pend ? pp?.id || planName(pend.plan) : plan ? str(now.planId) || plan : snapshot.data ? "No active plan" : "Mission";
+    const kicker = [str(sys.name), snapshot.git.branch ? `⎇ ${snapshot.git.branch}` : "", pend ? "active run" : str(now.mode)].filter(Boolean).join(" · ") || "Mission Control";
+    const todo = (t: J | null | undefined) => (t && obj(t).id ? { id: str(t.id), content: str(t.content) } : null);
+    const lc = pend ? (pp?.lifecycle ?? "") : str(now.lifecycle);
+    let pending: HTMLElement[] = [];
+    if (pend) {
+      const note = h(
+        "div",
+        { class: "launch-pending click", title: "Open its tab" },
+        chip("launched from Colony", "chip-running"),
+        stateChip(pend),
+        h("span", { class: "grow" }, `${KIND_LABEL[pend.kind]} · ${pend.backend} · started ${clock(pend.startedAt)} (${elapsed(pend.startedAt)}) · waiting for HANDOFF to switch to this plan. HANDOFF still names ${plan ? planName(plan) : "no plan"}; ▶ Run plan runs that one.`),
+      );
+      note.dataset.plan = pend.plan;
+      note.dataset.launch = pend.tabId;
+      note.addEventListener("click", () => (pend.runId !== undefined ? this.host.focusRun(pend.runId) : this.host.showTab(pend.tabId)));
+      pending = [note];
+    }
     return h(
       "section",
       { class: "hero" },
       h(
         "div",
         { class: "hero-top" },
-        h("div", { class: "grow" }, h("div", { class: "hero-kicker dim" }, [str(sys.name), snapshot.git.branch ? `⎇ ${snapshot.git.branch}` : "", str(now.mode)].filter(Boolean).join(" · ") || "Mission Control"), h("h2", {}, title), h("div", { class: "dim mono small" }, plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”.")),
-        ...(now.lifecycle ? [lifecycleChip(str(now.lifecycle))] : []),
+        h("div", { class: "grow" }, h("div", { class: "hero-kicker dim" }, kicker), h("h2", {}, title), h("div", { class: "dim mono small" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”.")),
+        ...(lc ? [lifecycleChip(lc)] : []),
       ),
+      ...pending,
       ...(total ? [h("div", { class: "hero-progress" }, bar(done, total), h("span", { class: "dim" }, `${done} of ${total} to-dos`))] : []),
-      ...[todoLine("Now", obj(now.currentTodo).id ? { id: str(now.currentTodo.id), content: str(now.currentTodo.content) } : null), todoLine("Next", obj(now.nextTodo).id ? { id: str(now.nextTodo.id), content: str(now.nextTodo.content) } : null)].filter((x): x is HTMLElement => !!x),
-      ...(str(now.gaps) ? [h("div", { class: "gaps clamp-3", title: str(now.gaps) }, h("span", { class: "ag-warn" }, "Gaps "), str(now.gaps))] : []),
+      ...[todoLine("Now", pend ? (pp?.currentTodo ?? null) : todo(now.currentTodo)), todoLine("Next", pend ? (pp?.nextTodo ?? null) : todo(now.nextTodo))].filter((x): x is HTMLElement => !!x),
+      ...(!pend && str(now.gaps) ? [h("div", { class: "gaps clamp-3", title: str(now.gaps) }, h("span", { class: "ag-warn" }, "Gaps "), str(now.gaps))] : []),
       actions,
       this.controls.el,
       this.controls.note,
@@ -162,17 +250,29 @@ export class MissionView extends View {
   }
 
   private runsCard(): HTMLElement {
-    const list = runs.list().slice().reverse();
-    return card("Agent runs", ...(list.length ? list.slice(0, 6).map((r) => runRow(r, this.host)) : [empty("No runs in this window. ▶ Run plan starts one; it opens as its own tab.")]));
+    const { mine, kit, kitSeen } = mergeRuns(launches.list(), kitRuns());
+    const rows: Node[] = mine.slice(0, 8).map((l) => launchRow(l, kitSeen.get(l.tabId), this.host));
+    if (mine.length > 8) rows.push(h("div", { class: "dim small" }, `${mine.length - 8} older launch(es) in this window`));
+    for (const k of kit.slice(0, 4)) {
+      const r = h("div", { class: "row kit-run", title: k.label }, chip("kit", ""), h("span", { class: "grow ellipsis" }, k.plan ? h("strong", {}, planName(k.plan)) : "", k.plan ? " · " : "", k.label), ...(k.at ? [h("span", { class: "dim small" }, ago(k.at))] : []));
+      r.dataset.kit = k.key;
+      rows.push(r);
+    }
+    const live = mine.filter((l) => l.state !== "ended").length;
+    const title = h("span", {}, "Agent runs ", live ? chip(`${live} live`, "chip-running") : "");
+    return card(title, ...(rows.length ? rows : [empty("No runs in this window. ▶ Run plan, ⌘ Open interactive and the plan actions start one; each opens as its own tab.")]));
   }
 
   private queueCard(): HTMLElement {
     const q = snapshot.runQueue;
     const queue: string[] = Array.isArray(q.queue) ? q.queue.map(String) : [];
     const cursor = typeof q.cursor === "number" ? q.cursor : -1;
-    const rows = queue.slice(0, 6).map((p, i) => h("div", { class: `row ${i === cursor ? "current" : ""}` }, h("span", { class: "dim num-col" }, i === cursor ? "▶" : String(i + 1)), h("span", { class: "grow ellipsis" }, p.replace(/\.plan\.md$/, "")), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
+    const hold = queueHold(q, queue, cursor);
+    const mark = (i: number) => (i !== cursor ? String(i + 1) : hold ? "⏸" : "▶");
+    const rows = queue.slice(0, 6).map((p, i) => h("div", { class: `row ${i === cursor ? (hold ? "held" : "current") : ""}` }, h("span", { class: "dim num-col" }, mark(i)), h("span", { class: "grow ellipsis" }, p.replace(/\.plan\.md$/, "")), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
+    const held = hold ? [h("div", { class: "queue-held" }, chip("held", "chip-gate"), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
     const more = btn("Open Queue", () => this.host.showTab("queue"), { class: "link" });
-    return card("Queue", ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), more);
+    return card("Queue", ...held, ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), more);
   }
 
   private flightCard(): HTMLElement {
@@ -306,10 +406,12 @@ export class QueueView extends View {
     const queue: string[] = Array.isArray(q.queue) ? q.queue.map(String) : [];
     const cursor = typeof q.cursor === "number" ? q.cursor : -1;
     const plans = new Map(snapshot.plans().map((p) => [p.file, p]));
+    const hold = queueHold(q, queue, cursor);
     const head = h(
       "section",
       { class: "hero" },
-      h("div", { class: "hero-top" }, h("div", { class: "grow" }, h("div", { class: "hero-kicker dim" }, "run-plan-all"), h("h2", {}, queue.length ? `${queue.length} plans · cursor ${cursor >= 0 ? cursor + 1 : "-"}` : "No queue")), q.nextUpPlan ? chip(`next up ${String(q.nextUpPlan).replace(/\.plan\.md$/, "")}`) : ""),
+      h("div", { class: "hero-top" }, h("div", { class: "grow" }, h("div", { class: "hero-kicker dim" }, "run-plan-all"), h("h2", {}, queue.length ? `${queue.length} plans · cursor ${cursor >= 0 ? cursor + 1 : "-"}${hold ? " · held" : ""}` : "No queue")), hold ? chip("held", "chip-gate") : "", q.nextUpPlan ? chip(`next up ${String(q.nextUpPlan).replace(/\.plan\.md$/, "")}`) : ""),
+      ...(hold ? [h("div", { class: "queue-held" }, h("span", { class: "grow" }, holdText(hold, queue[cursor]), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
       h(
         "div",
         { class: "actions" },
@@ -320,11 +422,11 @@ export class QueueView extends View {
     );
     const rows = queue.map((file, i) => {
       const p = plans.get(file);
-      const state = i < cursor ? "past" : i === cursor ? "current" : "future";
+      const state = i < cursor ? "past" : i === cursor ? (hold ? "held" : "current") : "future";
       const r = h(
         "div",
         { class: `q-row ${state}` },
-        h("span", { class: "q-idx" }, i === cursor ? "▶" : String(i + 1)),
+        h("span", { class: "q-idx" }, i !== cursor ? String(i + 1) : hold ? "⏸" : "▶"),
         h("div", { class: "grow" }, h("div", { class: "ellipsis" }, h("strong", {}, file.replace(/\.plan\.md$/, ""))), p ? h("div", { class: "dim small ellipsis" }, p.currentTodo ? `${p.currentTodo.id}` : p.overview) : h("div", { class: "dim small" }, "plan file not in the snapshot")),
         ...(q.outcomes?.[file] ? [chip(String(q.outcomes[file]), String(q.outcomes[file]) === "completed" ? "chip-done" : "chip-parked")] : []),
         ...(p ? [lifecycleChip(p.lifecycle), h("div", { class: "plan-progress" }, bar(p.progress.completed, p.progress.total), h("span", { class: "dim small" }, `${p.progress.completed}/${p.progress.total}`))] : []),

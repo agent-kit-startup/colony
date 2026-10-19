@@ -58,11 +58,15 @@ pub fn jail(state: &AppState, p: &str) -> Result<PathBuf, String> {
             parent.join(file)
         }
     };
-    // The Colony settings file is the one path outside the folder the editor may open.
+    // The Colony settings file may be opened from outside the folder.
     let settings_file = crate::settings::settings_path(state)
         .ok()
         .and_then(|s| Some(s.parent()?.canonicalize().ok()?.join(s.file_name()?)));
     if settings_file.is_some_and(|s| s == resolved) {
+        return Ok(resolved);
+    }
+    // So are the agent context files an agent tab listed (context.rs), e.g. ~/.claude/CLAUDE.md.
+    if crate::context::allowed(&resolved) {
         return Ok(resolved);
     }
     if !resolved.starts_with(&root) {
