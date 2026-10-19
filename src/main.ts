@@ -148,8 +148,10 @@ function renderTabs() {
     });
   const pins = els.filter((e) => e.classList.contains("pin"));
   const docs = els.filter((e) => !e.classList.contains("pin"));
-  bar.replaceChildren(...pins, ...(docs.length ? [h("span", { class: "tab-sep" })] : []), ...docs);
-  bar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // Pinned views stay in place; only the document tabs (runs, terminals, files) scroll.
+  const docBar = h("div", { class: "tabs-docs" }, ...docs);
+  bar.replaceChildren(h("div", { class: "tabs-pins" }, ...pins), ...(docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
+  docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 function showTab(id: string) {

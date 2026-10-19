@@ -212,6 +212,10 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 .tabbar .tab.pin { padding: 6px 10px; gap: 6px; font-weight: 500; }
 .tabbar .tab .badge { margin-left: -2px; }
 .badge.muted { background: var(--bg-3); color: var(--fg-dim); }
+#tabs { overflow: hidden; }
+.tabs-pins { display: flex; flex: none; gap: 1px; }
+.tabs-docs { display: flex; gap: 1px; overflow-x: auto; min-width: 0; flex: 1; }
+.tabs-docs::-webkit-scrollbar { height: 3px; }
 .tab-sep { width: 1px; background: var(--line); margin: 6px 4px; flex: none; }
 .tabbar .tab.run-live .tab-icon { color: var(--ok); }
 .tabbar .tab.run-gate .tab-icon { color: var(--warn); }
