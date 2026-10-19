@@ -60,7 +60,7 @@ export class ContextStrip {
     const memNote = mem ? (mem.exists ? ` · memory ${mem.lines ?? "?"} lines${mem.files !== null ? ` + ${mem.files} files` : ""}` : " · no project memory") : "";
     this.summary.replaceChildren(
       h("span", { class: "ctx-title" }, "Context sources"),
-      h("span", { class: "dim" }, ` · ${r.family} · ${found.length} of ${r.sources.length} found · ${lines} lines${memNote} · ${home(r.cwd)}`),
+      h("span", { class: "ctx-meta" }, `\u00a0· ${r.family} · ${found.length} of ${r.sources.length} found · ${lines} lines${memNote} · ${home(r.cwd)}`),
     );
     const rows = r.sources.map((s) => {
       const row = h(
@@ -69,7 +69,7 @@ export class ContextStrip {
         h("span", { class: `chip ${s.exists ? "chip-done" : ""}` }, s.exists ? "✓" : "–"),
         h("span", { class: "ctx-label" }, s.label),
         h("span", { class: "ctx-path mono ellipsis grow" }, home(s.path)),
-        h("span", { class: "dim small ctx-detail" }, detail(s)),
+        h("span", { class: "ctx-detail" }, detail(s)),
       );
       row.dataset.path = s.path;
       row.dataset.kind = s.kind;

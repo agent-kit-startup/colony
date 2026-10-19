@@ -915,6 +915,9 @@ async function runSmoke(root: string, info: StartupInfo) {
     showTab("plans");
     await wait(200);
     await shot("plans");
+    showTab("queue");
+    await wait(200);
+    await shot("queue");
     // Live update: a new plan file under .cursor/ reaches the Plans view over SSE. Its one
     // to-do is already completed, so a real `agent-kit run-plan` later in the smoke finds
     // nothing to do (plan exhausted) and never starts an agent.
@@ -1006,6 +1009,11 @@ async function runSmoke(root: string, info: StartupInfo) {
     showTab("mission");
     await wait(200);
     await shot("legacy");
+    for (const id of ["plans", "queue"]) {
+      showTab(id);
+      await wait(200);
+      await shot(`legacy-${id}`);
+    }
     reloaded = frameLoad();
     pickSkin("bare-metal");
     await Promise.race([reloaded, wait(8000)]);
