@@ -6,6 +6,7 @@
 // stays one click away.
 import { errText, h, type TickReview } from "./api";
 import { gateControls } from "./agent";
+import { ContextStrip } from "./contextstrip";
 import { type Ev, type Run, type RunItem, runLabel, runs } from "./runs";
 
 const RESULT_MAX = 6000;
@@ -14,6 +15,8 @@ export interface TranscriptHost {
   openRepoFile(rel: string, root: string): void;
   showReview(review: TickReview): void;
   status(msg: string): void;
+  /** Open an absolute path (a context source) in the operator's editor. */
+  openInEditor(path: string): void;
 }
 
 /** Inline markdown subset (code, bold) as DOM nodes; never innerHTML. */
@@ -105,14 +108,17 @@ export class AgentTab {
   private gates = new Map<string, HTMLElement>();
   private stderrGroup: { el: HTMLElement; body: HTMLElement; n: number } | null = null;
   private off: () => void;
+  readonly context: ContextStrip;
 
   constructor(readonly run: Run, private host: TranscriptHost) {
+    this.context = new ContextStrip(run.root, run.backend, (p) => host.openInEditor(p));
     const gotoGate = h("button", { class: "icon", title: "Jump to the open gate" }, "‖ gate");
     gotoGate.addEventListener("click", () => this.scrollToGate());
     this.el = h(
       "div",
       { class: "run-view" },
       h("div", { class: "run-head" }, this.chip, this.title, h("span", { class: "spacer" }), gotoGate, this.rawBtn, this.stopBtn, this.killBtn),
+      this.context.el,
       h("div", { class: "run-body" }, this.tr, this.raw),
     );
     this.el.dataset.run = String(run.id);

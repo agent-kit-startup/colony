@@ -7,14 +7,17 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
+import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
 import { FileTree } from "./filetree";
 import { GitView } from "./git";
 import { InboxView } from "./inbox";
+import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
+import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
@@ -304,11 +307,15 @@ const centerTerms = new Map<string, TermView>();
 let termCounter = 0;
 new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 
-async function openTermTab(argv: string[], label: string, tip: string, icon: string): Promise<{ id: string; view: TermView } | undefined> {
+/** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
+type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
+
+async function openTermTab(argv: string[], label: string, tip: string, icon: string, agent?: TermAgent): Promise<{ id: string; view: TermView } | undefined> {
   const id = `term:${++termCounter}`;
   const el = h("div", { class: "term-center" });
   const pane = h("div", { class: "term-pane" });
-  el.append(pane);
+  if (agent && workspace) el.append(new ContextStrip(workspace.root, agent.engine, (p) => void openInEditor(p)).el);
+  el.append(h("div", { class: "term-wrap" }, pane));
   $("views").append(el);
   const view = new TermView(pane);
   centerTerms.set(id, view);
@@ -328,10 +335,12 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
     close: () => {
       view.dispose();
       centerTerms.delete(id);
+      launches.dropTerm(id);
       return true;
     },
   });
   view.onExit = () => renderTabs();
+  if (agent && workspace) launches.addTerm({ tabId: id, kind: agent.kind, plan: agent.plan, backend: agent.backend, root: workspace.root, label, view, el });
   try {
     await view.spawn(argv);
   } catch (e) {
@@ -364,7 +373,7 @@ const host: CockpitHost = {
     try {
       const l = await api.termLaunch({ kind: "run-plan-all", engine, model: controls.model.value.trim(), dryRun: smokeDryRun });
       status(l.note);
-      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶");
+      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶", { kind: "queue", plan: "", backend: engine, engine });
     } catch (e) {
       status(`Run queue: ${errText(e)}`);
     }
@@ -379,7 +388,8 @@ const host: CockpitHost = {
     try {
       const l = await api.termLaunch({ kind: "interactive", engine, model: controls.model.value.trim(), prompt });
       if (l.note) status(l.note);
-      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘");
+      const vendor = l.label.split(" ")[0];
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: promptPlan(prompt), backend: vendor, engine: vendor });
     } catch (e) {
       status(`Open interactive: ${errText(e)}`);
     }
@@ -394,6 +404,7 @@ const host: CockpitHost = {
   copy: (text, what) => {
     void copyText(text).then((ok) => status(ok ? `Copied ${what}` : `Could not copy ${what}`));
   },
+  workspaceRoot: () => workspace?.root ?? "",
 };
 
 $("btn-run").addEventListener("click", () => void host.runPlan());
@@ -458,6 +469,7 @@ function openRunTab(run: Run) {
         void reviewView.show(rv, rv.files[0] ?? { status: "M", path: "" }).catch(() => {});
       },
       status,
+      openInEditor: (p) => void openInEditor(p),
     });
     agentTabs.set(run.id, t);
   }
@@ -1124,6 +1136,7 @@ async function runSmoke(root: string, info: StartupInfo) {
       );
       await log("interactive-tab", "argv" in l && /\/claude$/.test(l.argv[0]), { resolved: l, spawned: false, why: "the smoke never starts a real vendor session" });
     }
+    await smokeLive({ root, fixture, planFile, runId: run.id, log, wait, until, view, shot, host, activeTab: () => activeTab, closeTab, openInEditor, picker: controls.backend });
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");
