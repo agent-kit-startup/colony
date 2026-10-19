@@ -3,7 +3,9 @@
  * Source snapshot: agent-kit dashboard/dashboard.html, the `:root` /
  * `html[data-dashboard-skin=...]` blocks at lines 42-126 (kit commit 485f599a on staging,
  * file last changed in 7d0b7e0c; byte-identical to the published @dadado/agent-kit-cli
- * 6.2.0 dashboard). Values are copied, never parsed from the dashboard at runtime.
+ * 6.2.0 dashboard), plus --text-muted in both skins from agent-kit-dev PR #1237
+ * (WCAG AA, >= 4.5:1 on every bg-* surface incl. hover: Bare Metal #8b8b8b, Legacy
+ * #7f93a8). Values are copied, never parsed from the dashboard at runtime.
  *
  * Names are the dashboard's own (--bg-primary, --border, --text-muted, --green-bg,
  * --mc-radius-chrome, --mc-space-lg ...) so the kit's planned skin token contract
@@ -25,7 +27,7 @@ html[data-skin="bare-metal"] {
   --border-active: #3a3a3a;
   --text-primary: #e4e4e4;
   --text-secondary: #a0a0a0;
-  --text-muted: #6e6e6e;
+  --text-muted: #8b8b8b;
 }
 html[data-skin="legacy"] {
   --bg-primary: #0b0e14;
@@ -36,7 +38,7 @@ html[data-skin="legacy"] {
   --border-active: #2a3a5a;
   --text-primary: #e2e8f0;
   --text-secondary: #8899aa;
-  --text-muted: #6d8094;
+  --text-muted: #7f93a8;
 }
 :root {
   /* Semantic colors (shared by both skins). */
