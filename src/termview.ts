@@ -6,7 +6,21 @@ import "@xterm/xterm/css/xterm.css";
 import { api, Channel, errText, focusPolicy, type PtyEvent } from "./api";
 import { onSkin, token } from "./skin";
 
-const termTheme = () => ({ background: token("--mc-bg-primary"), foreground: token("--mc-text-primary"), selectionBackground: token("--mc-selection") });
+// The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
+const termTheme = () => ({
+  background: token("--mc-bg-primary"),
+  foreground: token("--mc-text-primary"),
+  cursor: token("--text-primary"),
+  cursorAccent: token("--bg-primary"),
+  selectionBackground: token("--mc-selection"),
+  red: token("--red"),
+  green: token("--green"),
+  yellow: token("--yellow"),
+  blue: token("--blue"),
+  magenta: token("--purple"),
+  cyan: token("--cyan"),
+  brightBlack: token("--text-muted"),
+});
 
 export class TermView {
   readonly term: Terminal;

@@ -1,5 +1,6 @@
-// Window skins. One design token set (`--mc-*` in styles.css) with two palettes for the
-// whole window, Colony chrome, native views and the Mission Control web panel alike:
+// Window skins. One design token set (src/tokens.css, named as in the kit dashboard) with
+// two palettes for the whole window, Colony chrome, native views and the Mission Control
+// web panel alike:
 // "Bare Metal" (default, neutral greys) and "Legacy" (the kit panel's original slate
 // palette). The choice lives in settings.json (`ui.skin`).
 import * as monaco from "monaco-editor";
@@ -44,13 +45,55 @@ export function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+/** A token as #rrggbb[aa] (Monaco only takes hex colors; tokens may be rgba()). */
+export function hexToken(name: string, fallback: string): string {
+  const v = token(name);
+  if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(v)) return v;
+  const m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?\s*\)$/i.exec(v);
+  if (!m) return fallback;
+  const hx = (n: number) => Math.round(n).toString(16).padStart(2, "0");
+  return `#${hx(+m[1])}${hx(+m[2])}${hx(+m[3])}${m[4] !== undefined ? hx(+m[4] * 255) : ""}`;
+}
+
+/** Monaco on the skin's surfaces (editor, gutter, widgets, selection, scrollbars). */
 function defineMonacoTheme() {
-  const bg = token("--mc-bg-primary") || "#141414";
+  const t = (n: string, f: string) => hexToken(n, f);
+  const bg = t("--bg-primary", "#141414");
   monaco.editor.defineTheme("colony-dark", {
     base: "vs-dark",
     inherit: true,
     rules: [],
-    colors: { "editor.background": bg, "editorGutter.background": bg, "minimap.background": bg },
+    colors: {
+      "editor.background": bg,
+      "editor.foreground": t("--text-primary", "#e4e4e4"),
+      "editorGutter.background": bg,
+      "minimap.background": bg,
+      "editorLineNumber.foreground": t("--text-muted", "#6e6e6e"),
+      "editorLineNumber.activeForeground": t("--text-secondary", "#a0a0a0"),
+      "editor.lineHighlightBackground": t("--bg-secondary", "#181818"),
+      "editor.lineHighlightBorder": t("--bg-secondary", "#181818"),
+      "editor.selectionBackground": t("--mc-selection", "#3b82f64d"),
+      "editorCursor.foreground": t("--text-primary", "#e4e4e4"),
+      "editorIndentGuide.background1": t("--border", "#2a2a2a"),
+      "editorIndentGuide.activeBackground1": t("--border-active", "#3a3a3a"),
+      "editorWidget.background": t("--bg-secondary", "#181818"),
+      "editorWidget.border": t("--border", "#2a2a2a"),
+      "editorHoverWidget.background": t("--bg-secondary", "#181818"),
+      "editorHoverWidget.border": t("--border", "#2a2a2a"),
+      "editorSuggestWidget.background": t("--bg-secondary", "#181818"),
+      "editorSuggestWidget.border": t("--border", "#2a2a2a"),
+      "editorSuggestWidget.selectedBackground": t("--bg-card-hover", "#242424"),
+      "input.background": bg,
+      "input.border": t("--border", "#2a2a2a"),
+      "focusBorder": t("--blue", "#3b82f6"),
+      "scrollbarSlider.background": `${t("--border", "#2a2a2a").slice(0, 7)}cc`,
+      "scrollbarSlider.hoverBackground": t("--border-active", "#3a3a3a"),
+      "scrollbarSlider.activeBackground": t("--border-active", "#3a3a3a"),
+      "diffEditor.insertedTextBackground": t("--green-bg", "#22c55e1f"),
+      "diffEditor.removedTextBackground": t("--red-bg", "#ef44441f"),
+      "diffEditor.insertedLineBackground": t("--green-bg", "#22c55e1f"),
+      "diffEditor.removedLineBackground": t("--red-bg", "#ef44441f"),
+    },
   });
   monaco.editor.setTheme("colony-dark");
 }
