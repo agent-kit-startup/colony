@@ -8,6 +8,7 @@ import { RunControls } from "./agent";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { Editors } from "./editor";
+import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree } from "./filetree";
 import { GitView } from "./git";
 import { InboxView } from "./inbox";
@@ -61,13 +62,14 @@ document.getElementById("app")!.innerHTML = `
     <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button></div>
     <div id="terms"></div>
   </section>
-  <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-env"></span></footer>
+  <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="more-menu" class="menu" hidden>
   <button data-more="web">Mission Control (web panel)</button>
   <button data-more="run-elsewhere">Run plan in another folder…</button>
   <button data-more="refresh">Reload Mission Control data</button>
   <button data-more="terminal">New shell terminal</button>
+  <button data-more="engine">Engine…</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
@@ -515,11 +517,20 @@ menu.addEventListener("click", (ev) => {
       (e) => status(`Skin: ${errText(e)}`),
     );
   }
+  else if (what === "engine") showEngine();
   else if (what === "terminal") {
     toggleTerminal(true);
     void terminals.create();
   }
 });
+
+function showEngine() {
+  void openEnginePanel((m) => {
+    status(m);
+    void refreshEngineBadge($("st-engine"));
+  });
+}
+$("st-engine").addEventListener("click", showEngine);
 
 function renderSkinMenu() {
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
@@ -705,7 +716,8 @@ async function openWorkspace(path: string) {
     const mc = await api.dashboardStart();
     mcUrl = mc.url;
     mcOrigin = new URL(mc.url).origin;
-    $("st-mc").title = `${mc.servePath}\nlog: ${mc.logPath}`;
+    $("st-mc").title = `${mc.servePath}\nengine: ${mc.engine}\nlog: ${mc.logPath}`;
+    void refreshEngineBadge($("st-engine"));
     await snapshot.connect();
   } catch (e) {
     snapshot.feed.error = errText(e);
@@ -845,6 +857,16 @@ async function runSmoke(root: string, info: StartupInfo) {
     const gotData = await until(() => !!snapshot.data, 20000);
     const d = snapshot.data ?? {};
     await log("mc-snapshot", gotData && typeof d.dashboardDataVersion === "string", { version: d.dashboardDataVersion, plans: snapshot.plans().length, branch: snapshot.git.branch, feed: snapshot.feed });
+    // Managed engine (engine.rs): which engine the Mission Control server runs on.
+    const eng = await api.engineStatus();
+    const viaEngine = eng.source === "env" || eng.source === "managed";
+    await log("engine", !!eng.dashboard && (!viaEngine || eng.dashboard === eng.label), { source: eng.source, label: eng.label, dashboard: eng.dashboard, version: eng.manifest?.version ?? null, node: eng.node, nodeVersion: eng.nodeVersion, nodeSource: eng.nodeSource, agentRuns: info.agentKit });
+    showEngine();
+    await until(() => !!document.querySelector("#engine-panel .engine-actions"), 5000);
+    const panel = document.querySelector("#engine-panel")?.textContent ?? "";
+    await log("engine-panel", panel.includes(eng.label) && panel.includes("Install Node runtime"), panel.slice(0, 240));
+    await shot("engine");
+    closeEnginePanel();
     showTab("mission");
     await wait(300);
     const hero = view("mission").querySelector(".hero")?.textContent ?? "";
@@ -1144,7 +1166,8 @@ api
   .then(async (info: StartupInfo) => {
     $("st-env").textContent = `v${info.version} · DMA-BUF ${info.webkitDmabuf}`;
     $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("agent-kit CLI not found on PATH: Mission Control and agent runs need it");
+    if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
+    void refreshEngineBadge($("st-engine"));
     if (info.smoke) focusPolicy.enabled = false;
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];

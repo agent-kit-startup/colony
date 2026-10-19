@@ -2,6 +2,7 @@
 
 mod agent;
 mod dashboard;
+mod engine;
 mod gitops;
 mod launch;
 mod mcdata;
@@ -193,7 +194,7 @@ pub fn run() {
         initial_workspace: initial_workspace(),
         webkit_dmabuf: dmabuf,
         path_added: added.iter().map(|p| p.display().to_string()).collect(),
-        agent_kit: tools::agent_kit_bin().map(|p| p.display().to_string()),
+        agent_kit: engine::kit_command().ok().map(|k| format!("{} ({})", k.display(), k.source)),
         node: tools::node_bin().map(|p| p.display().to_string()),
         git: tools::git_bin().map(|p| p.display().to_string()),
         smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
@@ -216,6 +217,10 @@ pub fn run() {
             workspace::create_text_file,
             dashboard::dashboard_start,
             dashboard::dashboard_stop,
+            engine::engine_status,
+            engine::engine_install,
+            engine::engine_rollback,
+            engine::engine_install_node,
             mcdata::mc_snapshot,
             mcdata::mc_config,
             mcdata::mc_subscribe,
