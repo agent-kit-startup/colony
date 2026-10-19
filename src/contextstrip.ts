@@ -5,11 +5,7 @@
 // a memory index about other projects, becomes visible. A row opens the file in the
 // operator's editor. Read-only: Colony never edits these files from here.
 import { api, type ContextReport, type ContextSource, errText, h } from "./api";
-
-function size(n: number | null): string {
-  if (n === null) return "";
-  return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
-}
+import { bytes } from "./ui";
 
 function home(path: string): string {
   const m = /^\/home\/[^/]+|^\/root/.exec(path);
@@ -18,7 +14,7 @@ function home(path: string): string {
 
 function detail(s: ContextSource): string {
   if (!s.exists) return s.kind === "memory" ? "none for this folder" : "missing";
-  const parts = [s.lines !== null ? `${s.lines} line${s.lines === 1 ? "" : "s"}` : "", size(s.bytes)];
+  const parts = [s.lines !== null ? `${s.lines} line${s.lines === 1 ? "" : "s"}` : "", s.bytes === null ? "" : bytes(s.bytes)];
   if (s.files !== null) parts.push(`${s.files} ${s.kind === "rules" ? "rule" : "memory"} file${s.files === 1 ? "" : "s"}`);
   return parts.filter(Boolean).join(" · ");
 }

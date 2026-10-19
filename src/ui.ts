@@ -136,6 +136,7 @@ const CARD_ICONS: Record<string, IconKind> = {
   "Current mission": "current-mission",
   "Needs you": "inbox",
   "Agent runs": "monitor",
+  Chats: "commands",
   Queue: "queue",
   "Queue status (HANDOFF)": "queue",
   "Flight Log": "field-report",
@@ -178,6 +179,13 @@ export function card(title: string | CardHead | Node, ...children: (Node | strin
 
 export function empty(text: string): HTMLElement {
   return h("div", { class: "empty dim" }, text);
+}
+
+/** A byte count as B, KB (one decimal under 10 KB) or MB. */
+export function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function ago(iso: unknown): string {

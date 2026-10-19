@@ -29,6 +29,11 @@ const BACKEND_INFO: &[(&str, &str, &str)] = &[
     ("auto", "", "cursor-agent if on PATH, else claude (never codex or cursor-acp)"),
 ];
 
+/// The vendor CLIs of the backend table (`claude`, `codex`, `cursor-agent`; may repeat).
+pub(crate) fn vendor_bins() -> impl Iterator<Item = &'static str> {
+    BACKEND_INFO.iter().map(|(_, bin, _)| *bin).filter(|b| !b.is_empty())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendChoice {
