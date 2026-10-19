@@ -391,3 +391,13 @@ input.search { width: 220px; max-width: 100%; }
 .menu-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); padding: 4px 10px 2px; }
 #st-mc.bad { color: var(--mc-red); }
 @media (max-width: 1150px) { #btn-quick, #btn-editor { display: none; } #ws-name { max-width: 22vw; } }
+
+/* Engine panel (src/engine.ts) */
+#engine-panel { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+.engine-box { width: min(680px, 92vw); background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; max-height: 80vh; overflow: auto; }
+.engine-row { display: grid; grid-template-columns: 130px 1fr; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.engine-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.engine-msg { font-size: 12px; overflow-wrap: anywhere; }
+.engine-box .warn, #st-engine.warn { color: var(--warn); }
+.engine-box .bad, #st-engine.bad { color: var(--danger); }
+#st-engine { cursor: pointer; margin-right: 10px; }

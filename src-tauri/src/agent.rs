@@ -169,7 +169,7 @@ pub fn agent_start(
     if runs.values().any(|r| r.root == root) {
         return Err(format!("A run is already active in {} (the kit has no run lock: one run per folder)", root.display()));
     }
-    let bin = tools::agent_kit_bin().ok_or("agent-kit CLI not found on PATH")?;
+    let kit = crate::engine::kit_command()?;
     let id = state.agents.next.fetch_add(1, Ordering::SeqCst) + 1;
     let ticks = max_ticks.unwrap_or(10).clamp(1, 200).to_string();
     let mut args: Vec<&str> = vec!["run-plan", "--events", "ndjson", "--backend", backend.as_str(), "--max-ticks", ticks.as_str()];
@@ -179,9 +179,10 @@ pub fn agent_start(
     if let Some(m) = &model {
         args.extend(["--model", m.as_str()]);
     }
-    let mut cmd = Command::new(&bin);
+    let mut cmd = Command::new(&kit.program);
     tools::die_with_parent(&mut cmd);
     let mut child = cmd
+        .args(&kit.args)
         .args(&args)
         .arg("--cwd")
         .arg(&root)
@@ -237,7 +238,7 @@ pub fn agent_start(
     runs.insert(id, AgentRun { root: root.clone(), child, stdin });
     Ok(AgentStarted {
         id,
-        cmd: format!("{} {} --cwd {}", bin.display(), args.join(" "), root.display()),
+        cmd: format!("{} {} --cwd {}", kit.display(), args.join(" "), root.display()),
         root: root.display().to_string(),
         backend,
     })

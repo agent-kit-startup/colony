@@ -14,7 +14,30 @@ export interface StartupInfo {
 }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }
-export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string }
+export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string; engine: string }
+export interface EngineManifest { name: string; version: string; node: string; driverProtocol: string; dashboardDataVersion: string | null; entry: string; dashboardServe: string }
+export interface EngineStatus {
+  source: "env" | "managed" | "unmanaged" | "none";
+  label: string;
+  root: string | null;
+  manifest: EngineManifest | null;
+  error: string | null;
+  note: string | null;
+  node: string | null;
+  nodeVersion: string | null;
+  nodeSource: string | null;
+  nodeError: string | null;
+  nodePin: string;
+  installed: { version: string; current: boolean; supported: boolean; reason: string | null }[];
+  previous: string | null;
+  dataDir: string | null;
+  supported: string;
+  releaseRepo: string;
+  dashboard: string | null;
+  agentKitOverride: string | null;
+  dashboardOverride: string | null;
+}
+export interface EngineInstallReport { version: string; path: string; sha256: string; signature: string; previous: string | null }
 export type PtyEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null };
 export type AgentEvent =
   | { kind: "event"; line: string }
@@ -58,6 +81,10 @@ export const api = {
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   createTextFile: (path: string, contents: string) => invoke<string>("create_text_file", { path, contents }),
   dashboardStart: () => invoke<DashboardInfo>("dashboard_start"),
+  engineStatus: () => invoke<EngineStatus>("engine_status"),
+  engineInstall: (version?: string) => invoke<EngineInstallReport>("engine_install", { version: version || null }),
+  engineRollback: () => invoke<string>("engine_rollback"),
+  engineInstallNode: () => invoke<string>("engine_install_node"),
   mcSnapshot: () => invoke<string>("mc_snapshot"),
   mcConfig: () => invoke<string | null>("mc_config"),
   mcSubscribe: (onEvent: Channel<McEvent>) => invoke<void>("mc_subscribe", { onEvent }),

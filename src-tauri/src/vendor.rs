@@ -100,8 +100,11 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, dry
             if !agent::BACKENDS.contains(&engine) {
                 return Err(format!("Unknown backend: {engine}"));
             }
-            let bin = find("agent-kit").ok_or("agent-kit CLI not found on PATH")?;
-            let mut argv = vec![bin.clone(), "run-plan-all".into(), "--backend".into(), engine.into()];
+            let bin = find("agent-kit").ok_or("No Agent Kit engine (More → Engine) and no agent-kit on PATH")?;
+            // A managed engine runs as `<node> <engine>/dist/index.js` (engine.rs).
+            let mut argv = vec![bin.clone()];
+            argv.extend(find("agent-kit-entry"));
+            argv.extend(["run-plan-all".into(), "--backend".into(), engine.into()]);
             if let Some(m) = model {
                 argv.extend(["--model".to_string(), m.to_string()]);
             }
@@ -116,7 +119,8 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, dry
 
 fn find_real(name: &str) -> Option<String> {
     let found = match name {
-        "agent-kit" => tools::agent_kit_bin(),
+        "agent-kit" => crate::engine::kit_command().ok().map(|k| k.program),
+        "agent-kit-entry" => crate::engine::kit_command().ok().and_then(|k| k.args.into_iter().next()),
         "claude" => tools::find_bin("claude", Some("COLONY_CLAUDE_BIN")),
         "codex" => tools::find_bin("codex", Some("COLONY_CODEX_BIN")),
         _ => None,
@@ -172,5 +176,13 @@ mod tests {
         assert_eq!(l.argv, vec!["/bin/agent-kit", "run-plan-all", "--backend", "codex", "--dry-run"]);
         assert!(plan("run-plan-all", "nope", None, None, false, &find).is_err());
         assert!(plan("run-plan-all", "claude", Some("--x"), None, false, &find).is_err());
+        // Managed engine: node plus the engine entry.
+        let managed = |name: &str| match name {
+            "agent-kit" => Some("/data/runtime/node".to_string()),
+            "agent-kit-entry" => Some("/data/engine/6.3.0/dist/index.js".to_string()),
+            _ => None,
+        };
+        let l = plan("run-plan-all", "claude", None, None, false, &managed).unwrap();
+        assert_eq!(l.argv, vec!["/data/runtime/node", "/data/engine/6.3.0/dist/index.js", "run-plan-all", "--backend", "claude"]);
     }
 }
