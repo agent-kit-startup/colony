@@ -68,7 +68,7 @@ function defineMonacoTheme() {
       "editor.foreground": t("--text-primary", "#e4e4e4"),
       "editorGutter.background": bg,
       "minimap.background": bg,
-      "editorLineNumber.foreground": t("--text-muted", "#6e6e6e"),
+      "editorLineNumber.foreground": t("--text-muted", "#8b8b8b"),
       "editorLineNumber.activeForeground": t("--text-secondary", "#a0a0a0"),
       "editor.lineHighlightBackground": t("--bg-secondary", "#181818"),
       "editor.lineHighlightBorder": t("--bg-secondary", "#181818"),
