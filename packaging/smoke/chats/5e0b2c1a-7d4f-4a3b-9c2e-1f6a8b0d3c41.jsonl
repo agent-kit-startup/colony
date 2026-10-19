@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"Open a terminal chat for the Colony smoke"},"uuid":"u1","sessionId":"5e0b2c1a-7d4f-4a3b-9c2e-1f6a8b0d3c41","cwd":"/smoke"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]},"uuid":"a1","sessionId":"5e0b2c1a-7d4f-4a3b-9c2e-1f6a8b0d3c41"}
+{"type":"ai-title","aiTitle":"Colony smoke terminal","sessionId":"5e0b2c1a-7d4f-4a3b-9c2e-1f6a8b0d3c41"}
+{"type":"custom-title","customTitle":"old name","sessionId":"5e0b2c1a-7d4f-4a3b-9c2e-1f6a8b0d3c41"}
+{"type":"custom-title","customTitle":"Colony terminal chat","sessionId":"5e0b2c1a-7d4f-4a3b-9c2e-1f6a8b0d3c41"}

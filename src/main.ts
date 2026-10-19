@@ -5,6 +5,8 @@
 // under More as a fallback.
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
+import { chats } from "./chats";
+import { chatSmoke } from "./chatsmoke";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
@@ -346,6 +348,14 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
   });
   view.onExit = () => renderTabs();
   if (agent && workspace) launches.addTerm({ tabId: id, kind: agent.kind, plan: agent.plan, backend: agent.backend, root: workspace.root, label, view, el });
+  if (agent?.kind === "interactive" && agent.engine === "claude") {
+    // Claude Code has saved (or updated) the session by now: list it under Chats.
+    const prevExit = view.onExit;
+    view.onExit = (code) => {
+      prevExit(code);
+      void chats.refresh();
+    };
+  }
   try {
     await view.spawn(argv);
   } catch (e) {
@@ -354,6 +364,9 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
   }
   return { id, view };
 }
+
+/** Saved chat (session id) -> the terminal tab that resumed it. */
+const chatTabs = new Map<string, string>();
 
 let confirmAction = (message: string, title: string) => ask(message, { title, kind: "info" });
 let smokeDryRun = false;
@@ -397,6 +410,25 @@ const host: CockpitHost = {
       return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: promptPlan(prompt), backend: vendor, engine: vendor });
     } catch (e) {
       status(`Open interactive: ${errText(e)}`);
+    }
+  },
+  resumeChat: async (id, title) => {
+    if (!workspace) return status("Open a folder first");
+    const open = chatTabs.get(id);
+    const openView = open ? centerTerms.get(open) : undefined;
+    if (open && openView && tabs.has(open) && !openView.exited) {
+      showTab(open);
+      return { id: open, view: openView };
+    }
+    try {
+      const l = await api.termLaunch({ kind: "interactive", engine: "claude", resume: id });
+      if (l.note) status(l.note);
+      const label = !title ? l.label : title.length > 32 ? `${title.slice(0, 31)}…` : title;
+      const t = await openTermTab(l.argv, label, `${title || "Untitled chat"}\n${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
+      if (t) chatTabs.set(id, t.id);
+      return t;
+    } catch (e) {
+      status(`Resume chat: ${errText(e)}`);
     }
   },
   showTab,
@@ -726,6 +758,9 @@ async function openWorkspace(path: string) {
   editors.closeAll();
   terminals.closeAll();
   snapshot.reset();
+  chatTabs.clear();
+  chats.reset();
+  void chats.refresh();
   mcUrl = "";
   mcOrigin = "";
   mcFrame.removeAttribute("src");
@@ -1186,6 +1221,8 @@ async function runSmoke(root: string, info: StartupInfo) {
       await log("interactive-tab", "argv" in l && /\/claude$/.test(l.argv[0]), { resolved: l, spawned: false, why: "the smoke never starts a real vendor session" });
     }
     await smokeLive({ root, fixture, planFile, runId: run.id, log, wait, until, view, shot, host, activeTab: () => activeTab, closeTab, openInEditor, picker: controls.backend });
+    await terminals.create(); // a fresh shell tab: earlier steps may have closed the active one
+    await chatSmoke({ root, fixture, log, wait, until, view, shot, showTab, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab, tabLabel: (id) => tabs.get(id)?.label ?? "", termCount: () => centerTerms.size, closeTab });
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");

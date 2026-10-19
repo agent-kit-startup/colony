@@ -4,7 +4,9 @@
 //!   the opened folder, on the user's own login. Colony passes no credentials and reads
 //!   none: the child inherits the environment exactly like the shell tab does. An optional
 //!   first prompt is one allowlisted kit slash command (e.g. `/run-plan <plan>`), passed as
-//!   the CLI's own positional prompt argument.
+//!   the CLI's own positional prompt argument. Instead of a prompt it may resume a saved
+//!   session of the folder (chats.rs): `claude --resume <session uuid>`, the id checked
+//!   as a UUID here before it reaches argv.
 //! - `run-plan-all`: `agent-kit run-plan-all` in a PTY tab. The kit has no driver mode for
 //!   the queue runner (driver protocol scope: `run-plan` only), so its numbered-list gates
 //!   are answered in that terminal, which is how the CLI expects them.
@@ -13,7 +15,7 @@
 
 use serde::Serialize;
 
-use crate::{agent, tools};
+use crate::{agent, chats, tools};
 
 /// Slash commands a cockpit button may hand to an interactive agent as its first prompt.
 const PROMPT_SLASH: &[&str] = &["run-plan", "continue-plan", "backlog-edit", "archive-plan", "plan-review-triage", "field-report-resolve", "run-plan-all", "handoff", "summary"];
@@ -67,12 +69,15 @@ fn vendor_for(engine: &str, find: &dyn Fn(&str) -> Option<String>) -> Result<(St
     Err(format!("{} not found on PATH", order.join(" or ")))
 }
 
-fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, dry_run: bool, find: &dyn Fn(&str) -> Option<String>) -> Result<TermLaunch, String> {
+fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, resume: Option<&str>, dry_run: bool, find: &dyn Fn(&str) -> Option<String>) -> Result<TermLaunch, String> {
     let model = model.map(str::trim).filter(|m| !m.is_empty());
     if let Some(m) = model {
         if !agent::valid_model(m) {
             return Err(format!("Not a model id: {m}"));
         }
+    }
+    if resume.is_some() && kind != "interactive" {
+        return Err(format!("{kind} cannot resume a session"));
     }
     match kind {
         "interactive" => {
@@ -82,8 +87,22 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, dry
                     return Err(format!("Not an allowlisted kit command: {p}"));
                 }
             }
+            let resume = resume.map(str::trim).filter(|r| !r.is_empty());
+            if let Some(r) = resume {
+                if !chats::is_session_id(r) {
+                    return Err(format!("Not a session id: {r}"));
+                }
+                if prompt.is_some() || engine != "claude" {
+                    return Err("Resume opens claude with the session alone (no prompt, no other engine)".into());
+                }
+            }
             let (name, bin, note) = vendor_for(engine, find)?;
             let mut argv = vec![bin.clone()];
+            if let Some(r) = resume {
+                // The resumed session keeps its own model.
+                argv.extend(["--resume".to_string(), r.to_string()]);
+                return Ok(TermLaunch { argv, label: format!("{name} --resume {}", &r[..8]), bin, note });
+            }
             if let Some(m) = model {
                 argv.extend([if name == "codex" { "-m" } else { "--model" }.to_string(), m.to_string()]);
             }
@@ -131,8 +150,8 @@ fn find_real(name: &str) -> Option<String> {
 /// Resolve the argv for a terminal-tab launch; the page then spawns it with `pty_spawn`
 /// (cwd = the opened folder).
 #[tauri::command]
-pub fn term_launch(kind: String, engine: String, model: Option<String>, prompt: Option<String>, dry_run: Option<bool>) -> Result<TermLaunch, String> {
-    plan(&kind, &engine, model.as_deref(), prompt.as_deref(), dry_run.unwrap_or(false), &find_real)
+pub fn term_launch(kind: String, engine: String, model: Option<String>, prompt: Option<String>, resume: Option<String>, dry_run: Option<bool>) -> Result<TermLaunch, String> {
+    plan(&kind, &engine, model.as_deref(), prompt.as_deref(), resume.as_deref(), dry_run.unwrap_or(false), &find_real)
 }
 
 #[cfg(test)]
@@ -159,30 +178,46 @@ mod tests {
 
     #[test]
     fn interactive_argv() {
-        let l = plan("interactive", "claude", None, Some("/run-plan demo.plan.md"), false, &find).unwrap();
+        let l = plan("interactive", "claude", None, Some("/run-plan demo.plan.md"), None, false, &find).unwrap();
         assert_eq!(l.argv, vec!["/bin/claude", "/run-plan demo.plan.md"]);
         assert_eq!(l.label, "claude /run-plan");
         // cursor-* falls back to the vendor CLI that is on PATH.
-        let l = plan("interactive", "cursor-agent", Some("sonnet"), None, false, &find).unwrap();
+        let l = plan("interactive", "cursor-agent", Some("sonnet"), None, None, false, &find).unwrap();
         assert_eq!(l.argv, vec!["/bin/claude", "--model", "sonnet"]);
         assert!(!l.note.is_empty());
-        assert!(plan("interactive", "codex", None, None, false, &find).is_err());
-        assert!(plan("interactive", "claude", None, Some("/git-prod"), false, &find).is_err());
+        assert!(plan("interactive", "codex", None, None, None, false, &find).is_err());
+        assert!(plan("interactive", "claude", None, Some("/git-prod"), None, false, &find).is_err());
+    }
+
+    #[test]
+    fn resume_argv() {
+        let id = "0b5c3a52-1f6e-4c1a-9d1e-6a2f3b4c5d6e";
+        let l = plan("interactive", "claude", Some("sonnet"), None, Some(id), false, &find).unwrap();
+        assert_eq!(l.argv, vec!["/bin/claude", "--resume", id]);
+        assert_eq!(l.label, "claude --resume 0b5c3a52");
+        for bad in ["--help", "0b5c3a52", "0b5c3a52-1f6e-4c1a-9d1e-6a2f3b4c5d6e --dangerously-skip-permissions", "$(id)", "../0b5c3a52-1f6e-4c1a-9d1e-6a2f3b4c5"] {
+            assert!(plan("interactive", "claude", None, None, Some(bad), false, &find).is_err(), "{bad}");
+        }
+        // Only claude, and never together with a prompt.
+        assert!(plan("interactive", "cursor-agent", None, None, Some(id), false, &find).is_err());
+        assert!(plan("interactive", "codex", None, None, Some(id), false, &find).is_err());
+        assert!(plan("interactive", "claude", None, Some("/run-plan"), Some(id), false, &find).is_err());
+        assert!(plan("run-plan-all", "claude", None, None, Some(id), false, &find).is_err());
     }
 
     #[test]
     fn run_plan_all_argv() {
-        let l = plan("run-plan-all", "codex", None, None, true, &find).unwrap();
+        let l = plan("run-plan-all", "codex", None, None, None, true, &find).unwrap();
         assert_eq!(l.argv, vec!["/bin/agent-kit", "run-plan-all", "--backend", "codex", "--dry-run"]);
-        assert!(plan("run-plan-all", "nope", None, None, false, &find).is_err());
-        assert!(plan("run-plan-all", "claude", Some("--x"), None, false, &find).is_err());
+        assert!(plan("run-plan-all", "nope", None, None, None, false, &find).is_err());
+        assert!(plan("run-plan-all", "claude", Some("--x"), None, None, false, &find).is_err());
         // Managed engine: node plus the engine entry.
         let managed = |name: &str| match name {
             "agent-kit" => Some("/data/runtime/node".to_string()),
             "agent-kit-entry" => Some("/data/engine/6.3.0/dist/index.js".to_string()),
             _ => None,
         };
-        let l = plan("run-plan-all", "claude", None, None, false, &managed).unwrap();
+        let l = plan("run-plan-all", "claude", None, None, None, false, &managed).unwrap();
         assert_eq!(l.argv, vec!["/data/runtime/node", "/data/engine/6.3.0/dist/index.js", "run-plan-all", "--backend", "claude"]);
     }
 }

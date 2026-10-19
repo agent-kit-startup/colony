@@ -1,10 +1,12 @@
 // Native Mission Control views (center tabs): Mission, Plans, Queue and Flight Log. They
 // render the kit server's snapshot (./snapshot.ts, live over SSE) and turn its copy-only
 // actions into real ones through the cockpit host: a driver run of the active plan, the
-// queue runner or an interactive vendor CLI in a terminal tab, opening a plan or file.
+// queue runner or an interactive vendor CLI in a terminal tab (a saved chat resumed
+// included), opening a plan or file.
 // Nothing here runs /git-prod or any production promotion.
-import { h } from "./api";
+import { type ChatSession, h } from "./api";
 import { gateControls, type RunControls } from "./agent";
+import { chats } from "./chats";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
@@ -20,6 +22,8 @@ export interface CockpitHost {
   runQueue(): Promise<unknown>;
   /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command. */
   interactive(prompt?: string, why?: string): Promise<unknown>;
+  /** `claude --resume <id>` in a terminal tab labelled `title`, or focus its open tab. */
+  resumeChat(id: string, title: string): Promise<unknown>;
   showTab(id: string): void;
   focusRun(runId: number): void;
   copy(text: string, what: string): void;
@@ -178,6 +182,35 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
   return row;
 }
 
+const CHAT_SOURCE: Record<ChatSession["titleSource"], string> = { custom: "name you set", ai: "title from Claude Code", "first-prompt": "first prompt", none: "no title" };
+const CHATS_SHOWN = 8;
+
+function size(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** One saved chat; a click (or Resume) opens it again in a terminal tab. */
+function chatRow(c: ChatSession, host: CockpitHost): HTMLElement {
+  const title = c.title || "Untitled chat";
+  const saved = new Date(c.modified).toISOString();
+  const resume = () => void host.resumeChat(c.id, c.title);
+  const row = h(
+    "div",
+    { class: "row click chat-row", title: `${title} (${CHAT_SOURCE[c.titleSource]})
+session ${c.id} · ${size(c.sizeBytes)} · saved ${saved}
+claude --resume ${c.id}` },
+    h("span", { class: "grow ellipsis" }, c.title ? h("strong", {}, title) : h("span", { class: "dim" }, title)),
+    h("span", { class: "run-meta mono" }, h("span", {}, ago(saved)), h("span", {}, c.id.slice(0, 8))),
+    btn("Resume", resume, { class: "link", "data-act": "resume" }),
+  );
+  row.dataset.chat = c.id;
+  row.dataset.source = c.titleSource;
+  row.addEventListener("click", (ev) => !(ev.target as HTMLElement).closest("button") && resume());
+  return row;
+}
+
 /**
  * The queue is held when HANDOFF names another plan than the queue cursor while the queue
  * status still says running: a run outside the queue took HANDOFF over.
@@ -199,7 +232,11 @@ export class MissionView extends View {
   constructor(host: CockpitHost, private controls: RunControls) {
     super(host, "cv-mission");
     launches.on(() => this.invalidate());
+    chats.on(() => this.invalidate());
   }
+
+  /** The Chats card lists every chat of the read, not only the newest few. */
+  private allChats = false;
 
   protected keepsFocus(el: HTMLElement): boolean {
     return this.controls.el.contains(el);
@@ -208,10 +245,11 @@ export class MissionView extends View {
   protected render(): Node[] {
     const out: Node[] = [this.hero()];
     if (!snapshot.data) {
-      out.push(...(this.noData() ?? []));
+      // Saved chats do not need the kit's data.
+      out.push(...(this.noData() ?? []), h("div", { class: "grid" }, this.chatsCard()));
       return out;
     }
-    out.push(h("div", { class: "grid" }, this.needsYou(), this.runsCard(), this.queueCard(), this.flightCard(), this.activityCard(), this.repoCard()));
+    out.push(h("div", { class: "grid" }, this.needsYou(), this.runsCard(), this.chatsCard(), this.queueCard(), this.flightCard(), this.activityCard(), this.repoCard()));
     return out;
   }
 
@@ -319,6 +357,28 @@ export class MissionView extends View {
     }
     const live = mine.filter((l) => l.state !== "ended").length;
     return card({ title: "Agent runs", aside: live ? [pill(`${live} live`, "running", "\u25B6")] : [] }, ...(rows.length ? rows : [empty("No runs in this window. ▶ Run plan, ⌘ Open interactive and the plan actions start one; each opens as its own tab.")]));
+  }
+
+  private chatsCard(): HTMLElement {
+    const l = chats.list;
+    const all = l?.sessions ?? [];
+    const rows: Node[] = (this.allChats ? all : all.slice(0, CHATS_SHOWN)).map((c) => chatRow(c, this.host));
+    if (!this.allChats && all.length > CHATS_SHOWN)
+      rows.push(
+        btn(`All ${all.length} chats`, () => {
+          this.allChats = true;
+          this.invalidate();
+        }, { class: "link" }),
+      );
+    if (l && l.total > all.length) rows.push(h("div", { class: "dim small" }, `${l.total - all.length} older chat(s) not listed: ${l.note}`));
+    const refresh = btn(chats.loading ? "Reading…" : "↻ Refresh", () => void chats.refresh(), { class: "link", "data-act": "chats-refresh", title: "Read the saved sessions of this folder again" });
+    const none = empty(
+      l || !chats.loading
+        ? "No saved chats for this folder. Claude Code saves each session per start folder (~/.claude/projects/<folder>/); this list shows the ones started in this workspace folder. ⌘ Open interactive starts one."
+        : "Reading the saved chats…",
+    );
+    const body = chats.error ? [empty(`Saved chats unavailable: ${chats.error}`)] : rows.length ? rows : [none];
+    return card({ title: "Chats", aside: [...(l?.total ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []), refresh] }, ...body);
   }
 
   private queueCard(): HTMLElement {

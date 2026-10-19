@@ -136,6 +136,7 @@ const CARD_ICONS: Record<string, IconKind> = {
   "Current mission": "current-mission",
   "Needs you": "inbox",
   "Agent runs": "monitor",
+  Chats: "commands",
   Queue: "queue",
   "Queue status (HANDOFF)": "queue",
   "Flight Log": "field-report",

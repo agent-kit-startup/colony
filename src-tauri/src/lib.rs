@@ -2,6 +2,7 @@
 
 mod agent;
 mod branchrule;
+mod chats;
 mod context;
 mod dashboard;
 mod engine;
@@ -235,6 +236,7 @@ pub fn run() {
             mcdata::mc_config,
             mcdata::mc_subscribe,
             vendor::term_launch,
+            chats::chat_sessions,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
