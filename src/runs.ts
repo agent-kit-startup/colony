@@ -245,7 +245,8 @@ class RunStore {
           askId: String(ev.askId),
           labels: Array.isArray(ev.labels) ? ev.labels.map(String) : [],
           line: String(ev.line ?? ""),
-          prompt: run.lastText,
+          // The question without its own gate line (the card shows that line separately).
+          prompt: run.lastText.replace(/^[ \t]*HITL_GATE:.*$/gm, "").trim(),
           tick: Number(ev.tick) || 0,
           detection: String(ev.detection ?? ""),
           at: String(ev.ts ?? new Date().toISOString()),

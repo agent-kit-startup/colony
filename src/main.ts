@@ -14,6 +14,7 @@ import { Editors } from "./editor";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree } from "./filetree";
 import { CicdView, PullRequestsSection } from "./forge";
+import { GateAlerts, pendingGates } from "./gates";
 import { GitView } from "./git";
 import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
 import { hostSmoke } from "./hostsmoke";
@@ -107,7 +108,8 @@ interface Tab {
   tip: string;
   pinned: boolean;
   el: HTMLElement;
-  badge?: () => { text: string; cls: string } | null;
+  /** `extra`: a second, separate count next to the first (the Inbox: gates, then attention). */
+  badge?: () => { text: string; cls: string; tip?: string; extra?: { text: string; cls: string; tip?: string } } | null;
   cls?: () => string;
   show?: () => void;
   hide?: () => void;
@@ -142,7 +144,8 @@ function renderTabs() {
         { class: `tab ${t.pinned ? "pin" : ""} ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
         h("span", { class: "tab-icon" }, t.icon),
         h("span", { class: "lbl" }, t.label),
-        ...(b ? [h("span", { class: `badge ${b.cls}`, ...(t.id === "inbox" && b.cls === "warn" ? { id: "inbox-badge" } : {}) }, b.text)] : []),
+        ...(b ? [h("span", { class: `badge ${b.cls}`, ...(b.tip ? { title: b.tip } : {}), ...(t.id === "inbox" && b.cls === "warn" ? { id: "inbox-badge" } : {}) }, b.text)] : []),
+        ...(b?.extra ? [h("span", { class: `badge ${b.extra.cls}`, ...(b.extra.tip ? { title: b.extra.tip } : {}) }, b.extra.text)] : []),
       );
       el.dataset.tab = t.id;
       if (!t.pinned) {
@@ -333,7 +336,8 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: str
     tip,
     pinned: false,
     el,
-    cls: () => (view.exited ? "exited" : ""),
+    cls: () => (view.exited ? "exited" : launches.termGate(id) ? "run-gate" : ""),
+    badge: () => (launches.termGate(id) ? { text: "gate", cls: "warn" } : null),
     show: () =>
       requestAnimationFrame(() => {
         view.fit();
@@ -463,6 +467,16 @@ const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
   renderTabs();
 });
+// A new gate: the window title counter and an OS notification; a click on it opens the
+// Inbox on that gate.
+const alerts = new GateAlerts((key) => {
+  if (!workspace) return;
+  showTab("inbox");
+  inbox.reveal(key);
+});
+alerts.showing = (g) => activeTab === g.tabId || activeTab === "inbox";
+// Terminal tabs carry a gate marker while their output shows an open HITL_GATE line.
+launches.on(() => renderTabs());
 let reviewCount = 0;
 const reviewView = new ReviewView(
   $("view-review"),
@@ -485,6 +499,14 @@ hostRequests.on((fresh) => {
   if (fresh.length) status(`Host request: ${fresh[0].summary}${fresh[0].reason ? ` (${fresh[0].reason})` : ""}: approve or deny it in the Git tab`);
 });
 
+/** Gates and attention items are two counts: a gate waits for an answer, attention does not. */
+function inboxBadge(): ReturnType<NonNullable<Tab["badge"]>> {
+  const { gates, attention } = inboxCount;
+  const att = attention ? { text: String(attention), cls: "muted", tip: `${attention} attention item(s)` } : undefined;
+  if (gates) return { text: String(gates), cls: "warn", tip: `${gates} gate(s) wait for Ground Control`, extra: att };
+  return att ?? null;
+}
+
 function pinViews() {
   const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
     addTab({ id, label, icon, tip, pinned: true, el, show: () => v.show(), hide: () => v.hide(), badge }, false);
@@ -492,7 +514,7 @@ function pinViews() {
   pin("plans", "Plans", "☰", "Plans and backlog (Mission Control snapshot)", plans.el, plans);
   pin("queue", "Queue", "⇶", "run-plan-all queue", queue.el, queue);
   pin("inbox", "Inbox", "▣", "Inbox: live gates from every run, attention items, gate exits", inbox.el, inbox, () =>
-    inboxCount.gates ? { text: String(inboxCount.gates), cls: "warn" } : inboxCount.attention ? { text: String(inboxCount.attention), cls: "muted" } : null,
+    inboxBadge(),
   );
   pin(
     "review",
@@ -771,7 +793,7 @@ async function openWorkspace(path: string) {
   mcUrl = "";
   mcOrigin = "";
   mcFrame.removeAttribute("src");
-  document.title = `${workspace.name} · Colony`;
+  alerts.setBase(`${workspace.name} · Colony`);
   $("ws-name").textContent = workspace.root;
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
@@ -1119,11 +1141,31 @@ async function runSmoke(root: string, info: StartupInfo) {
         badge: badge?.textContent,
         cards: cards.map((c) => `${c.dataset.run}:${c.dataset.ask}`),
       });
+      // Gates are hard to miss: the title counter, one (recorded) notification per gate,
+      // the full question on the card, the strip pinned at the top of Mission, and a
+      // notification click that opens the Inbox on that gate.
+      const keys = pendingGates().map((g) => g.key);
+      const noted = alerts.log.filter((n) => keys.includes(n.key));
+      const prompt = cards.find((c) => c.dataset.run === String(run.id))?.querySelector(".gate-prompt")?.textContent ?? "";
+      const pinned = view("mission").querySelectorAll(".gate-strip .mission-gate").length;
+      await log("gate-signals", document.title === `(${keys.length}) ${workspace?.name} · Colony` && noted.length === keys.length && noted.every((n) => !n.sent && !n.body.includes("HITL_GATE")) && prompt.includes("One decision") && !prompt.includes("HITL_GATE") && pinned === keys.length, {
+        title: document.title,
+        notified: noted.map((n) => `${n.key}: ${n.body}`),
+        prompt: prompt.slice(0, 160),
+        pinned,
+      });
+      const last = noted[noted.length - 1];
+      showTab("mission");
+      alerts.clicked(last?.id);
+      await wait(100);
+      const flashed = inbox.el.querySelector<HTMLElement>(".inbox-card.flash");
+      await log("gate-notification-click", !!last && activeTab === "inbox" && flashed?.dataset.key === last.key, { activeTab, flashed: flashed?.dataset.key ?? null, want: last?.key ?? null });
+      showTab(`run:${run.id}`);
       // The second run is answered from the Inbox, the first from its agent tab.
       if (second.run) inbox.el.querySelector<HTMLButtonElement>(`.inbox-card[data-run="${second.run.id}"] .gate-buttons button[data-reply="2"]`)?.click();
       inline?.querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]')?.click();
       await wait(400);
-      await log("inbox-cleared", !run.gate && !second.run?.gate && !$("inbox-badge") && !inbox.el.querySelector(".inbox-card"), { badge: $("inbox-badge")?.textContent ?? null });
+      await log("inbox-cleared", !run.gate && !second.run?.gate && !$("inbox-badge") && !inbox.el.querySelector(".inbox-card") && document.title === `${workspace?.name} · Colony` && !view("mission").querySelector(".gate-strip"), { badge: $("inbox-badge")?.textContent ?? null, title: document.title });
     }
     await until(() => !run.running, 20000);
     off();
@@ -1214,6 +1256,21 @@ async function runSmoke(root: string, info: StartupInfo) {
       const p = (await host.interactive(`/run-plan ${planFile}`, "smoke")) as { id: string; view: TermView } | undefined;
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
       const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
+      // A terminal tab that printed a HITL_GATE line: gate marker on its tab, a card in the
+      // Inbox's Live gates, the title counter and a (recorded) notification.
+      if (p) {
+        const key = `${p.id}:fake-gate`;
+        await until(() => pendingGates().some((g) => g.key === key), 4000);
+        const tabBtn = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
+        const tCard = inbox.el.querySelector<HTMLElement>(`.inbox-card[data-tab="${p.id}"]`);
+        const n = pendingGates().length;
+        await log("terminal-gate", n === 1 && !!tabBtn?.classList.contains("run-gate") && tabBtn.querySelector(".badge")?.textContent === "gate" && tCard?.dataset.key === key && !!tCard.querySelector(".inbox-line")?.textContent?.includes("Go | Wait") && Number($("inbox-badge")?.textContent) === 1 && document.title.startsWith("(1) ") && alerts.log.some((x) => x.key === key && !x.sent), {
+          gates: pendingGates().map((g) => g.key),
+          tab: tabBtn?.className ?? null,
+          card: tCard?.textContent?.slice(0, 160) ?? null,
+          title: document.title,
+        });
+      }
       await log(
         "interactive-tab",
         !!iBtn && iTab.startsWith("term:") && iProof.includes("args: --model smoke-model\n") && iProof.includes(`cwd: ${root}`) && pProof.includes(`args: --model smoke-model /run-plan ${planFile}`) && confirmed.includes(`/run-plan ${planFile}`),
@@ -1253,7 +1310,11 @@ api
     $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
     if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
-    if (info.smoke) focusPolicy.enabled = false;
+    if (info.smoke) {
+      focusPolicy.enabled = false;
+      // The smoke records its notifications instead of showing them on the desktop.
+      alerts.dryRun = true;
+    }
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];
     if (start) await openWorkspace(start);

@@ -45,8 +45,8 @@ export interface Notified { id: number; key: string; title: string; body: string
 
 /**
  * Watches the gate list: keeps the window title counter current and raises one OS
- * notification per new gate while the Colony window is not focused (or always, when
- * `always` is set). A click on the notification calls `onOpen` with the gate's key.
+ * notification per new gate unless the operator is already looking at it (or always,
+ * when `always` is set). A click on the notification calls `onOpen` with the gate's key.
  */
 export class GateAlerts {
   private known = new Set<string>();
@@ -58,15 +58,23 @@ export class GateAlerts {
   /** Smoke: record notifications without showing them on the desktop. */
   dryRun = false;
   always = false;
+  /**
+   * True when the operator is already looking at this gate (its tab or the Inbox is the
+   * active tab of a visible, focused window): then no notification is raised.
+   */
+  showing: (g: PendingGate) => boolean = () => false;
 
   constructor(private onOpen: (key: string | null) => void) {
     runs.on((c) => c.kind === "gate" || c.kind === "state" ? this.update() : undefined);
     launches.on(() => this.update());
-    onAction((ev) => {
-      const id = ev.notification?.id;
-      void this.focusWindow();
-      this.onOpen(id !== undefined ? (this.byId.get(id) ?? null) : null);
-    }).catch(() => {});
+    onAction((ev) => this.clicked(ev.notification?.id)).catch(() => {});
+  }
+
+  /** A click on notification `id`: focus the window, open the Inbox on that gate. */
+  clicked(id: number | undefined) {
+    // The smoke never moves the window or takes focus on the operator's desktop.
+    if (!this.dryRun) void this.focusWindow();
+    this.onOpen(id !== undefined ? (this.byId.get(id) ?? null) : null);
   }
 
   /** The folder part of the title (`<folder> · Colony`); the counter is prefixed to it. */
@@ -94,8 +102,16 @@ export class GateAlerts {
     for (const g of gates) {
       if (this.known.has(g.key)) continue;
       this.known.add(g.key);
-      if (this.always || this.dryRun || !document.hasFocus()) this.notify(g);
+      if (this.always || this.dryRun || !this.watched(g)) this.notify(g);
     }
+  }
+
+  /**
+   * Window focus alone is not enough: a compositor may keep focus on a window parked on
+   * another workspace, so a gate is only skipped when its own tab or the Inbox is on screen.
+   */
+  private watched(g: PendingGate): boolean {
+    return document.visibilityState === "visible" && document.hasFocus() && this.showing(g);
   }
 
   private notify(g: PendingGate) {
