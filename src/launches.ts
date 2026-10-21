@@ -49,11 +49,24 @@ interface TermLaunch {
   el: HTMLElement;
   seen: boolean;
   gate: string | null;
+  /** The whole `HITL_GATE: <id> | <labels>` line of the open gate (untrusted text). */
+  gateLine: string;
+  /** When the open gate was first seen. */
+  gateAt: string;
   tail: string;
 }
 
+/** An open gate in a terminal tab (interactive vendor CLI or queue runner). */
+export interface TermGate { tabId: string; kind: "interactive" | "queue"; label: string; plan: string; askId: string; line: string; at: string }
+
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
-const GATE = /HITL_GATE:\s*([A-Za-z0-9._:-]+)/g;
+const GATE = /HITL_GATE:\s*([A-Za-z0-9._:-]+)([^\r\n]*)/g;
+/**
+ * Terminal reports that are not the operator answering: focus in / out (`CSI I`, `CSI O`,
+ * sent by xterm.js whenever the window or tab gains or loses focus once the CLI enables
+ * focus tracking) and mouse reports. They must not clear an open gate.
+ */
+const NOT_TYPING = /^(?:\x1b\[[IO]|\x1b\[<[\d;]+[mM]|\x1b\[M[\s\S]{3})+$/;
 
 /** The plan a kit slash command works on: `/run-plan X` and `/continue-plan X` activate X. */
 export function promptPlan(prompt: string | undefined): string {
@@ -102,7 +115,7 @@ class LaunchStore {
 
   /** A terminal tab that runs an agent (interactive vendor CLI or queue runner). */
   addTerm(o: { tabId: string; kind: "interactive" | "queue"; plan: string; backend: string; root: string; label: string; view: TermView; el: HTMLElement }) {
-    const t: TermLaunch = { ...o, startedAt: new Date().toISOString(), seen: false, gate: null, tail: "" };
+    const t: TermLaunch = { ...o, startedAt: new Date().toISOString(), seen: false, gate: null, gateLine: "", gateAt: "", tail: "" };
     this.terms.set(o.tabId, t);
     const prevExit = o.view.onExit;
     o.view.onExit = (code) => {
@@ -113,17 +126,25 @@ class LaunchStore {
     o.view.onOutput = (data) => {
       const first = !t.seen;
       t.seen = true;
-      // Best effort: the last HITL_GATE line printed since the operator last typed.
+      // Best effort: the last HITL_GATE line printed since the operator last typed. A TUI
+      // may redraw or wrap the line; the id is what identifies the gate.
       t.tail = (t.tail + data.replace(ANSI, "")).slice(-4096);
       let gate: string | null = t.gate;
-      for (const m of t.tail.matchAll(GATE)) gate = m[1];
+      let line = t.gateLine;
+      for (const m of t.tail.matchAll(GATE)) {
+        gate = m[1];
+        line = `HITL_GATE: ${m[1]}${m[2]}`.replace(/\s+$/, "").slice(0, 600);
+      }
       if (gate !== t.gate) {
         t.gate = gate;
+        t.gateLine = line;
+        t.gateAt = new Date().toISOString();
         t.tail = "";
         this.changed();
       } else if (first) this.changed();
     };
-    o.view.onInput = () => {
+    o.view.onInput = (data) => {
+      if (NOT_TYPING.test(data)) return;
       t.tail = "";
       if (t.gate) {
         t.gate = null;
@@ -131,6 +152,22 @@ class LaunchStore {
       }
     };
     this.changed();
+  }
+
+  /** Open gates of the terminal tabs, oldest first. */
+  termGates(): TermGate[] {
+    const out: TermGate[] = [];
+    for (const t of this.terms.values()) {
+      if (!t.gate || t.view.exited || !t.el.isConnected) continue;
+      out.push({ tabId: t.tabId, kind: t.kind, label: t.label, plan: t.plan, askId: t.gate, line: t.gateLine, at: t.gateAt });
+    }
+    return out.sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  /** The open gate id of a terminal tab, or null. */
+  termGate(tabId: string): string | null {
+    const t = this.terms.get(tabId);
+    return t && !t.view.exited ? t.gate : null;
   }
 
   /** Forget a terminal launch (its tab closed). */

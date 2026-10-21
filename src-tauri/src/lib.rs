@@ -214,6 +214,7 @@ pub fn run() {
     let hook = mc_action_hook(startup.smoke.is_some());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
         .manage(host_requests.clone())
         .invoke_handler(tauri::generate_handler![
