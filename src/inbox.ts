@@ -1,13 +1,16 @@
 // Inbox (center tab): every decision that waits for the operator.
-//  - Live gates: every open HITL gate across all agent runs in this window, whatever the
-//    engine. Answering a card writes the driver-protocol JSON line to that run's stdin
-//    (runs.reply); Colony never answers on the operator's behalf.
+//  - Live gates: every open HITL gate in this window, whatever the engine: driver runs
+//    (answered here; the card writes the driver-protocol JSON line to that run's stdin,
+//    runs.reply) and terminal tabs that printed a `HITL_GATE:` line (answered in that
+//    terminal). Colony never answers on the operator's behalf.
 //  - Attention: Mission Control's attention items (field reports, plan monitors) from the
 //    snapshot, with their file and, for an allowlisted kit command, "Ask agent".
 //  - Gate exits: pending gate-exit tickets (agent-kit ground-control).
 import { h } from "./api";
 import { gateControls } from "./agent";
 import type { CockpitHost } from "./cockpit";
+import { type PendingGate, pendingGates } from "./gates";
+import { launches } from "./launches";
 import { runLabel, runs } from "./runs";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { ago, btn, card, chip, empty, pill, rerender } from "./ui";
@@ -31,6 +34,7 @@ export class InboxView {
       if (c.kind === "gate" || c.kind === "state") this.invalidate();
       if (c.kind === "gate" && c.run.gate) host.status(`Inbox: ${runLabel(c.run)} waits for ${c.run.gate.askId}`);
     });
+    launches.on(() => this.invalidate());
     snapshot.on((why) => why === "data" && this.invalidate());
     this.invalidate();
   }
@@ -53,7 +57,7 @@ export class InboxView {
   /** Live gates must render at once (the badge and the cards are the operator's cue). */
   invalidate() {
     this.dirty = true;
-    this.onCount(runs.gates().length, snapshot.attention.length);
+    this.onCount(pendingGates().length, snapshot.attention.length);
     this.flush();
   }
 
@@ -69,21 +73,8 @@ export class InboxView {
   }
 
   private render(): Node[] {
-    const gates = runs.gates();
-    const live = gates.map((g) => {
-      const run = runs.runs.get(g.runId);
-      const jump = btn("Open run", () => this.host.focusRun(g.runId), { class: "status-bar-btn", title: "Show this run's transcript" });
-      const c = h(
-        "div",
-        { class: "gate inbox-card" },
-        h("div", { class: "panel-row inbox-meta" }, pill("Awaiting", "awaiting", "\u23EF"), h("span", { class: "grow" }, run ? runLabel(run) : `#${g.runId}`), h("span", { class: "run-meta mono" }, `tick ${g.tick}`), jump),
-        h("div", { class: "inbox-line" }, g.line),
-        ...gateControls(g, (msg) => this.host.status(`Inbox: ${msg}`)),
-      );
-      c.dataset.run = String(g.runId);
-      c.dataset.ask = g.askId;
-      return c;
-    });
+    const gates = pendingGates();
+    const live = gates.map((g) => gateCard(g, this.host, "inbox-card"));
     const att = snapshot.attention.map((a) => this.attention(a));
     const tickets: J[] = Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     return [
@@ -100,6 +91,18 @@ export class InboxView {
           ]
         : []),
     ];
+  }
+
+  /** Scroll the Inbox to one gate's card and flash it (a notification click). */
+  reveal(key: string | null) {
+    this.flush();
+    const cards = [...this.el.querySelectorAll<HTMLElement>(".inbox-card")];
+    const c = (key && cards.find((x) => x.dataset.key === key)) || cards[0];
+    if (!c) return;
+    c.scrollIntoView({ block: "nearest" });
+    c.classList.remove("flash");
+    void c.offsetWidth;
+    c.classList.add("flash");
   }
 
   private attention(a: J): HTMLElement {
@@ -128,4 +131,36 @@ export class InboxView {
     el.dataset.id = str(a.id);
     return el;
   }
+}
+
+/**
+ * One gate card (Inbox and the Mission view's pinned strip): where it waits, the full
+ * question and the gate line as text, and the answer controls for a driver run or a
+ * button to the terminal that holds it.
+ */
+export function gateCard(g: PendingGate, host: CockpitHost, cls: string): HTMLElement {
+  const term = !g.gate;
+  const jump = term
+    ? btn("Open terminal", () => host.showTab(g.tabId), { class: "status-bar-btn", title: "Answer it in its terminal tab" })
+    : btn("Open run", () => host.focusRun(g.gate!.runId), { class: "status-bar-btn", title: "Show this run's transcript" });
+  const c = h(
+    "div",
+    { class: `gate ${cls}` },
+    h(
+      "div",
+      { class: "panel-row inbox-meta" },
+      pill("Awaiting", "awaiting", "\u23EF"),
+      h("span", { class: "grow" }, g.where),
+      ...(g.gate ? [h("span", { class: "run-meta mono" }, `tick ${g.gate.tick}`)] : [h("span", { class: "run-meta mono" }, "terminal")]),
+      jump,
+    ),
+    ...(g.prompt ? [h("div", { class: "gate-prompt" }, g.prompt)] : []),
+    h("div", { class: "inbox-line" }, g.line || `HITL_GATE: ${g.askId}`),
+    ...(g.gate ? gateControls(g.gate, (msg) => host.status(`Inbox: ${msg}`)) : [h("div", { class: "gate-title" }, `Decision needed · ${g.askId} · answer in the terminal tab`)]),
+  );
+  if (g.gate) c.dataset.run = String(g.gate.runId);
+  else c.dataset.tab = g.tabId;
+  c.dataset.ask = g.askId;
+  c.dataset.key = g.key;
+  return c;
 }

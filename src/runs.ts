@@ -6,6 +6,8 @@ import { api, Channel, errText, type AgentEvent, type TickReview } from "./api";
 
 const MAX_ROWS = 3000;
 const MAX_ITEMS = 6000;
+/** Cap on the gate prompt kept from the agent's text (characters). */
+const MAX_PROMPT = 4000;
 
 // biome-ignore lint: event payloads are open JSON
 export type Ev = Record<string, any>;
@@ -20,7 +22,12 @@ export type RunItem =
   | { kind: "reply"; askId: string; shown: string }
   | { kind: "error"; text: string }
   | { kind: "exit"; code: number | null };
-export interface Gate { runId: number; askId: string; labels: string[]; line: string; tick: number; detection: string; at: string }
+/**
+ * One open HITL gate of a driver run. `line` is the protocol's one-line `HITL_GATE:` text;
+ * `prompt` is the agent's text that came before it in the same tick (the question itself),
+ * which the protocol event does not carry. Both are untrusted: render them as text only.
+ */
+export interface Gate { runId: number; askId: string; labels: string[]; line: string; prompt: string; tick: number; detection: string; at: string }
 export interface Run {
   id: number;
   backend: string;
@@ -35,6 +42,8 @@ export interface Run {
   gate: Gate | null;
   reviews: TickReview[];
   startedAt: string;
+  /** The agent's latest text in the current tick: becomes the next gate's `prompt`. */
+  lastText: string;
 }
 
 export type RunChange =
@@ -118,6 +127,7 @@ class RunStore {
       gate: null,
       reviews: [],
       startedAt: new Date().toISOString(),
+      lastText: "",
     };
     this.runs.set(run.id, run);
     this.emit({ kind: "state", run });
@@ -218,13 +228,16 @@ class RunStore {
         this.emit({ kind: "state", run });
         return this.row(run, `▶ run ${ev.plan} · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol}`, "ag-head");
       case "tick_start":
+        run.lastText = "";
         return this.row(run, `— tick ${ev.tick}/${ev.maxTicks} · ${ev.pending} pending · ${ev.backend ?? ""} · log ${ev.log}`, "ag-head");
       case "agent_event": {
         const line = agentLine(ev.event ?? {});
+        if (line?.cls === "ag-assistant") run.lastText = line.text.slice(-MAX_PROMPT);
         if (line) this.row(run, line.text, line.cls);
         return;
       }
       case "agent_text":
+        if (String(ev.text ?? "").trim()) run.lastText = String(ev.text).slice(-MAX_PROMPT);
         return this.row(run, String(ev.text ?? ""), "ag-dim");
       case "hitl_gate": {
         const gate: Gate = {
@@ -232,6 +245,8 @@ class RunStore {
           askId: String(ev.askId),
           labels: Array.isArray(ev.labels) ? ev.labels.map(String) : [],
           line: String(ev.line ?? ""),
+          // The question without its own gate line (the card shows that line separately).
+          prompt: run.lastText.replace(/^[ \t]*HITL_GATE:.*$/gm, "").trim(),
           tick: Number(ev.tick) || 0,
           detection: String(ev.detection ?? ""),
           at: String(ev.ts ?? new Date().toISOString()),

@@ -5,8 +5,10 @@
 // included), opening a plan or file.
 // Nothing here runs /git-prod or any production promotion.
 import { type ChatSession, h } from "./api";
-import { gateControls, type RunControls } from "./agent";
+import type { RunControls } from "./agent";
 import { chats } from "./chats";
+import { pendingGates } from "./gates";
+import { gateCard } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
@@ -239,7 +241,8 @@ export class MissionView extends View {
   }
 
   protected render(): Node[] {
-    const out: Node[] = [this.hero()];
+    // Open gates are pinned above everything else: they block a run until answered.
+    const out: Node[] = [...this.gateStrip(), this.hero()];
     if (!snapshot.data) {
       // Saved chats do not need the kit's data.
       out.push(...(this.noData() ?? []), h("div", { class: "grid" }, this.chatsCard()));
@@ -322,16 +325,25 @@ export class MissionView extends View {
     );
   }
 
+  /** Every open gate (driver runs and terminal tabs), full prompt and answer controls. */
+  private gateStrip(): HTMLElement[] {
+    const gates = pendingGates();
+    if (!gates.length) return [];
+    const s = h(
+      "section",
+      { class: "gate-strip", "aria-label": "Gates waiting for Ground Control" },
+      h("div", { class: "panel-row" }, pill(`${gates.length} gate${gates.length === 1 ? "" : "s"} waiting for Ground Control`, "awaiting", "\u23EF"), h("span", { class: "grow" }), btn("Open Inbox", () => this.host.showTab("inbox"), { class: "link" })),
+      ...gates.map((g) => gateCard(g, this.host, "compact mission-gate")),
+    );
+    return [s];
+  }
+
   private needsYou(): HTMLElement {
-    const gates = runs.gates();
+    const gates = pendingGates();
     const att = snapshot.attention;
     const tickets = Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     const items: Node[] = [];
-    for (const g of gates) {
-      const r = runs.runs.get(g.runId);
-      const c = h("div", { class: "gate compact" }, h("div", { class: "dim small" }, r ? runLabel(r) : `#${g.runId}`), h("div", { class: "inbox-line" }, g.line), ...gateControls(g, (m) => this.host.status(m)));
-      items.push(c);
-    }
+    if (gates.length) items.push(h("div", { class: "row" }, chip(`${gates.length}`, "chip-gate"), h("span", { class: "grow" }, `gate${gates.length === 1 ? "" : "s"} pinned at the top of Mission`)));
     for (const a of att.slice(0, 4)) {
       const row = h("div", { class: "row click" }, chip(str(a.severity || a.group, "info"), a.group === "blocking" ? "chip-gate" : ""), h("span", { class: "grow ellipsis", title: str(a.findingsSummary) }, str(a.label)));
       row.addEventListener("click", () => this.host.showTab("inbox"));
