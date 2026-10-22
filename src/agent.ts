@@ -5,6 +5,16 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api, type BackendChoice, errText, h } from "./api";
 import { type Gate, type Run, runs } from "./runs";
 
+/**
+ * Shown text for each engine id. The id itself is what `--backend` takes and
+ * what settings remember, so it never changes; this is presentation only.
+ * `openrouter` is the backend that runs through Ori, so the picker names the
+ * vendor the operator recognizes instead of the id.
+ */
+const ENGINE_LABELS: Record<string, string> = {
+  openrouter: "OpenRouter",
+};
+
 export class RunControls {
   readonly backend: HTMLSelectElement;
   readonly ticks: HTMLInputElement;
@@ -43,10 +53,13 @@ export class RunControls {
     this.choices = choices;
     const keep = this.backend.value || "claude";
     const keepLimit = this.onLimit.value;
-    const ids = choices.length ? choices.map((c) => c.id) : ["claude", "codex", "cursor-acp", "cursor-agent", "auto"];
+    const ids = choices.length ? choices.map((c) => c.id) : ["claude", "codex", "cursor-acp", "cursor-agent", "openrouter", "auto"];
     const label = (id: string) => {
       const c = choices.find((x) => x.id === id);
-      return c && !c.available ? `${id} (not on PATH)` : id;
+      // The option VALUE stays the backend id (it is a `--backend` argument);
+      // only the shown text is prettified. Unknown ids keep their raw id.
+      const name = ENGINE_LABELS[id] ?? id;
+      return c && !c.available ? `${name} (not on PATH)` : name;
     };
     this.backend.replaceChildren(...ids.map((id) => h("option", { value: id }, label(id))));
     this.onLimit.replaceChildren(h("option", { value: "" }, "stop"), ...ids.filter((id) => id !== "auto").map((id) => h("option", { value: id }, label(id))));

@@ -16,8 +16,9 @@ use tauri::State;
 
 use crate::{review, tools, workspace, AppState};
 
-/// `agent-kit run-plan --backend` values (kit 6.2.0: packages/cli/src/plan-loop/detect.ts).
-pub(crate) const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent"];
+/// `agent-kit run-plan --backend` values (kit 6.6.0: packages/cli/src/plan-loop/detect.ts).
+/// `openrouter` needs an engine that knows the id; an older kit refuses it.
+pub(crate) const BACKENDS: &[&str] = &["auto", "claude", "codex", "cursor-acp", "cursor-agent", "openrouter"];
 
 /// What the engine picker shows for each backend: the binary the kit resolves on PATH
 /// and how a HITL answer reaches the agent (driver protocol "Scope").
@@ -26,7 +27,8 @@ const BACKEND_INFO: &[(&str, &str, &str)] = &[
     ("codex", "codex", "Codex CLI (OpenAI API key by default); gate answers relayed by resuming the session"),
     ("cursor-acp", "cursor-agent", "Cursor agent over ACP (opt-in); gate answers relayed as the next prompt"),
     ("cursor-agent", "cursor-agent", "Cursor agent -p; no input channel: a gate ends the tick (stop: no relay)"),
-    ("auto", "", "cursor-agent if on PATH, else claude (never codex or cursor-acp)"),
+    ("openrouter", "ori", "OpenRouter through Ori (ori login); Claude Code on OpenRouter credentials, gate answers relayed on stdin"),
+    ("auto", "", "cursor-agent if on PATH, else claude (never codex, cursor-acp or openrouter)"),
 ];
 
 /// The vendor CLIs of the backend table (`claude`, `codex`, `cursor-agent`; may repeat).
