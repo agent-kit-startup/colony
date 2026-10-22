@@ -160,6 +160,11 @@ export class GitView {
     this.visible = false;
   }
 
+  /** Reload after a git / forge action ran from here (a merged PR leaves the list); a hidden tab reloads on show. */
+  reload() {
+    if (this.visible) this.show();
+  }
+
   private renderRepo() {
     this.dirty = false;
     const g = snapshot.git;

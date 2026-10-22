@@ -59,10 +59,15 @@ export async function hostSmoke(c: SmokeCtx) {
     const runningShown = !!m7?.querySelector(".chip-running")?.getClientRects().length;
     await c.log("host-request-card", !!m7 && !runningShown && m7.dataset.production === "no" && text.includes("Smoke PR seven") && text.includes("feat/base ← feat/seven") && text.includes("smoke: checks are green") && badge === "1", { badge, runningShown, production: m7?.dataset.production, text: text.slice(0, 300) });
     await c.shot("git-request");
+    const lists = (t: string) => t.split("\n").filter((l) => l.startsWith("pr list")).length;
+    const listsBefore = lists(await read("gh-proof.txt"));
     click(m7, "approve");
     const out7 = await untilFile("hostreq-merge7.out", done, 20000);
     let proof = await read("gh-proof.txt");
     await c.log("host-request-approve", out7.includes("exit=0") && out7.includes("Merged pull request #7") && proof.includes("pr merge 7 --squash") && !find("merge-pr", 7), { out: out7, gh: proof.split("\n").filter((l) => l.startsWith("pr merge")) });
+    // The PR list reloads after the merge, with no click on its ↻ (a merged PR must not linger).
+    proof = await untilFile("gh-proof.txt", (t) => lists(t) > listsBefore, 10000);
+    await c.log("pr-list-reload-after-merge", lists(proof) > listsBefore, { before: listsBefore, after: lists(proof) });
 
     // A production base (release) needs the typed yes: without it nothing runs.
     await file("merge-pr 8 --method rebase", "hostreq-merge8.out");

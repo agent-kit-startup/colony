@@ -257,7 +257,10 @@ export class RequestsSection {
   private title = h("span", {}, "Requests");
   private decided: { r: HostRequest; d: Decision; at: string }[] = [];
 
-  constructor(private status: (msg: string) => void) {
+  constructor(
+    private status: (msg: string) => void,
+    private onDecided?: (r: HostRequest, d: Decision) => void,
+  ) {
     this.el = card(this.title, this.list, this.recent);
     this.el.classList.add("hostreq-section");
     hostRequests.on(() => this.render());
@@ -295,6 +298,7 @@ export class RequestsSection {
     this.decided.unshift({ r, d, at: new Date().toISOString() });
     this.decided.length = Math.min(this.decided.length, 5);
     this.status(`${r.summary}: ${d.outcome}`);
+    this.onDecided?.(r, d);
     this.recent.replaceChildren(
       ...this.decided.map((x) =>
         h(
