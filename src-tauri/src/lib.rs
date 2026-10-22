@@ -75,6 +75,35 @@ fn apply_webkit_env() -> String {
     "default".into()
 }
 
+/// Markers a Claude Code session sets for its own children. A Colony started from inside
+/// one (e.g. its Bash tool) would hand them to every agent and terminal it spawns, and
+/// each `claude` there then runs as that session's child: transcript saving off, tied to
+/// the parent's messaging socket. User configuration (`CLAUDE_CODE_OAUTH_TOKEN`,
+/// `CLAUDE_CODE_USE_BEDROCK`, ...) is not on this list and stays.
+const PARENT_SESSION_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+];
+
+/// Drop the parent-session markers from Colony's own environment, so every child
+/// inherits a clean one. Logs the names only, never the values.
+fn scrub_parent_session_env() {
+    let removed: Vec<&str> = PARENT_SESSION_VARS.iter().copied().filter(|k| std::env::var_os(k).is_some()).collect();
+    for k in &removed {
+        std::env::remove_var(k);
+    }
+    if !removed.is_empty() {
+        eprintln!("colony: started inside a Claude Code session; dropped {}", removed.join(", "));
+    }
+}
+
 fn initial_workspace() -> Option<String> {
     std::env::args()
         .skip(1)
@@ -196,6 +225,7 @@ pub fn run() {
         std::process::exit(hostreq::cli_main());
     }
     // Environment first, before any thread exists.
+    scrub_parent_session_env();
     let dmabuf = apply_webkit_env();
     let added = tools::extend_process_path();
     let host_requests = std::sync::Arc::new(hostreq::HostRequests::prepare());
@@ -299,4 +329,21 @@ pub fn run() {
             handle.state::<hostreq::Shared>().cleanup();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn scrubs_parent_session_markers_only() {
+        std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1");
+        std::env::set_var("CLAUDE_CODE_MESSAGING_TOKEN", "t");
+        std::env::set_var("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", "1");
+        super::scrub_parent_session_env();
+        assert!(std::env::var_os("CLAUDE_CODE_CHILD_SESSION").is_none());
+        assert!(std::env::var_os("CLAUDE_CODE_MESSAGING_TOKEN").is_none());
+        // User configuration is not a parent-session marker.
+        assert_eq!(std::env::var("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE").as_deref(), Ok("1"));
+        std::env::remove_var("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE");
+        assert!(super::PARENT_SESSION_VARS.iter().all(|k| *k == "CLAUDECODE" || *k == "CLAUDE_PID" || k.starts_with("CLAUDE_CODE_")));
+    }
 }
