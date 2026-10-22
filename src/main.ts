@@ -489,7 +489,10 @@ const reviewView = new ReviewView(
 );
 const gitView = new GitView(status, () => void tree.refresh(), host.copy);
 // Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
-const requests = new RequestsSection(status);
+// An approved request ran gh (a denied one did not): reload the PR list and the working tree.
+const requests = new RequestsSection(status, (_r, d) => {
+  if (d.outcome !== "denied") gitView.reload();
+});
 gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
 const cicd = new CicdView(status);
 inbox.addSection(() => inboxRequests(() => showTab("git")));
