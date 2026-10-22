@@ -409,6 +409,15 @@ pub fn kit_command() -> Result<KitCommand, String> {
     Ok(KitCommand { program: bin, args: vec![], source: "unmanaged" })
 }
 
+/// The version of the kit `kit_command` runs, when it is known: None for the
+/// `COLONY_AGENT_KIT_BIN` override, the PATH fallback and an unreadable checkout.
+pub fn kit_version() -> Option<String> {
+    if std::env::var_os("COLONY_AGENT_KIT_BIN").map(PathBuf::from).is_some_and(|p| p.is_file()) {
+        return None;
+    }
+    resolve().ok().flatten().and_then(|e| e.manifest).map(|m| m.version)
+}
+
 /// Mission Control server from the resolved engine, or None for the unmanaged fallback.
 pub struct ServeChoice {
     pub node: PathBuf,

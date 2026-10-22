@@ -616,6 +616,7 @@ function showEngine() {
   void openEnginePanel((m) => {
     status(m);
     void refreshEngineBadge($("st-engine"));
+    controls.refreshChoices();
   });
 }
 $("st-engine").addEventListener("click", showEngine);

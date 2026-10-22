@@ -31,9 +31,36 @@ const BACKEND_INFO: &[(&str, &str, &str)] = &[
     ("auto", "", "cursor-agent if on PATH, else claude (never codex, cursor-acp or openrouter)"),
 ];
 
+/// Backends a kit only knows from some release on: the engine refuses the id before it.
+const MIN_ENGINE: &[(&str, &str)] = &[("openrouter", "6.6.0")];
+
 /// The vendor CLIs of the backend table (`claude`, `codex`, `cursor-agent`; may repeat).
 pub(crate) fn vendor_bins() -> impl Iterator<Item = &'static str> {
     BACKEND_INFO.iter().map(|(_, bin, _)| *bin).filter(|b| !b.is_empty())
+}
+
+/// The engine version `backend` needs when the engine's `version` is known and older.
+/// An unknown or unparsable version never blocks: the kit itself has the last word.
+fn needs_engine(backend: &str, version: Option<&str>) -> Option<&'static str> {
+    let (_, min) = MIN_ENGINE.iter().find(|(id, _)| *id == backend)?;
+    let have = semver::Version::parse(version?.trim()).ok()?;
+    (have < semver::Version::parse(min).ok()?).then_some(*min)
+}
+
+fn engine_too_old(backend: &str, version: Option<&str>) -> Result<(), String> {
+    match needs_engine(backend, version) {
+        Some(min) => Err(format!(
+            "{} needs engine {min} or newer (current {}): update it in More → Engine",
+            if backend == "openrouter" { "OpenRouter" } else { backend },
+            version.unwrap_or("?")
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a backend the engine that runs `agent-kit` (engine::kit_command) does not know.
+pub(crate) fn check_engine(backend: &str) -> Result<(), String> {
+    engine_too_old(backend, crate::engine::kit_version().as_deref())
 }
 
 #[derive(Serialize)]
@@ -43,10 +70,13 @@ pub struct BackendChoice {
     bin: String,
     available: bool,
     note: String,
+    /// The engine version this backend needs, when the current engine is older.
+    needs_engine: Option<String>,
 }
 
 #[tauri::command]
 pub fn agent_backends() -> Vec<BackendChoice> {
+    let version = crate::engine::kit_version();
     BACKEND_INFO
         .iter()
         .map(|(id, bin, note)| {
@@ -55,7 +85,8 @@ pub fn agent_backends() -> Vec<BackendChoice> {
             } else {
                 tools::find_bin(bin, None).is_some()
             };
-            BackendChoice { id: (*id).into(), bin: (*bin).into(), available, note: (*note).into() }
+            let needs_engine = needs_engine(id, version.as_deref()).map(String::from);
+            BackendChoice { id: (*id).into(), bin: (*bin).into(), available, note: (*note).into(), needs_engine }
         })
         .collect()
 }
@@ -126,6 +157,22 @@ mod tests {
             assert!(!super::valid_model(bad), "{bad}");
         }
     }
+
+    #[test]
+    fn engine_floor() {
+        use super::{engine_too_old, needs_engine};
+        assert_eq!(needs_engine("openrouter", Some("6.4.0")), Some("6.6.0"));
+        assert_eq!(needs_engine("openrouter", Some("6.6.0-rc.1")), Some("6.6.0"));
+        assert_eq!(needs_engine("openrouter", Some("6.6.0")), None);
+        assert_eq!(needs_engine("openrouter", Some("7.0.0")), None);
+        // Unknown engine (override, PATH fallback, unreadable checkout): never blocks.
+        assert_eq!(needs_engine("openrouter", None), None);
+        assert_eq!(needs_engine("openrouter", Some("?")), None);
+        assert_eq!(needs_engine("claude", Some("5.0.0")), None);
+        let e = engine_too_old("openrouter", Some("6.4.0")).unwrap_err();
+        assert!(e.contains("OpenRouter needs engine 6.6.0") && e.contains("current 6.4.0") && e.contains("More → Engine"), "{e}");
+        assert!(engine_too_old("codex", Some("6.4.0")).is_ok());
+    }
 }
 
 #[derive(Serialize)]
@@ -152,11 +199,13 @@ pub fn agent_start(
     if !BACKENDS.contains(&backend.as_str()) {
         return Err(format!("Unknown backend: {backend}"));
     }
+    check_engine(&backend)?;
     let on_limit = on_limit.filter(|b| !b.trim().is_empty());
     if let Some(b) = &on_limit {
         if b == "auto" || !BACKENDS.contains(&b.as_str()) {
             return Err(format!("Unknown --on-limit backend: {b}"));
         }
+        check_engine(b)?;
     }
     let model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
     if let Some(m) = &model {
