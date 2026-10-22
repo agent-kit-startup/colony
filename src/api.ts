@@ -61,7 +61,7 @@ export interface FileVersions { before: string | null; after: string | null; not
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
-export interface BackendChoice { id: string; bin: string; available: boolean; note: string }
+export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null }
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string }
 export interface ContextSource { label: string; kind: string; path: string; exists: boolean; bytes: number | null; lines: number | null; files: number | null; note: string }
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }

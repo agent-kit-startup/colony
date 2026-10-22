@@ -46,6 +46,11 @@ export class RunControls {
     this.onLimit.addEventListener("change", () => this.remember({ onLimit: this.onLimit.value || null }));
     this.model.addEventListener("change", () => this.remember({ model: this.model.value.trim() || null }));
     this.ticks.addEventListener("change", () => this.remember({ maxTicks: Number(this.ticks.value) || null }));
+    this.refreshChoices();
+  }
+
+  /** Re-read the backend table, e.g. after an engine update changed what the kit knows. */
+  refreshChoices() {
     api.agentBackends().then((c) => this.setChoices(c), () => {});
   }
 
@@ -59,7 +64,8 @@ export class RunControls {
       // The option VALUE stays the backend id (it is a `--backend` argument);
       // only the shown text is prettified. Unknown ids keep their raw id.
       const name = ENGINE_LABELS[id] ?? id;
-      return c && !c.available ? `${name} (not on PATH)` : name;
+      if (c && !c.available) return `${name} (not on PATH)`;
+      return c?.needsEngine ? `${name} (needs engine ${c.needsEngine})` : name;
     };
     this.backend.replaceChildren(...ids.map((id) => h("option", { value: id }, label(id))));
     this.onLimit.replaceChildren(h("option", { value: "" }, "stop"), ...ids.filter((id) => id !== "auto").map((id) => h("option", { value: id }, label(id))));
@@ -70,8 +76,10 @@ export class RunControls {
 
   private renderNote() {
     const c = this.choices.find((x) => x.id === this.backend.value);
-    this.note.textContent = c ? `${c.note}${c.available ? "" : ` · ${c.bin || "no agent CLI"} not found on PATH`}` : "";
-    this.note.classList.toggle("warn", this.backend.value === "cursor-agent" || !!(c && !c.available));
+    const missing = c && !c.available ? ` · ${c.bin || "no agent CLI"} not found on PATH` : "";
+    const old = c?.needsEngine ? ` · needs engine ${c.needsEngine} or newer: update it in More → Engine` : "";
+    this.note.textContent = c ? `${c.note}${missing}${old}` : "";
+    this.note.classList.toggle("warn", this.backend.value === "cursor-agent" || !!(c && (!c.available || c.needsEngine)));
   }
 
   private remember(patch: Record<string, unknown>) {

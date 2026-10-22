@@ -151,6 +151,9 @@ fn find_real(name: &str) -> Option<String> {
 /// (cwd = the opened folder).
 #[tauri::command]
 pub fn term_launch(kind: String, engine: String, model: Option<String>, prompt: Option<String>, resume: Option<String>, dry_run: Option<bool>) -> Result<TermLaunch, String> {
+    if kind == "run-plan-all" {
+        agent::check_engine(&engine)?;
+    }
     plan(&kind, &engine, model.as_deref(), prompt.as_deref(), resume.as_deref(), dry_run.unwrap_or(false), &find_real)
 }
 
