@@ -21,6 +21,7 @@ import { hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
+import { CommandPalette } from "./palette";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
@@ -74,6 +75,7 @@ document.getElementById("app")!.innerHTML = `
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="more-menu" class="menu" hidden>
+  <button data-more="commands" title="Ctrl+Shift+P">Commands…</button>
   <button data-more="web">Mission Control (web panel)</button>
   <button data-more="run-elsewhere">Run plan in another folder…</button>
   <button data-more="refresh">Reload Mission Control data</button>
@@ -606,6 +608,7 @@ menu.addEventListener("click", (ev) => {
     );
   }
   else if (what === "engine") showEngine();
+  else if (what === "commands") void palette.show();
   else if (what === "terminal") {
     toggleTerminal(true);
     void terminals.create();
@@ -620,6 +623,15 @@ function showEngine() {
   });
 }
 $("st-engine").addEventListener("click", showEngine);
+
+// ---- command palette (Ctrl+Shift+P, More → Commands) -----------------------------------
+const palette = new CommandPalette({
+  status,
+  hasFolder: () => !!workspace,
+  interactive: (prompt, why) => host.interactive(prompt, why),
+  showEngine,
+});
+document.body.append(palette.el);
 
 function renderSkinMenu() {
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
@@ -787,6 +799,7 @@ async function openWorkspace(path: string) {
   editors.closeAll();
   terminals.closeAll();
   snapshot.reset();
+  palette.reset();
   chatTabs.clear();
   resuming.clear();
   chats.reset();
@@ -905,6 +918,7 @@ window.addEventListener(
     else if (key === "s" && !ev.shiftKey) void saveActive();
     else if (key === "o" && !ev.shiftKey && !inTerm) void pickFolder();
     else if (key === "p" && !ev.shiftKey && !inTerm) void showQuick();
+    else if (key === "p" && ev.shiftKey) void palette.show();
     else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
     else if (key === "e" && ev.shiftKey) void openInEditor();
     else if (key === "t" && ev.shiftKey) {
@@ -1038,6 +1052,24 @@ async function runSmoke(root: string, info: StartupInfo) {
     ];
     const verdicts = cases.map(([r, want]) => ({ text: r.text, got: decide(r).action, want }));
     await log("mc-allowlist", verdicts.every((v) => v.got === v.want), verdicts);
+    // Command palette: the kit's catalog (the fake agent-kit's fixture, or a real engine),
+    // run only for PROMPT_SLASH names, copy for the rest, markup shown as text. An engine
+    // without the catalog must show the Update-the-engine gate and no rows.
+    await palette.show();
+    const prow = (n: string) => palette.rows().find((r) => r.name === n);
+    const items = [...palette.el.querySelectorAll<HTMLElement>(".palette-item")];
+    const gated = !!palette.error && palette.error.startsWith("Update the engine") && !items.length;
+    const listed =
+      !palette.error &&
+      palette.open &&
+      items.length === palette.rows().length &&
+      prow("run-plan")?.run === true &&
+      prow("git-prod")?.run === false &&
+      palette.rows().every((r) => r.layer !== "factory" || !r.run) &&
+      !palette.el.querySelector("#palette-list img") &&
+      palette.rows().every((r) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(r.name));
+    await log("command-palette", listed || gated, { error: palette.error || null, rows: palette.rows().map((r) => `${r.name}:${r.layer}:${r.run ? "run" : "copy"}`), rendered: items.length });
+    palette.hide();
     const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     openWebPanel();
     const frameOk = await Promise.race([loaded, wait(8000).then(() => false)]);

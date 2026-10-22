@@ -18,6 +18,24 @@ while [ $# -gt 0 ]; do
   shift
 done
 cd "$cwd" || exit 1
+if [ "$cmd" = commands ]; then
+  # Commands catalog stand-in (kit docs/contracts/commands-catalog.schema.json): one row
+  # Colony runs, the never-run production commands, a factory row whose name is
+  # allowlisted, markup in a description and a name the schema refuses.
+  cat <<'JSON'
+{"catalogVersion":"1.0.0","kitVersion":"0.0.0-fixture","commands":[
+{"name":"continue-plan","description":"Resume a plan from the last handoff and execute only the next unit.","layer":"kit","headless":true},
+{"name":"git-prod","description":"Promote staging to production.","layer":"kit","headless":false},
+{"name":"git-staging","description":"Bring local changes to the pre-production branch.","layer":"kit","headless":true},
+{"name":"handoff","description":"Factory row with an allowlisted name.","layer":"factory","headless":false},
+{"name":"kit-prod","description":"Ship the kit.","layer":"factory","headless":false},
+{"name":"my-macro","description":"<img src=x onerror=alert(1)> project command","layer":"project","headless":false},
+{"name":"run-plan","description":"Run the active plan until it is done or blocked.","layer":"kit","headless":true},
+{"name":"../escape","description":"dropped","layer":"kit","headless":true}
+]}
+JSON
+  exit 0
+fi
 if [ "$cmd" = run-plan-all ]; then
   # Queue runner stand-in (a PTY tab in Colony): print one line and leave a proof file.
   echo "fixture run-plan-all backend=$backend"

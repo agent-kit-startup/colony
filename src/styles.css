@@ -139,6 +139,15 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 #quick-list { max-height: 50vh; overflow: auto; }
 .quick-item { padding: 5px 12px; font-family: var(--mono); font-size: 12px; cursor: pointer; }
 .quick-item.sel { background: var(--mc-blue-bg); }
+#palette { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+#palette[hidden] { display: none; }
+#palette-input { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 10px 12px; font-size: 14px; background: var(--bg-2); outline: none; }
+#palette-list { max-height: 55vh; overflow: auto; }
+.palette-head { padding: 4px 12px; border-bottom: 1px solid var(--line); }
+.palette-item { padding: 6px 12px; font-family: inherit; display: flex; flex-direction: column; gap: 2px; }
+.palette-item .row { gap: var(--mc-space-xs); }
+.palette-act { font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); min-width: 34px; text-align: right; }
+.palette-act.run { color: var(--accent); font-weight: 600; }
 
 .badge { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: var(--mc-radius-chrome); background: var(--accent); color: #fff; font-size: 11px; line-height: 16px; text-align: center; font-weight: 600; }
 .badge.warn { background: var(--warn); color: var(--mc-bg-primary); }

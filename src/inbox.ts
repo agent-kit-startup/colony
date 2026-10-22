@@ -15,7 +15,7 @@ import { runLabel, runs } from "./runs";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { ago, btn, card, chip, empty, pill, rerender } from "./ui";
 
-/** Kit commands the Inbox may hand to an interactive agent (mirrors src-tauri vendor.rs). */
+/** Kit commands the Inbox may hand to an interactive agent: a subset of src-tauri vendor.rs PROMPT_SLASH (pinned by its tests). */
 const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit)( [A-Za-z0-9._:/-]{1,240})?$/;
 
 export class InboxView {

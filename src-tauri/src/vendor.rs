@@ -30,6 +30,11 @@ pub struct TermLaunch {
     pub note: String,
 }
 
+/// A slash name Colony may hand to an interactive agent (the command palette's "Run").
+pub fn runnable(name: &str) -> bool {
+    PROMPT_SLASH.contains(&name)
+}
+
 /// `/name` or `/name <arg>`, where `name` is allowlisted and `arg` is one plain token.
 pub fn valid_prompt(p: &str) -> bool {
     let Some(rest) = p.strip_prefix('/') else { return false };
@@ -159,7 +164,7 @@ pub fn term_launch(kind: String, engine: String, model: Option<String>, prompt: 
 
 #[cfg(test)]
 mod tests {
-    use super::{plan, valid_prompt};
+    use super::{plan, valid_prompt, PROMPT_SLASH};
 
     fn find(name: &str) -> Option<String> {
         match name {
@@ -176,6 +181,40 @@ mod tests {
         }
         for bad in ["run-plan", "/git-prod", "/kit-prod", "/run-plan a b", "/run-plan ../x", "/run-plan --flag", "/run-plan x;rm", "/run-plan $(id)", "/run-plan "] {
             assert!(!valid_prompt(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn never_prod() {
+        for name in ["git-prod", "kit-prod"] {
+            assert!(!PROMPT_SLASH.contains(&name), "{name}");
+            assert!(!super::runnable(name), "{name}");
+        }
+    }
+
+    /// The names after `/^\/` in the regex literal `const <name> = /^\/...` of a page source:
+    /// one name, or an alternation `(a|b|c)`.
+    fn regex_names(src: &str, constant: &str) -> Vec<String> {
+        let start = format!("const {constant} = /^\\/");
+        let at = src.find(&start).unwrap_or_else(|| panic!("{constant} not found")) + start.len();
+        let rest = &src[at..];
+        let body = match rest.strip_prefix('(') {
+            Some(r) => &r[..r.find(')').expect("closing paren")],
+            None => &rest[..rest.find(|c: char| !(c.is_ascii_lowercase() || c == '-')).unwrap_or(rest.len())],
+        };
+        body.split('|').map(str::to_string).collect()
+    }
+
+    /// The page's own allowlists (Inbox "Ask agent", Mission Control run-plan) may only name
+    /// commands this Rust check lets through; it stays the single gate.
+    #[test]
+    fn page_allowlists_within_prompt_slash() {
+        let inbox = regex_names(include_str!("../../src/inbox.ts"), "ASKABLE");
+        let mc = regex_names(include_str!("../../src/mcactions.ts"), "RUN_PLAN");
+        assert!(inbox.len() >= 5, "{inbox:?}");
+        assert_eq!(mc, ["run-plan"]);
+        for name in inbox.iter().chain(&mc) {
+            assert!(PROMPT_SLASH.contains(&name.as_str()), "{name} is not in PROMPT_SLASH");
         }
     }
 
