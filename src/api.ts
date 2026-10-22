@@ -66,6 +66,9 @@ export interface AgentStarted { id: number; cmd: string; root: string; backend: 
 export interface ContextSource { label: string; kind: string; path: string; exists: boolean; bytes: number | null; lines: number | null; files: number | null; note: string }
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
+/** One row of the kit's commands catalog; `run` is Colony's Rust-side allowlist verdict. */
+export interface CommandRow { name: string; description: string; layer: string; headless: boolean; run: boolean }
+export interface CommandsCatalog { catalogVersion: string; kitVersion: string; commands: CommandRow[]; dropped: number }
 export interface TermLaunch { argv: string[]; label: string; bin: string; note: string }
 export interface ChatSession { id: string; title: string; titleSource: "custom" | "ai" | "first-prompt" | "none"; modified: number; sizeBytes: number }
 export interface ChatList { vendor: string; status: "ok" | "unsupported"; note: string; dir: string | null; total: number; sessions: ChatSession[] }
@@ -92,6 +95,7 @@ export const api = {
   mcSubscribe: (onEvent: Channel<McEvent>) => invoke<void>("mc_subscribe", { onEvent }),
   termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; resume?: string; dryRun?: boolean }) =>
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
+  commandsCatalog: () => invoke<CommandsCatalog>("commands_catalog"),
   chatSessions: (vendor = "claude") => invoke<ChatList>("chat_sessions", { vendor }),
   ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[]) =>
     invoke<number>("pty_spawn", { cols, rows, command: command ?? null, onEvent }),
