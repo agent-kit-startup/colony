@@ -20,7 +20,11 @@ use serde::Serialize;
 use crate::{agent, chats, tools};
 
 /// Slash commands a cockpit button may hand to an interactive agent as its first prompt.
-const PROMPT_SLASH: &[&str] = &["run-plan", "continue-plan", "backlog-edit", "archive-plan", "plan-review-triage", "field-report-resolve", "run-plan-all", "handoff", "summary"];
+/// `agent-kit-onboard`, `start-project` and `backlog-add` are the first-run path: they run
+/// only as an interactive agent in a terminal tab, so their own Asks (CI/CD config, hooks,
+/// remotes, scaffold: onboard Hard Stop 3; the plan and backlog write gates) are answered
+/// there by the user. Colony never answers or auto-applies them.
+const PROMPT_SLASH: &[&str] = &["run-plan", "continue-plan", "backlog-edit", "archive-plan", "plan-review-triage", "field-report-resolve", "run-plan-all", "handoff", "summary", "agent-kit-onboard", "start-project", "backlog-add"];
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -196,6 +200,8 @@ mod tests {
 
     /// The names after `/^\/` in the regex literal `const <name> = /^\/...` of a page source:
     /// one name, or an alternation `(a|b|c)`.
+    const FIRST_RUN: [&str; 3] = ["agent-kit-onboard", "start-project", "backlog-add"];
+
     fn regex_names(src: &str, constant: &str) -> Vec<String> {
         let start = format!("const {constant} = /^\\/");
         let at = src.find(&start).unwrap_or_else(|| panic!("{constant} not found")) + start.len();
@@ -217,6 +223,23 @@ mod tests {
         assert_eq!(mc, ["run-plan"]);
         for name in inbox.iter().chain(&mc) {
             assert!(PROMPT_SLASH.contains(&name.as_str()), "{name} is not in PROMPT_SLASH");
+        }
+        for name in FIRST_RUN {
+            assert!(inbox.iter().any(|n| n == name), "{name} is not in ASKABLE");
+        }
+    }
+
+    /// The first-run commands (onboarding, a first plan, the backlog) run from the IDE as an
+    /// interactive agent, bare or with one plain argument, like the other allowlisted names.
+    #[test]
+    fn first_run_commands_runnable() {
+        for name in FIRST_RUN {
+            assert!(super::runnable(name), "{name}");
+            assert!(valid_prompt(&format!("/{name}")), "{name}");
+            assert!(!valid_prompt(&format!("/{name} --yes")), "{name}");
+            assert!(!valid_prompt(&format!("/{name} a b")), "{name}");
+            let t = plan("interactive", "claude", None, Some(&format!("/{name}")), None, false, &find).unwrap();
+            assert_eq!(t.argv, ["/bin/claude", &format!("/{name}")]);
         }
     }
 
