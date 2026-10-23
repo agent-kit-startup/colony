@@ -29,6 +29,7 @@ The cockpit is the center of the window. Its first tabs are Mission Control itse
 | Terminals | Real PTYs running your `$SHELL` in the opened folder at the bottom, several tabs (`+` or Ctrl+Shift+T), Ctrl+` to show / hide, Ctrl+Shift+C / Ctrl+Shift+V copy and paste (wired, not yet verified on WebKitGTK). |
 | Open in my editor | `Open in editor` (Ctrl+Shift+E) hands the active file, or the folder, to your own editor; right-click a file or folder in the Explorer for that one. |
 | Engine picker | In the Mission tab: engine (`--backend`: `claude`, `codex`, `cursor-acp`, `cursor-agent`, `auto`; the ones not on PATH are marked), `--on-limit` engine for the next fresh tick after a vendor usage limit, optional `--model`, tick budget. Each choice is remembered for the opened folder in the settings file. The note under the picker says how a gate answer reaches that engine (`cursor-agent` has no input channel: a gate ends the tick). The same engine picks the vendor CLI for `Open interactive` and the backend of `Run queue`. |
+| Commands | `More → Commands…` or Ctrl+Shift+P (also from a terminal): the folder's slash commands from the kit, then Claude Code's built-in commands, with search over names and descriptions; `Run` or `Copy` per row (see Commands). |
 | Web panel | `More → Mission Control (web panel)`: the kit's own page in a tab, as a fallback (see Mission Control web panel). |
 | Skins | `More → Skin`: Bare Metal (default) or Legacy for the whole window, web panel included; saved as `ui.skin` in the settings file. |
 
@@ -115,6 +116,17 @@ Supported range: driver events protocol 1.x and Mission Control data 1.x (`DRIVE
 `More → Engine…` (or a click on the engine in the status bar) shows the engine in use, its contracts, Node, and the installed versions. `Install engine` / `Update engine` downloads `agent-kit-engine-<version>.tar.gz` and `SHA256SUMS` of the latest release (or the version typed in) with the system `curl`, checks the sha256, unpacks it with `tar` into a temporary folder, checks `engine.json` against the range, then moves it into place and makes it current. The engine it replaces stays installed for `Roll back`; older ones are removed. Signatures are not checked yet: no signing key exists, and the install says so. New agent runs use the new engine at once; Mission Control switches when the folder is reopened.
 
 Node: the engine runs on a system `node` that satisfies its `node` range (`COLONY_NODE_BIN` or PATH), else on a Node build Colony installed. `Install Node runtime` downloads the pinned official Node build (24.22.0, Linux x64 and arm64 for now) from nodejs.org, checks it against `SHASUMS256.txt` and the sha256 pinned in engine.rs, and unpacks it into `<data dir>/colony/runtime/node-<version>/`.
+
+## Commands
+
+The command palette (`More → Commands…`, Ctrl+Shift+P) lists what you can type after `/` in the opened folder, so you can find a command without knowing its name. Typing filters by name first, then by description. Up / Down pick a row, Enter acts on it, Escape closes.
+
+| Section | Source | Action |
+|---------|--------|--------|
+| Kit commands | `agent-kit commands --json --cwd <folder>` from the engine in use, read again each time the palette opens: the folder's own `.cursor/commands/*.md`, each with its description and its layer (`kit`, `factory` for the kit maintainers' own commands, `project` for one the folder added). Colony keeps no list of its own. | `Run` when the name is in Colony's allowlist (`PROMPT_SLASH` in `src-tauri/src/vendor.rs`: `run-plan`, `continue-plan`, `backlog-edit`, `archive-plan`, `plan-review-triage`, `field-report-resolve`, `run-plan-all`, `handoff`, `summary`) and the row is not `factory`: it opens the interactive agent (see Open interactive) with `/<name>` as its first prompt after a native confirmation, and the Rust side checks the name again. Every other row is `Copy`: `/<name>` goes to the clipboard, to paste in your agent's chat input. The catalog's own `headless` flag never makes a row runnable. `/git-prod` and `/kit-prod` are never in the allowlist (a test pins that). |
+| Claude Code | A static list in `src/claude-builtins.ts`, taken from Claude Code's commands page (https://code.claude.com/docs/en/commands); the section head shows the URL and the date it was checked. Not read from the `claude` binary. | Always `Copy`, for Claude's chat input. `Open Claude tab` starts the unmodified `claude` in a terminal tab with no prompt, whatever the engine choice; `Copy docs link` copies the page URL. |
+
+An engine without `agent-kit commands` (older than agent-kit 6.7.0), or one that prints something other than a catalog Colony understands (`catalogVersion` major 1), shows "Update the engine (More → Engine) to list commands" instead of the kit rows; the Claude Code section still shows. Command names that are not plain slash names are dropped and descriptions are shown as text only, since both come from the repository. `COLONY_SMOKE` logs a `command-palette` step (the catalog's rows, or the engine gate) and a `claude-builtins` step.
 
 ## Host requests
 
