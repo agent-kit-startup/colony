@@ -61,7 +61,8 @@ export interface FileVersions { before: string | null; after: string | null; not
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
-export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null }
+/** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
+export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }
 /** The kit command a driver run runs: the tick loop or the queue runner (driver protocol 1.2.0). */
 export type RunCommand = "run-plan" | "run-plan-all";
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string; command: RunCommand }

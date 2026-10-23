@@ -116,11 +116,46 @@ pub struct BackendChoice {
     note: String,
     /// The engine version this backend needs, when the current engine is older.
     needs_engine: Option<String>,
+    /// The desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend.
+    system_default: bool,
+}
+
+/// Omarchy's default coding agent: `${XDG_CONFIG_HOME:-~/.config}/omarchy/defaults/agent`,
+/// written by `omarchy-default-agent` (one id per line).
+fn omarchy_agent_file() -> Option<PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(config.join("omarchy/defaults/agent"))
+}
+
+/// The agent id in that file: first line, trimmed, a plain lowercase id; else none.
+fn read_omarchy_agent(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::fs::File::open(path).ok()?.take(256).read_to_string(&mut buf).ok()?;
+    let id = buf.lines().next()?.trim();
+    let plain = !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    plain.then(|| id.to_string())
+}
+
+/// The kit backend for an Omarchy agent id, exact ids only. Omarchy's `cursor-agent` is
+/// the Cursor CLI, the kit's `cursor-agent` backend (never `cursor-acp`, which is opt-in).
+/// `opencode`, `pi`, `gemini`, `copilot`, ... have no kit backend: none, Colony keeps its own.
+fn omarchy_backend(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "cursor-agent" => Some("cursor-agent"),
+        _ => None,
+    }
 }
 
 #[tauri::command]
 pub fn agent_backends() -> Vec<BackendChoice> {
     let version = crate::engine::kit_version();
+    let system = omarchy_agent_file().and_then(|p| read_omarchy_agent(&p)).and_then(|a| omarchy_backend(&a));
     BACKEND_INFO
         .iter()
         .map(|(id, bin, note)| {
@@ -130,7 +165,8 @@ pub fn agent_backends() -> Vec<BackendChoice> {
                 tools::find_bin(bin, None).is_some()
             };
             let needs_engine = needs_engine(id, version.as_deref()).map(String::from);
-            BackendChoice { id: (*id).into(), bin: (*bin).into(), available, note: (*note).into(), needs_engine }
+            let system_default = system == Some(*id);
+            BackendChoice { id: (*id).into(), bin: (*bin).into(), available, note: (*note).into(), needs_engine, system_default }
         })
         .collect()
 }
@@ -192,6 +228,38 @@ pub enum AgentEvent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn omarchy_default_agent() {
+        use super::{omarchy_backend, read_omarchy_agent, BACKENDS};
+        let dir = std::env::temp_dir().join(format!("colony-omarchy-agent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("agent");
+        let read = |content: &[u8]| {
+            std::fs::write(&f, content).unwrap();
+            read_omarchy_agent(&f)
+        };
+        assert_eq!(read(b"claude\n").as_deref(), Some("claude"));
+        assert_eq!(read(b"  codex  \nextra\n").as_deref(), Some("codex"));
+        assert_eq!(read(b"cursor-agent").as_deref(), Some("cursor-agent"));
+        assert_eq!(read(b"opencode\n").as_deref(), Some("opencode"));
+        for bad in [&b""[..], b"\n", b"Claude\n", b"claude --yolo\n", b"../x\n", &[b'a'; 40][..], b"\xff\xfe\n"] {
+            assert_eq!(read(bad), None, "{bad:?}");
+        }
+        assert_eq!(read_omarchy_agent(&dir.join("missing")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(omarchy_backend("claude"), Some("claude"));
+        assert_eq!(omarchy_backend("codex"), Some("codex"));
+        assert_eq!(omarchy_backend("cursor-agent"), Some("cursor-agent"));
+        for gap in ["opencode", "pi", "omp", "gemini", "grok", "copilot", "crush", "openclaw", "hermes", "muse", "cursor", "cursor-acp", "auto"] {
+            assert_eq!(omarchy_backend(gap), None, "{gap}");
+        }
+        // Every mapped id is a backend the kit takes.
+        for a in ["claude", "codex", "cursor-agent"] {
+            assert!(BACKENDS.contains(&omarchy_backend(a).unwrap()));
+        }
+    }
+
     #[test]
     fn model_ids() {
         for ok in ["claude-opus-5-5", "gpt-5.1-codex", "sonnet[1m]", "us.anthropic.x:0"] {
