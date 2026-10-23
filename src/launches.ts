@@ -1,13 +1,15 @@
 // Everything Colony launched in this window, in one list: the driver runs of ./runs.ts
-// (`agent-kit run-plan --events ndjson`, one agent tab each) and the terminal tabs that
+// (`agent-kit run-plan --events ndjson` and, on driver protocol 1.2.0, the queue runner
+// `agent-kit run-plan-all --events ndjson`; one agent tab each) and the terminal tabs that
 // run an agent (the interactive vendor CLI, `/run-plan <plan>` from a plan action
-// included, and the `run-plan-all` queue runner). The Mission view's Agent runs card and
+// included, and the `run-plan-all` queue runner on an older engine). The Mission view's Agent runs card and
 // its "launched from Colony" hero read this, merged with what the kit snapshot reports.
 // Colony only reads the snapshot here; nothing is written back to the kit.
 import { type Run, runs } from "./runs";
 import { obj, snapshot, str } from "./snapshot";
 import type { TermView } from "./termview";
 
+/** `queue` is the run-plan-all queue runner: a driver run (`runId` set) or a terminal tab. */
 export type LaunchKind = "driver" | "interactive" | "queue";
 export type LaunchState = "starting" | "running" | "gate" | "ended";
 
@@ -88,7 +90,8 @@ class LaunchStore {
       if (why === "data") this.confirm();
     });
     runs.on((c) => {
-      if (c.kind === "state" && !this.driverPlan.has(c.run.id)) this.driverPlan.set(c.run.id, snapshot.activePlanFile);
+      // A queue run has no plan of its own: its current plan is what queue_state says.
+      if (c.kind === "state" && c.run.command === "run-plan" && !this.driverPlan.has(c.run.id)) this.driverPlan.set(c.run.id, snapshot.activePlanFile);
       if (c.kind === "state" || c.kind === "gate" || (c.kind === "event" && c.ev.type === "run_start")) this.changed();
     });
   }
@@ -176,11 +179,13 @@ class LaunchStore {
   }
 
   private fromRun(r: Run): Launch {
-    const state: LaunchState = !r.running ? "ended" : r.gate ? "gate" : r.plan ? "running" : "starting";
+    const queue = r.command === "run-plan-all";
+    const started = queue ? !!r.queue : !!r.plan;
+    const state: LaunchState = !r.running ? "ended" : r.gate ? "gate" : started ? "running" : "starting";
     return {
       tabId: `run:${r.id}`,
-      kind: "driver",
-      plan: r.plan || this.driverPlan.get(r.id) || "",
+      kind: queue ? "queue" : "driver",
+      plan: queue ? "" : r.plan || this.driverPlan.get(r.id) || "",
       backend: r.backend,
       root: r.root,
       label: `#${r.id} ${r.name}`,

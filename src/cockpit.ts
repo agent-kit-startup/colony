@@ -168,7 +168,7 @@ function stateChip(l: Launch): HTMLElement {
 
 /** One Colony launch (driver run or agent terminal tab); a click focuses its tab. */
 function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLElement {
-  const gateTip = l.gate ? `\nopen gate ${l.gate}${l.kind === "driver" ? "" : " (seen in the terminal output)"}` : "";
+  const gateTip = l.gate ? `\nopen gate ${l.gate}${l.runId !== undefined ? "" : " (seen in the terminal output)"}` : "";
   const row = h(
     "div",
     { class: "row click run-row", title: `${l.label} · ${l.root}${gateTip}${kit ? `\nkit reports: ${kit.label}` : ""}` },

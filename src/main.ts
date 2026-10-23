@@ -394,11 +394,27 @@ const host: CockpitHost = {
   runQueue: async () => {
     if (!workspace) return status("Open a folder first");
     const engine = controls.backend.value;
-    const ok = await confirmAction(`Start agent-kit run-plan-all with ${engine} in ${workspace.name}? It runs the HANDOFF queue in a terminal tab; answer its numbered gates there. It never runs /git-prod.`, "Run queue");
+    // Driver protocol 1.2.0+: the queue runs as a driver run (gates in the Inbox, the queue
+    // in Mission). Older or unknown engine, or the smoke's --dry-run: a terminal tab.
+    const mode = smokeDryRun
+      ? { driver: false, protocol: null, note: "--dry-run runs in a terminal tab" }
+      : await api.queueMode().catch((e) => ({ driver: false, protocol: null, note: `Queue mode: ${errText(e)}` }));
+    const where = mode.driver
+      ? "as an agent run; its gates appear in the Inbox"
+      : "in a terminal tab; answer its numbered gates there";
+    const ok = await confirmAction(`Start agent-kit run-plan-all with ${engine} in ${workspace.name}? It runs the HANDOFF queue ${where}. It never runs /git-prod.`, "Run queue");
     if (!ok) return status("Queue run not started");
+    if (mode.driver) {
+      try {
+        const run = await runs.start({ backend: engine, maxTicks: 1, command: "run-plan-all", model: controls.model.value.trim() || undefined });
+        return status(`Queue run #${run.id} started in ${run.name} (${run.backend})`);
+      } catch (e) {
+        return status(`Run queue: ${errText(e)}`);
+      }
+    }
     try {
       const l = await api.termLaunch({ kind: "run-plan-all", engine, model: controls.model.value.trim(), dryRun: smokeDryRun });
-      status(l.note);
+      status([mode.note, l.note].filter(Boolean).join(" · "));
       return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶", { kind: "queue", plan: "", backend: engine, engine });
     } catch (e) {
       status(`Run queue: ${errText(e)}`);
@@ -559,8 +575,8 @@ function openRunTab(run: Run) {
   const tab = t;
   addTab({
     id: `run:${run.id}`,
-    label: `#${run.id} ${run.plan ? run.plan.replace(/\.plan\.md$/, "") : run.name}`,
-    icon: "▶",
+    label: `#${run.id} ${run.command === "run-plan-all" ? "queue" : run.plan ? run.plan.replace(/\.plan\.md$/, "") : run.name}`,
+    icon: run.command === "run-plan-all" ? "⇶" : "▶",
     tip: `${run.cmd}\n${run.root}`,
     pinned: false,
     el: tab.el,
@@ -582,7 +598,7 @@ runs.on((c) => {
   if (c.kind === "state" && runs.runs.has(c.run.id) && !agentTabs.has(c.run.id) && c.run.running) openRunTab(c.run);
   if (c.kind === "state" || c.kind === "gate") {
     const t = tabs.get(`run:${c.run.id}`);
-    if (t && c.run.plan) t.label = `#${c.run.id} ${c.run.plan.replace(/\.plan\.md$/, "")}`;
+    if (t && c.run.plan && c.run.command === "run-plan") t.label = `#${c.run.id} ${c.run.plan.replace(/\.plan\.md$/, "")}`;
     renderTabs();
   }
 });
