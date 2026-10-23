@@ -49,10 +49,31 @@ marker="# colony-install launcher"
 
 usage() {
   cat <<EOF
-Usage: install.sh [--version <x.y.z>] [--uninstall]
-  --version    install this version instead of the latest one
-  --uninstall  remove the installed app, its launcher and its desktop entry
-               (the managed engine, Node runtime and settings stay; paths are printed)
+Usage: install.sh [--version <x.y.z>] [--uninstall] [--omarchy-snippet]
+  --version          install this version instead of the latest one
+  --uninstall        remove the installed app, its launcher and its desktop entry
+                     (the managed engine, Node runtime and settings stay; paths are printed)
+  --omarchy-snippet  print an optional Omarchy 4 Hyprland snippet (keybinding and
+                     window rule for Colony) and exit; nothing is installed or written
+EOF
+}
+
+# Optional Omarchy 4 snippet. Printed only; Colony and this installer never write
+# under ~/.config/hypr. Uses the Omarchy Lua helpers (o.bind / o.window).
+omarchy_snippet() {
+  cat <<'EOF'
+-- Colony on Omarchy 4 (optional). Paste into ~/.config/hypr/bindings.lua, or save
+-- as ~/.config/hypr/colony.lua and add require("hypr.colony") to hyprland.lua.
+-- To remove it, delete these lines.
+
+-- SUPER+SHIFT+I: focus the Colony window, or start Colony when none is open.
+-- A suggestion: SUPER+SHIFT+I is free in the Omarchy 4 defaults; pick another key
+-- if you bound it yourself (omarchy menu keybindings --print lists them).
+o.bind("SUPER + SHIFT + I", "Colony", { launch = "colony", focus = "^colony$" })
+
+-- Colony keeps native decorations: Hyprland draws no titlebar, so there are no
+-- window buttons to hide. Add your own rules here if you want them, for example:
+-- o.window("^colony$", { workspace = "3" })
 EOF
 }
 
@@ -75,6 +96,7 @@ uninstall() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall) uninstall; exit 0 ;;
+    --omarchy-snippet) omarchy_snippet; exit 0 ;;
     --version) [ $# -ge 2 ] || die "--version needs a value"; version="$2"; shift 2 ;;
     --version=*) version="${1#--version=}"; shift ;;
     -h|--help) usage; exit 0 ;;
