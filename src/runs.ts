@@ -1,8 +1,9 @@
-// Agent runs: every `agent-kit run-plan --events ndjson` driver process this window
-// started (one per folder), their logs, their open HITL gates and their ticks. The Agent
-// panel, the Inbox and the Review view all read from this one store. Colony never
-// answers a gate by itself: a reply is only ever sent from an operator action.
-import { api, Channel, errText, type AgentEvent, type TickReview } from "./api";
+// Agent runs: every driver process this window started (one per folder): the tick loop
+// `agent-kit run-plan --events ndjson` and, on driver protocol 1.2.0, the queue runner
+// `agent-kit run-plan-all --events ndjson`. Their logs, their open HITL gates and their
+// ticks. The Agent panel, the Inbox and the Review view all read from this one store.
+// Colony never answers a gate by itself: a reply is only ever sent from an operator action.
+import { api, Channel, errText, type AgentEvent, type RunCommand, type TickReview } from "./api";
 
 const MAX_ROWS = 3000;
 const MAX_ITEMS = 6000;
@@ -28,8 +29,26 @@ export type RunItem =
  * which the protocol event does not carry. Both are untrusted: render them as text only.
  */
 export interface Gate { runId: number; askId: string; labels: string[]; line: string; prompt: string; tick: number; detection: string; at: string }
+/**
+ * The queue as a `run-plan-all` driver run reports it (`queue_state`, driver protocol
+ * 1.2.0): a read-only projection of the HANDOFF queue fields, never written back.
+ */
+export interface QueueState { cursor: number | null; total: number; current: string | null; status: string | null }
+
+/** `queue_state` / `run_start.queue` fields, or null when the event carries none. */
+export function queueState(v: unknown): QueueState | null {
+  if (!v || typeof v !== "object") return null;
+  const q = v as Ev;
+  const total = Number(q.total);
+  if (!Number.isInteger(total) || total < 0) return null;
+  const cursor = Number.isInteger(q.cursor) && q.cursor >= 0 ? Number(q.cursor) : null;
+  return { cursor, total, current: typeof q.current === "string" ? q.current : null, status: typeof q.status === "string" ? q.status : null };
+}
+
 export interface Run {
   id: number;
+  /** `run-plan` (tick loop) or `run-plan-all` (the queue runner, one session). */
+  command: RunCommand;
   backend: string;
   root: string;
   name: string;
@@ -44,6 +63,8 @@ export interface Run {
   startedAt: string;
   /** The agent's latest text in the current tick: becomes the next gate's `prompt`. */
   lastText: string;
+  /** Queue runner only: the latest `queue_state` (null until the first one, or for run-plan). */
+  queue: QueueState | null;
 }
 
 export type RunChange =
@@ -80,7 +101,7 @@ function agentLine(e: Ev): Row | null {
   return null;
 }
 
-export interface StartOptions { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string }
+export interface StartOptions { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand }
 
 class RunStore {
   readonly runs = new Map<number, Run>();
@@ -115,6 +136,7 @@ class RunStore {
     const started = await api.agentStart({ ...opts, onEvent: channel });
     run = {
       id: started.id,
+      command: started.command === "run-plan-all" ? "run-plan-all" : "run-plan",
       backend: started.backend,
       root: started.root,
       name: started.root.split("/").pop() || started.root,
@@ -128,6 +150,7 @@ class RunStore {
       reviews: [],
       startedAt: new Date().toISOString(),
       lastText: "",
+      queue: null,
     };
     this.runs.set(run.id, run);
     this.emit({ kind: "state", run });
@@ -225,8 +248,21 @@ class RunStore {
       case "run_start":
         run.plan = String(ev.plan ?? "");
         if (ev.backend) run.backend = String(ev.backend);
+        if (ev.command === "run-plan-all") run.command = "run-plan-all";
+        if (run.command === "run-plan-all") {
+          run.queue = queueState(ev.queue) ?? run.queue;
+          this.emit({ kind: "state", run });
+          return this.row(run, `▶ queue run-plan-all · ${ev.backend} · protocol ${ev.protocol}`, "ag-head");
+        }
         this.emit({ kind: "state", run });
         return this.row(run, `▶ run ${ev.plan} · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol}`, "ag-head");
+      case "queue_state": {
+        const q = queueState(ev);
+        if (!q) return this.row(run, line, "ag-dim");
+        run.queue = q;
+        this.emit({ kind: "state", run });
+        return this.row(run, `⇶ queue ${queuePosition(q)}${q.current ? ` · ${q.current}` : ""}${q.status ? ` · ${q.status}` : ""}`, "ag-head");
+      }
       case "tick_start":
         run.lastText = "";
         return this.row(run, `— tick ${ev.tick}/${ev.maxTicks} · ${ev.pending} pending · ${ev.backend ?? ""} · log ${ev.log}`, "ag-head");
@@ -266,6 +302,11 @@ class RunStore {
         return this.row(run, String(ev.message ?? ""), ev.level === "error" ? "ag-err" : ev.level === "warn" ? "ag-warn" : "ag-dim");
       case "run_end":
         if (run.gate) this.setGate(run, null);
+        if (run.command === "run-plan-all") {
+          const n = Array.isArray(ev.replies) ? ev.replies.length : 0;
+          const stop = ev.stop?.cause ? ` · stop: ${ev.stop.cause}` : "";
+          return this.row(run, `■ queue run ended · exit ${ev.exitCode} · ${ev.reason} · ${n} answer${n === 1 ? "" : "s"}${stop}`, "ag-head");
+        }
         return this.row(run, `■ run ended · exit ${ev.exitCode} · ${ev.reason} · ${ev.ticks} ticks · ${ev.pending} pending`, "ag-head");
       default:
         return this.row(run, line, "ag-dim");
@@ -275,7 +316,14 @@ class RunStore {
 
 export const runs = new RunStore();
 
+/** `2/8` (1-based cursor of total), `–/8` when the cursor names no queued plan, `none`. */
+export function queuePosition(q: QueueState): string {
+  if (q.total === 0) return "none";
+  return `${q.cursor === null ? "–" : q.cursor + 1}/${q.total}`;
+}
+
 export function runLabel(r: Run): string {
+  if (r.command === "run-plan-all") return `#${r.id} ${r.name} · ${r.backend} · queue${r.queue ? ` ${queuePosition(r.queue)}` : ""}`;
   return `#${r.id} ${r.name} · ${r.backend}${r.plan ? ` · ${r.plan.replace(/\.plan\.md$/, "")}` : ""}`;
 }
 

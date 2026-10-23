@@ -7,9 +7,11 @@
 //!   the CLI's own positional prompt argument. Instead of a prompt it may resume a saved
 //!   session of the folder (chats.rs): `claude --resume <session uuid>`, the id checked
 //!   as a UUID here before it reaches argv.
-//! - `run-plan-all`: `agent-kit run-plan-all` in a PTY tab. The kit has no driver mode for
-//!   the queue runner (driver protocol scope: `run-plan` only), so its numbered-list gates
-//!   are answered in that terminal, which is how the CLI expects them.
+//! - `run-plan-all`: `agent-kit run-plan-all` in a PTY tab, the fallback for an engine whose
+//!   driver protocol is below 1.2.0 (or unknown): such a kit has no driver mode for the
+//!   queue runner, so its numbered-list gates are answered in that terminal. From 1.2.0 the
+//!   queue starts as a driver run instead (agent.rs `queue_mode`, `agent_start` with
+//!   command `run-plan-all`), and its gates reach the Inbox.
 //!
 //! `/git-prod`, `/kit-prod` and any other slash command stay out of the allowlist.
 
@@ -135,7 +137,7 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, res
             if dry_run {
                 argv.push("--dry-run".into());
             }
-            Ok(TermLaunch { argv, label: format!("run-plan-all · {engine}"), bin, note: "Queue runner: answer its numbered-list gates in this terminal (no driver mode for run-plan-all in the kit)".into() })
+            Ok(TermLaunch { argv, label: format!("run-plan-all · {engine}"), bin, note: "Queue runner: answer its numbered-list gates in this terminal (this engine has no run-plan-all driver mode)".into() })
         }
         _ => Err(format!("Unknown launch: {kind}")),
     }

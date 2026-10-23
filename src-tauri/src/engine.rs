@@ -418,6 +418,38 @@ pub fn kit_version() -> Option<String> {
     resolve().ok().flatten().and_then(|e| e.manifest).map(|m| m.version)
 }
 
+/// The driver protocol of the kit `kit_command` runs: the manifest of a managed or
+/// `COLONY_ENGINE` engine, else `<kit> engine-info --json` (kit 6.4+) for the
+/// `COLONY_AGENT_KIT_BIN` override, the PATH fallback and a checkout without a readable
+/// contract. None when neither answers (callers treat that as "too old").
+pub fn kit_driver_protocol() -> Option<String> {
+    let overridden = std::env::var_os("COLONY_AGENT_KIT_BIN").map(PathBuf::from).is_some_and(|p| p.is_file());
+    if !overridden {
+        if let Some(m) = resolve().ok().flatten().and_then(|e| e.manifest) {
+            return Some(m.driver_protocol);
+        }
+    }
+    let kit = kit_command().ok()?;
+    engine_info_protocol(&kit.program, &kit.args)
+}
+
+/// `driverProtocol` from `<program> <args> engine-info --json`; None when it fails or omits it.
+fn engine_info_protocol(program: &Path, args: &[PathBuf]) -> Option<String> {
+    let out = Command::new(program)
+        .args(args)
+        .args(["engine-info", "--json"])
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    info.get("driverProtocol")?.as_str().map(String::from)
+}
+
 /// Mission Control server from the resolved engine, or None for the unmanaged fallback.
 pub struct ServeChoice {
     pub node: PathBuf,
@@ -801,6 +833,26 @@ mod tests {
         let d = std::env::temp_dir().join(format!("colony-engine-test-{tag}-{}", unique()));
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn engine_info_driver_protocol() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = scratch("engine-info");
+        let script = |name: &str, body: &str| {
+            let p = d.join(name);
+            fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        let ok = script("kit-ok", r#"[ "$1 $2" = "engine-info --json" ] && echo '{"version":"6.8.0","driverProtocol":"1.2.0"}'"#);
+        assert_eq!(engine_info_protocol(&ok, &[]).as_deref(), Some("1.2.0"));
+        // A kit before engine-info (exit 1), garbage output, or no driverProtocol field: unknown.
+        assert_eq!(engine_info_protocol(&script("kit-old", "exit 1"), &[]), None);
+        assert_eq!(engine_info_protocol(&script("kit-junk", "echo not json"), &[]), None);
+        assert_eq!(engine_info_protocol(&script("kit-nofield", r#"echo '{"version":"6.3.0"}'"#), &[]), None);
+        assert_eq!(engine_info_protocol(&d.join("missing"), &[]), None);
     }
 
     fn manifest(version: &str, driver: &str, data: Option<&str>) -> Manifest {

@@ -62,7 +62,11 @@ export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; s
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null }
-export interface AgentStarted { id: number; cmd: string; root: string; backend: string }
+/** The kit command a driver run runs: the tick loop or the queue runner (driver protocol 1.2.0). */
+export type RunCommand = "run-plan" | "run-plan-all";
+export interface AgentStarted { id: number; cmd: string; root: string; backend: string; command: RunCommand }
+/** How "Run queue" starts run-plan-all with the current engine (agent.rs `queue_mode`). */
+export interface QueueMode { driver: boolean; protocol: string | null; note: string }
 export interface ContextSource { label: string; kind: string; path: string; exists: boolean; bytes: number | null; lines: number | null; files: number | null; note: string }
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
@@ -102,15 +106,17 @@ export const api = {
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
-  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; onEvent: Channel<AgentEvent> }) =>
+  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand; onEvent: Channel<AgentEvent> }) =>
     invoke<AgentStarted>("agent_start", {
       backend: o.backend,
       maxTicks: o.maxTicks,
       cwd: o.cwd ?? null,
       onLimit: o.onLimit || null,
       model: o.model || null,
+      command: o.command ?? null,
       onEvent: o.onEvent,
     }),
+  queueMode: () => invoke<QueueMode>("queue_mode"),
   agentBackends: () => invoke<BackendChoice[]>("agent_backends"),
   agentReply: (runId: number, askId: string, reply: number | string) => invoke<void>("agent_reply", { runId, askId, reply }),
   agentStop: (runId: number) => invoke<void>("agent_stop", { runId }),
