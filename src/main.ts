@@ -1079,7 +1079,7 @@ async function runSmoke(root: string, info: StartupInfo) {
     await log("mission-control-web", activeTab === "web" && mcFrame.src.startsWith("http://127.0.0.1:"), { src: mcFrame.src, loadEvent: frameOk });
     await wait(1500);
     const webSkin = await frameSkinNow();
-    await log("mc-web-skin", webSkin === "cursor", { skin: webSkin, src: mcFrame.src });
+    await log("mc-web-skin", webSkin === kitSkinValue("bare-metal"), { skin: webSkin, src: mcFrame.src });
     const opened = await mcPerformInFrame({ kind: "copy", text: "smoke.txt", subject: "path smoke.txt", destination: "filePicker" });
     await log("mc-open-file", editors.active === `${root}/smoke.txt` && activeTab === `${root}/smoke.txt`, { result: opened, active: editors.active ? relPath(editors.active) : null });
     let asked = "";
@@ -1119,7 +1119,7 @@ async function runSmoke(root: string, info: StartupInfo) {
     await Promise.race([reloaded, wait(8000)]);
     await wait(800);
     const backSkin = await frameSkinNow();
-    await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === "cursor" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
+    await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === kitSkinValue("bare-metal") && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
@@ -1183,6 +1183,9 @@ async function runSmoke(root: string, info: StartupInfo) {
       const keys = pendingGates().map((g) => g.key);
       const noted = alerts.log.filter((n) => keys.includes(n.key));
       const prompt = cards.find((c) => c.dataset.run === String(run.id))?.querySelector(".gate-prompt")?.textContent ?? "";
+      // Mission is hidden here (the run's tab is active) and renders only when shown or
+      // flushed: flush it so the strip is checked as the operator would see it.
+      mission.flush();
       const pinned = view("mission").querySelectorAll(".gate-strip .mission-gate").length;
       await log("gate-signals", document.title === `(${keys.length}) ${workspace?.name} · Colony` && noted.length === keys.length && noted.every((n) => !n.sent && !n.body.includes("HITL_GATE")) && prompt.includes("One decision") && !prompt.includes("HITL_GATE") && pinned === keys.length, {
         title: document.title,
@@ -1201,6 +1204,7 @@ async function runSmoke(root: string, info: StartupInfo) {
       if (second.run) inbox.el.querySelector<HTMLButtonElement>(`.inbox-card[data-run="${second.run.id}"] .gate-buttons button[data-reply="2"]`)?.click();
       inline?.querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]')?.click();
       await wait(400);
+      mission.flush();
       await log("inbox-cleared", !run.gate && !second.run?.gate && !$("inbox-badge") && !inbox.el.querySelector(".inbox-card") && document.title === `${workspace?.name} · Colony` && !view("mission").querySelector(".gate-strip"), { badge: $("inbox-badge")?.textContent ?? null, title: document.title });
     }
     await until(() => !run.running, 20000);
