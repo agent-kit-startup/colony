@@ -316,6 +316,12 @@ class RunStore {
 
 export const runs = new RunStore();
 
+/** The newest live `run-plan-all` driver run in `root`, or null. */
+export function liveQueueRun(root: string): Run | null {
+  const live = runs.list().filter((r) => r.running && r.command === "run-plan-all" && r.root === root);
+  return live.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
+}
+
 /** `2/8` (1-based cursor of total), `–/8` when the cursor names no queued plan, `none`. */
 export function queuePosition(q: QueueState): string {
   if (q.total === 0) return "none";
