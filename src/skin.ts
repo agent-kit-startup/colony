@@ -13,11 +13,12 @@ export const SKINS: { id: Skin; label: string }[] = [
 ];
 
 /**
- * The kit panel stores its skin in localStorage `agent-kit:dashboard-skin` as 'cursor'
- * (= Bare Metal) or 'legacy'. The kit will rename 'cursor' to 'bare-metal'; flip this
- * then (parseSkin already accepts both spellings).
+ * The kit panel stores its skin in localStorage `agent-kit:dashboard-skin` as 'bare-metal'
+ * or 'legacy'. Kits before the rename (agent-kit #1260) spelled Bare Metal 'cursor'; newer
+ * kits still read 'cursor' as an alias, and older ones fall back to their default (Bare
+ * Metal) on 'bare-metal' (parseSkin accepts both spellings).
  */
-const KIT_SPELLS_BARE_METAL = false;
+const KIT_SPELLS_BARE_METAL = true;
 
 export function kitSkinValue(s: Skin): "cursor" | "bare-metal" | "legacy" {
   if (s === "legacy") return "legacy";
