@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Mission Kit Colony desktop IDE"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [lib]
 name = "colony_lib"

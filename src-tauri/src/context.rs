@@ -243,11 +243,11 @@ mod tests {
 
     #[test]
     fn slug_matches_claude_project_folders() {
-        assert_eq!(project_slug("/home/severina/agent-kit-dev"), "-home-severina-agent-kit-dev");
-        assert_eq!(project_slug("/home/severina/agent-kit-dev/.cursor/memory/decisions"), "-home-severina-agent-kit-dev--cursor-memory-decisions");
-        assert_eq!(project_slug("/home/severina/.local/share/max-plan/sevelabs-idle"), "-home-severina--local-share-max-plan-sevelabs-idle");
+        assert_eq!(project_slug("/home/u/agent-kit-dev"), "-home-u-agent-kit-dev");
+        assert_eq!(project_slug("/home/u/agent-kit-dev/.cursor/memory/decisions"), "-home-u-agent-kit-dev--cursor-memory-decisions");
+        assert_eq!(project_slug("/home/u/.local/share/max-plan/sevelabs-idle"), "-home-u--local-share-max-plan-sevelabs-idle");
         assert_eq!(project_slug("/tmp/claude-1000/-home-x/scratchpad"), "-tmp-claude-1000--home-x-scratchpad");
-        assert_eq!(project_slug("/home/severina/Work"), "-home-severina-Work");
+        assert_eq!(project_slug("/home/u/Work"), "-home-u-Work");
         assert_eq!(project_slug("/home/u/my_repo v2"), "-home-u-my-repo-v2");
         // One dash per UTF-16 code unit: an emoji is two.
         assert_eq!(project_slug("/home/u/proj \u{1F41D}"), "-home-u-proj---");
