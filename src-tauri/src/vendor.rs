@@ -218,6 +218,28 @@ mod tests {
         }
     }
 
+    /// The palette's Claude Code section (src/claude-builtins.ts) is a cited, dated, copy-only
+    /// list: valid unique names, none a "Run" name, the source URL and check date present.
+    #[test]
+    fn claude_builtins_copy_only() {
+        let src = include_str!("../../src/claude-builtins.ts");
+        assert!(src.contains("export const SOURCE_URL = \"https://code.claude.com/docs/en/commands\";"));
+        let date = src.split("export const VERIFIED_AT = \"").nth(1).and_then(|r| r.split('"').next()).expect("VERIFIED_AT");
+        assert!(date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-' && date.replace('-', "").bytes().all(|c| c.is_ascii_digit()), "{date}");
+        let names: Vec<&str> = src.split("{ name: \"").skip(1).map(|r| r.split('"').next().unwrap()).collect();
+        assert!(names.len() >= 30, "{}", names.len());
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            let b = name.as_bytes();
+            assert!(!b.is_empty() && b.len() <= 64 && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-'), "{name}");
+            assert!(seen.insert(*name), "duplicate {name}");
+            assert!(!PROMPT_SLASH.contains(name) && !super::runnable(name), "{name} would run");
+        }
+        for core in ["model", "context", "compact", "memory", "agents", "mcp", "review"] {
+            assert!(names.contains(&core), "{core} missing");
+        }
+    }
+
     #[test]
     fn interactive_argv() {
         let l = plan("interactive", "claude", None, Some("/run-plan demo.plan.md"), None, false, &find).unwrap();

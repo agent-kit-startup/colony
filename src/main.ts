@@ -633,6 +633,16 @@ const palette = new CommandPalette({
   hasFolder: () => !!workspace,
   interactive: (prompt, why) => host.interactive(prompt, why),
   showEngine,
+  // The Claude Code section: `claude` itself, not the engine choice (which may be codex).
+  openClaude: async () => {
+    if (!workspace) return status("Open a folder first");
+    try {
+      const l = await api.termLaunch({ kind: "interactive", engine: "claude" });
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
+    } catch (e) {
+      status(`Open Claude: ${errText(e)}`);
+    }
+  },
 });
 document.body.append(palette.el);
 
@@ -1072,6 +1082,21 @@ async function runSmoke(root: string, info: StartupInfo) {
       !palette.el.querySelector("#palette-list img") &&
       palette.rows().every((r) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(r.name));
     await log("command-palette", listed || gated, { error: palette.error || null, rows: palette.rows().map((r) => `${r.name}:${r.layer}:${r.run ? "run" : "copy"}`), rendered: items.length });
+    // Claude Code section: the static cited list, shown with or without the engine gate,
+    // every row copy-only, the source URL on screen, and the search reaching it.
+    const builtins = [...palette.el.querySelectorAll<HTMLElement>(".palette-builtin")];
+    const section = palette.el.querySelector(".palette-section")?.textContent ?? "";
+    const pInput = palette.el.querySelector<HTMLInputElement>("#palette-input")!;
+    pInput.value = "compact";
+    pInput.dispatchEvent(new Event("input"));
+    const found = [...palette.el.querySelectorAll<HTMLElement>(".palette-builtin")].map((el) => el.dataset.name);
+    const builtinsOk =
+      builtins.length === palette.builtins().length &&
+      builtins.every((el) => el.querySelector(".palette-act")?.textContent === "Copy") &&
+      section.includes("https://code.claude.com/docs/en/commands") &&
+      found[0] === "compact" &&
+      palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));
+    await log("claude-builtins", builtinsOk, { rendered: builtins.length, listed: palette.builtins().length, section, compactSearch: found });
     palette.hide();
     const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     openWebPanel();
