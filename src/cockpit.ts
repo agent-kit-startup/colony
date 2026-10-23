@@ -10,7 +10,7 @@ import { chats } from "./chats";
 import { pendingGates } from "./gates";
 import { gateCard } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
-import { runLabel, runs } from "./runs";
+import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { prose } from "./transcript";
 import { ago, btn, bytes, card, cardHeader, chip, empty, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
@@ -173,16 +173,59 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
     "div",
     { class: "row click run-row", title: `${l.label} · ${l.root}${gateTip}${kit ? `\nkit reports: ${kit.label}` : ""}` },
     stateChip(l),
-    h("span", { class: "grow ellipsis" }, h("strong", {}, l.plan ? planName(l.plan) : l.kind === "interactive" ? "no plan" : "HANDOFF plan")),
+    h("span", { class: "grow ellipsis" }, h("strong", {}, l.plan ? planName(l.plan) : l.queue ? queueText(l.queue) : l.kind === "interactive" ? "no plan" : "HANDOFF plan")),
     ...(kit ? [chip("kit sees it", "chip-done")] : []),
     h("span", { class: "run-meta mono", title: `${KIND_LABEL[l.kind]} · ${l.backend} · started ${l.startedAt}` }, h("span", { class: "run-kind" }, KIND_LABEL[l.kind]), h("span", {}, l.backend), h("span", {}, clock(l.startedAt)), h("span", {}, elapsed(l.startedAt))),
   );
   row.dataset.launch = l.tabId;
   row.dataset.state = l.state;
   row.dataset.plan = l.plan;
+  if (l.queue) row.dataset.queueCursor = String(l.queue.cursor ?? "");
   row.addEventListener("click", () => (l.runId !== undefined ? host.focusRun(l.runId) : host.showTab(l.tabId)));
   return row;
 }
+
+/** `queue 2/8 · <current plan>` for a driver queue run. */
+function queueText(q: QueueState): string {
+  return `queue ${queuePosition(q)}${q.current ? ` · ${planName(q.current)}` : ""}`;
+}
+
+/**
+ * The queue as Mission and the Queue view show it: the list from the snapshot, the cursor
+ * and status from the live `run-plan-all` driver run when there is one (its `queue_state`
+ * events), else from the snapshot. Both are read-only projections of HANDOFF.
+ */
+function queueNow(root: string): { q: J; queue: string[]; cursor: number; hold: { plan: string; inQueue: boolean } | null; live: Run | null } {
+  const q = snapshot.runQueue;
+  const queue: string[] = Array.isArray(q.queue) ? q.queue.map(String) : [];
+  const live = liveQueueRun(root);
+  const lq = live?.queue && live.queue.total > 0 ? live.queue : null;
+  const cursor = lq ? (lq.cursor ?? -1) : typeof q.cursor === "number" ? q.cursor : -1;
+  const held = lq?.status?.toLowerCase() === "held";
+  const active = snapshot.activePlanFile;
+  const hold = held ? { plan: active, inQueue: queue.includes(active) } : lq && lq.status?.toLowerCase() !== "running" ? null : queueHold(q, queue, cursor);
+  return { q, queue, cursor, hold, live };
+}
+
+/** The live queue run: position, current plan, status, its open gate; a click opens it. */
+function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
+  const q = live.queue;
+  const held = q?.status?.toLowerCase() === "held";
+  const note = h(
+    "div",
+    { class: "launch-pending click queue-live", title: "Open its tab" },
+    held ? pill("Queue held", "awaiting", "\u23F8") : pill("Queue run", "running", "\u21F6"),
+    ...(live.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", "\u23EF")] : []),
+    h("span", { class: "grow" }, `#${live.id} · ${live.backend} · ${q ? `${queueText(q)}${q.status ? ` · ${q.status}` : ""}` : "waiting for the first queue_state"} · started ${clock(live.startedAt)} (${elapsed(live.startedAt)})${live.gate ? " · answer it in the Inbox" : ""}`),
+  );
+  note.dataset.run = String(live.id);
+  note.dataset.cursor = String(q?.cursor ?? "");
+  note.dataset.status = q?.status ?? "";
+  note.addEventListener("click", () => host.focusRun(live.id));
+  return note;
+}
+
+const RUN_QUEUE_TIP = "agent-kit run-plan-all: an agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
 
 const CHAT_SOURCE: Record<ChatSession["titleSource"], string> = { custom: "name you set", ai: "title from Claude Code", "first-prompt": "first prompt", none: "no title" };
 const CHATS_SHOWN = 8;
@@ -259,6 +302,7 @@ export class MissionView extends View {
     // A run Colony launched on another plan than HANDOFF's: show it as the active run
     // until HANDOFF (and so the snapshot) switches to it.
     const pend = snapshot.data ? launches.pending(this.host.workspaceRoot()) : null;
+    const liveQ = liveQueueRun(this.host.workspaceRoot());
     const pp = pend ? snapshot.plans().find((p) => p.file === pend.plan) : undefined;
     const pr = pend ? (pp?.progress ?? {}) : obj(now.progress);
     const total = Number(pr.total) || 0;
@@ -267,7 +311,7 @@ export class MissionView extends View {
       "div",
       { class: "actions now-actions" },
       btn("▶ Run plan", () => void this.host.runPlan(), { class: "primary", "data-act": "run-plan", title: "agent-kit run-plan --events ndjson on the active plan; the run opens as a tab with its transcript and gates" }),
-      btn("⇶ Run queue", () => void this.host.runQueue(), { class: "status-bar-btn", "data-act": "run-queue", title: "agent-kit run-plan-all in a terminal tab (the kit has no driver mode for the queue runner)" }),
+      btn("⇶ Run queue", () => void this.host.runQueue(), { class: "status-bar-btn", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
       btn("⌘ Open interactive", () => void this.host.interactive(), { class: "status-bar-btn", "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
       ...(pend
         ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`), { class: "status-bar-btn" })]
@@ -315,6 +359,7 @@ export class MissionView extends View {
       h("h2", { class: "now-plan-name" }, title),
       h("div", { class: "hero-file mono" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”."),
       ...pending,
+      ...(liveQ ? [liveQueueNote(liveQ, this.host)] : []),
       ...(total ? [stepbar(done, total, !!cur && !planDone)] : []),
       ...(plan || pend ? [stepper(missionSteps(prev, cur, next, { status, planDone, nextUpPlan: pend ? "" : str(now.nextUpPlan) }))] : []),
       ...(!pend && str(now.gaps) ? [h("div", { class: "gaps clamp-3", title: str(now.gaps) }, h("span", { class: "ag-warn" }, "Gaps "), str(now.gaps))] : []),
@@ -391,16 +436,14 @@ export class MissionView extends View {
   }
 
   private queueCard(): HTMLElement {
-    const q = snapshot.runQueue;
-    const queue: string[] = Array.isArray(q.queue) ? q.queue.map(String) : [];
-    const cursor = typeof q.cursor === "number" ? q.cursor : -1;
-    const hold = queueHold(q, queue, cursor);
+    const { q, queue, cursor, hold, live } = queueNow(this.host.workspaceRoot());
     const mark = (i: number) => (i !== cursor ? String(i + 1) : hold ? "⏸" : "▶");
     const rows = queue.slice(0, 6).map((p, i) => h("div", { class: `row q-mini ${i < cursor ? "past" : i === cursor ? (hold ? "held" : "current") : ""}` }, h("span", { class: "q-mark" }, mark(i)), h("span", { class: "grow ellipsis" }, planName(p)), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
     const held = hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "\u23F8"), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
     const more = btn("Open Queue", () => this.host.showTab("queue"), { class: "link" });
     const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono" }, `${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];
-    return card({ title: "Queue", aside: pos }, ...held, ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), more);
+    const liveRow = live ? [h("div", { class: "row dim small queue-live-row" }, chip("live", "chip-done"), h("span", { class: "grow ellipsis" }, `queue run #${live.id} · ${live.backend}${live.queue?.status ? ` · ${live.queue.status}` : ""}`))] : [];
+    return card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), more);
   }
 
   private flightCard(): HTMLElement {
@@ -557,18 +600,18 @@ export class PlansView extends View {
 export class QueueView extends View {
   constructor(host: CockpitHost) {
     super(host, "cv-queue");
+    // A live queue run's queue_state moves the cursor before the next snapshot does.
+    runs.on((c) => c.kind === "state" && c.run.command === "run-plan-all" && this.invalidate());
   }
 
   protected render(): Node[] {
     const nd = this.noData();
     if (nd) return nd;
-    const q = snapshot.runQueue;
-    const queue: string[] = Array.isArray(q.queue) ? q.queue.map(String) : [];
-    const cursor = typeof q.cursor === "number" ? q.cursor : -1;
+    const { q, queue, cursor, hold, live } = queueNow(this.host.workspaceRoot());
     const plans = new Map(snapshot.plans().map((p) => [p.file, p]));
-    const hold = queueHold(q, queue, cursor);
     const done = queue.filter((f, i) => i < cursor || q.outcomes?.[f] === "completed").length;
-    const [stLabel, stTone, stMark]: [string, Tone, string] = hold ? ["Held", "awaiting", "\u23F8"] : /\brunning\b/i.test(str(q.status)) ? ["Running", "executing", "\u25B6"] : queue.length ? ["Idle", "idle", "\u25CB"] : ["No queue", "idle", "\u25CB"];
+    const running = live ? live.queue?.status?.toLowerCase() !== "stopped" : /\brunning\b/i.test(str(q.status));
+    const [stLabel, stTone, stMark]: [string, Tone, string] = hold ? ["Held", "awaiting", "\u23F8"] : running ? ["Running", "executing", "\u25B6"] : queue.length ? ["Idle", "idle", "\u25CB"] : ["No queue", "idle", "\u25CB"];
     const head = h(
       "section",
       { class: "hero card" },
@@ -580,14 +623,15 @@ export class QueueView extends View {
         q.nextUpPlan ? { icon: "plans", text: `Next up: ${planName(String(q.nextUpPlan))}`, mono: true } : null,
         str(q.status) ? { icon: "updated", text: str(q.status).split("\n")[0].slice(0, 80), title: str(q.status) } : null,
       ]),
-      ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "\u23F8"), h("span", { class: "grow" }, holdText(hold, queue[cursor]), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
+      ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "\u23F8"), h("span", { class: "grow" }, holdText(hold, queue[cursor] ?? ""), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
+      ...(live ? [liveQueueNote(live, this.host)] : []),
       h(
         "div",
         { class: "actions now-actions" },
-        btn("⇶ Run queue", () => void this.host.runQueue(), { class: "primary", "data-act": "run-queue", title: "agent-kit run-plan-all in a terminal tab" }),
+        btn("⇶ Run queue", () => void this.host.runQueue(), { class: "primary", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
         btn("Open HANDOFF", () => this.host.openRepoFile(".cursor/HANDOFF.md"), { class: "status-bar-btn" }),
       ),
-      h("p", { class: "hint" }, "The kit runs the queue with agent-kit run-plan-all, which has no driver mode yet: it opens in a terminal tab and its numbered gates are answered there."),
+      h("p", { class: "hint" }, "⇶ Run queue starts agent-kit run-plan-all. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
     );
     const rows = queue.map((file, i) => {
       const p = plans.get(file);

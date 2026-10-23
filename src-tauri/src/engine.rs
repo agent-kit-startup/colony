@@ -853,6 +853,11 @@ mod tests {
         assert_eq!(engine_info_protocol(&script("kit-junk", "echo not json"), &[]), None);
         assert_eq!(engine_info_protocol(&script("kit-nofield", r#"echo '{"version":"6.3.0"}'"#), &[]), None);
         assert_eq!(engine_info_protocol(&d.join("missing"), &[]), None);
+        // The COLONY_SMOKE kit fixture announces the protocol the queue driver needs.
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/smoke/fake-agent-kit.sh");
+        let p = engine_info_protocol(Path::new("/bin/sh"), &[fixture]);
+        assert_eq!(p.as_deref(), Some(crate::agent::QUEUE_DRIVER_PROTOCOL));
+        assert!(crate::agent::queue_driver(p.as_deref()));
     }
 
     fn manifest(version: &str, driver: &str, data: Option<&str>) -> Manifest {
