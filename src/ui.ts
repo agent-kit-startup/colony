@@ -11,6 +11,15 @@ export function btn(label: string, onClick: () => void, attrs: Record<string, st
   return b;
 }
 
+/** A button led by a kit SVG icon instead of a unicode glyph. With no text the button is
+ *  icon-only, so `aria-label` carries its name (the SVG itself is aria-hidden). */
+export function iconBtn(kind: IconKind, text: string, onClick: () => void, attrs: Record<string, string> = {}): HTMLButtonElement {
+  const b = btn("", onClick, text ? attrs : { "aria-label": attrs.title ?? kind, ...attrs });
+  b.classList.add("has-icon");
+  b.replaceChildren(icon(kind, "btn-icon"), ...(text ? [h("span", {}, text)] : []));
+  return b;
+}
+
 export function chip(text: string, cls = ""): HTMLElement {
   return h("span", { class: `chip ${cls}` }, text);
 }

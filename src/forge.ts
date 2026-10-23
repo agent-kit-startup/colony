@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { api, errText, h } from "./api";
 import { hostApi } from "./hostreq";
-import { ago, btn, card, chip, empty, rerender } from "./ui";
+import { ago, btn, card, chip, empty, iconBtn, rerender } from "./ui";
 
 export interface ForgeStatus { provider: string; bin: string | null; authenticated: boolean; detail: string }
 type J = Record<string, unknown>;
@@ -58,7 +58,7 @@ export class PullRequestsSection {
     private status: (msg: string) => void,
     private onCard: (id: string) => void,
   ) {
-    const refresh = btn("↻", () => this.refresh(), { title: "Refresh (gh pr list)" });
+    const refresh = iconBtn("refresh", "", () => this.refresh(), { title: "Refresh (gh pr list)", "aria-label": "Refresh pull requests" });
     this.el = card(h("span", { class: "grow" }, "Pull requests"), this.body);
     this.el.querySelector(".card-title")?.append(h("span", { class: "spacer" }), refresh);
     this.el.classList.add("forge-prs");
@@ -129,7 +129,7 @@ export class CicdView {
   visible = false;
 
   constructor(private status: (msg: string) => void) {
-    const refresh = btn("↻ Refresh", () => void this.load(), { title: "gh run list" });
+    const refresh = iconBtn("refresh", "Refresh", () => void this.load(), { title: "gh run list" });
     this.el.append(this.body);
     this.body.append(card(h("span", { class: "grow" }, "Workflow runs"), h("div", { class: "row" }, this.filters, h("span", { class: "spacer" }), refresh), this.note, this.list));
     this.renderFilters();

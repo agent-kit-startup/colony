@@ -1,7 +1,7 @@
 // Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
 import { api, errText, h, type GitStatus } from "./api";
 import { obj, snapshot, str } from "./snapshot";
-import { btn, card, chip, empty } from "./ui";
+import { btn, card, chip, empty, iconBtn } from "./ui";
 
 export class GitPanel {
   private branch = h("strong");
@@ -17,8 +17,7 @@ export class GitPanel {
   private last: GitStatus | null = null;
 
   constructor(root: HTMLElement, private status: (msg: string) => void, private onCommitted: () => void) {
-    const refresh = h("button", { title: "Refresh" }, "↻");
-    refresh.addEventListener("click", () => void this.refresh());
+    const refresh = iconBtn("refresh", "", () => void this.refresh(), { title: "Refresh", "aria-label": "Refresh git status" });
     this.prodBox.append(h("span", {}, "Production push: "), this.yes);
     root.append(
       h("div", { class: "panel-row" }, this.branch, this.header, h("span", { class: "spacer" }), refresh),
