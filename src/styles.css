@@ -41,7 +41,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 input, select, textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); padding: 4px 8px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--blue); }
 textarea { font-family: var(--mono); resize: vertical; }
-select { padding: 2px 6px; height: 26px; }
+/* No fixed height: WebKitGTK adds its own inner padding to a native select, so a 26px box
+   clipped the bottom of the value (Engine / On limit in the run form). Size from content. */
+select { padding: 3px 6px; min-height: 26px; line-height: 1.3; }
+/* Kit SVG icons on buttons (iconBtn in ui.ts), in place of unicode glyphs. */
+button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
+.btn-icon { flex: none; width: var(--mc-chrome-subtitle-size); height: var(--mc-chrome-subtitle-size); }
 .dim { color: var(--fg-dim); }
 .spacer { flex: 1; }
 .grow { flex: 1; min-width: 0; }
@@ -295,12 +300,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 .now-step-current.now-step-done .now-step-marker { border-color: var(--green); background: var(--green-bg); color: var(--green); }
 .now-step-body { flex: 1; min-width: 0; }
 .now-step-current .now-step-body { background: var(--bg-secondary); border: 1px solid var(--border-active); border-radius: var(--mc-radius-chrome); padding: 6px 8px; }
-.now-step-label { display: block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.now-step-label { display: block; font-size: var(--mc-chrome-meta-size); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
 .now-step-text { font-size: var(--mc-chrome-subtitle-size); line-height: 1.45; color: var(--text-secondary); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .now-step-previous, .now-step-next { padding-bottom: var(--mc-space-md); }
 .now-step-previous .now-step-text, .now-step-next .now-step-text { -webkit-line-clamp: 1; font-size: var(--mc-chrome-meta-size); line-height: 1.35; color: var(--text-muted); }
-.now-step-previous .now-step-label, .now-step-next .now-step-label { font-size: 9px; opacity: 0.9; }
-.now-step-previous .now-todo-id, .now-step-next .now-todo-id { font-size: 10px; color: var(--text-secondary); }
+.now-step-previous .now-step-label, .now-step-next .now-step-label { opacity: 0.9; }
+.now-step-previous .now-todo-id, .now-step-next .now-todo-id { font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); }
 .now-step-current .now-step-text { -webkit-line-clamp: 3; color: var(--text-primary); font-weight: 500; }
 .now-step-empty .now-step-text { color: var(--text-muted); font-style: italic; }
 .now-todo-id { font-family: var(--mono); font-size: var(--mc-chrome-meta-size); color: var(--text-primary); }
@@ -390,10 +395,10 @@ input.search { width: 220px; max-width: 100%; }
 .flight-log-card-past.flight-log-kind-residual { border-color: color-mix(in srgb, var(--yellow) 35%, var(--border)); }
 .flight-log-card-past.flight-log-kind-advice { border-color: color-mix(in srgb, var(--blue) 35%, var(--border)); }
 .flight-log-card-past.flight-log-kind-ok { border-color: color-mix(in srgb, var(--green) 30%, var(--border)); }
-.flight-log-card-label { display: block; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 10px; color: var(--text-muted); }
+.flight-log-card-label { display: block; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: var(--mc-chrome-meta-size); color: var(--text-muted); }
 .flight-log-card-text { color: var(--text-primary); word-break: break-word; white-space: pre-wrap; }
 .flight-log-card-past .flight-log-card-text { color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.flight-log-card-meta { margin-top: 2px; padding-top: 0; border-top: 0; font-size: 10px; }
+.flight-log-card-meta { margin-top: 2px; padding-top: 0; border-top: 0; font-size: var(--mc-chrome-meta-size); }
 .flight-log-card-actions { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px; }
 .fl-text { font-size: var(--mc-chrome-label-size); }
 .log-row { border-top: 1px solid var(--border); padding: 8px 0; display: flex; flex-direction: column; gap: 3px; }
