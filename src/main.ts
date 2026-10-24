@@ -2074,7 +2074,17 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");
-    await log("csp-clean", cspViolations.length === 0, { violations: cspViolations });
+    // Negative probe: the policy is really enforced (an inline script must not run).
+    const cspBefore = cspViolations.length;
+    const probe = document.createElement("script");
+    probe.textContent = "window.__colonyCspProbe = 1";
+    document.body.append(probe);
+    await wait(300);
+    probe.remove();
+    const blocked = (window as unknown as { __colonyCspProbe?: number }).__colonyCspProbe === undefined;
+    const probeHits = cspViolations.slice(cspBefore);
+    const appViolations = cspViolations.slice(0, cspBefore);
+    await log("csp-clean", appViolations.length === 0 && blocked && probeHits.some((v) => v.startsWith("script-src")), { violations: appViolations, probeBlocked: blocked, probe: probeHits });
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));
