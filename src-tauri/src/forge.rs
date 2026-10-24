@@ -53,7 +53,8 @@ pub enum Op {
     PrChecks(u64),
     PrDiff(u64),
     PrWeb(u64),
-    Merge(u64, MergeMethod),
+    /// Merge, optionally only if the head is still this commit (`--match-head-commit`).
+    Merge(u64, MergeMethod, Option<String>),
     Runs { branch: Option<String> },
     RunView(u64),
     RerunFailed(u64),
@@ -95,7 +96,13 @@ impl Provider {
                 Op::PrChecks(n) => v(&["pr", "checks", &n.to_string()]),
                 Op::PrDiff(n) => v(&["pr", "diff", &n.to_string()]),
                 Op::PrWeb(n) => v(&["pr", "view", &n.to_string(), "--web"]),
-                Op::Merge(n, m) => v(&["pr", "merge", &n.to_string(), &format!("--{}", m.as_str())]),
+                Op::Merge(n, m, head) => {
+                    let mut a = v(&["pr", "merge", &n.to_string(), &format!("--{}", m.as_str())]);
+                    if let Some(h) = head.as_deref().filter(|h| h.len() == 40 && h.bytes().all(|c| c.is_ascii_hexdigit())) {
+                        a.extend(["--match-head-commit".to_string(), h.to_string()]);
+                    }
+                    a
+                }
                 Op::Runs { branch } => {
                     let mut a = v(&["run", "list", "--limit", "30", "--json", RUN_FIELDS]);
                     if let Some(b) = branch {
@@ -250,8 +257,12 @@ mod tests {
     #[test]
     fn merge_argv_never_admin_or_auto() {
         for m in [MergeMethod::Squash, MergeMethod::Merge, MergeMethod::Rebase] {
-            let a = Provider::GitHub.argv(&Op::Merge(12, m));
+            let a = Provider::GitHub.argv(&Op::Merge(12, m, None));
             assert_eq!(a, vec!["pr".to_string(), "merge".into(), "12".into(), format!("--{}", m.as_str())]);
+            let oid = "0123456789abcdef0123456789abcdef01234567";
+            let p = Provider::GitHub.argv(&Op::Merge(12, m, Some(oid.into())));
+            assert_eq!(&p[4..], ["--match-head-commit", oid]);
+            assert_eq!(Provider::GitHub.argv(&Op::Merge(12, m, Some("--admin".into()))).len(), 4, "a non-sha head is dropped");
             assert!(!a.iter().any(|x| x == "--admin" || x == "--auto"));
         }
     }

@@ -575,6 +575,18 @@ struct Pending {
     action: Action,
     origin: Origin,
     running: bool,
+    /// What the card showed when its context first loaded; Approve acts on exactly that or
+    /// refuses (security review 2026-10-24, findings 4 and 5).
+    pin: Option<Pin>,
+}
+
+/// The facts a card showed, pinned for Approve.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pin {
+    /// merge-pr: the PR's head commit (merged with `--match-head-commit`) and its base.
+    Merge { head: String, base: String },
+    /// open-pr: the whole plan (branches, sha, title, body).
+    Plan(PrPlan),
 }
 
 /// One approval card, as the UI sees it.
@@ -784,7 +796,7 @@ impl HostRequests {
                 continue;
             }
             match Self::load(&e.path(), id) {
-                Ok((req, action)) => fresh.push(Pending { req, action, origin: Origin::Agent, running: false }),
+                Ok((req, action)) => fresh.push(Pending { req, action, origin: Origin::Agent, running: false, pin: None }),
                 Err(why) => self.reject(spool, id, &why),
             }
         }
@@ -810,6 +822,15 @@ impl HostRequests {
             }
         }
         items.iter().map(|p| p.req.id.clone()).collect::<Vec<_>>() != before
+    }
+
+    /// Keep the first context's facts for Approve (a later reload does not move the pin).
+    fn pin_once(&self, id: &str, pin: Option<Pin>) {
+        if let Ok(mut items) = self.items.lock() {
+            if let Some(p) = items.iter_mut().find(|p| p.req.id == id && p.pin.is_none() && !p.running) {
+                p.pin = pin;
+            }
+        }
     }
 
     fn get(&self, id: &str) -> Result<Pending, String> {
@@ -860,7 +881,7 @@ impl HostRequests {
         }
         let p = self.claim(id)?;
         self.broadcast();
-        let (outcome, output) = match execute(&p.action, &cwd) {
+        let (outcome, output) = match execute(&p.action, &cwd, p.pin.as_ref()) {
             Ok(out) => (Outcome::Succeeded, out),
             Err(out) => (Outcome::Failed, out),
         };
@@ -886,7 +907,7 @@ impl HostRequests {
             if items.iter().any(|p| p.origin == Origin::Colony && p.action == action && p.req.cwd == req.cwd) {
                 return Err(format!("{} is already waiting on a card", action.summary()));
             }
-            items.push(Pending { req, action, origin: Origin::Colony, running: false });
+            items.push(Pending { req, action, origin: Origin::Colony, running: false, pin: None });
         }
         self.broadcast();
         Ok(id)
@@ -1010,9 +1031,21 @@ fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String
 }
 
 /// Run an approved action. `Err` carries the failure output.
-fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
+fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, String> {
     match action {
-        Action::MergePr { number, method } => Forge::detect()?.run(cwd, &Op::Merge(*number, *method)),
+        Action::MergePr { number, method } => {
+            let forge = Forge::detect()?;
+            let pr = forge.json(cwd, &Op::PrView(*number))?;
+            let (head, base) = merge_pin(&pr).ok_or_else(|| format!("PR #{number}: gh pr view has no head commit or base"))?;
+            if let Some(Pin::Merge { head: h0, base: b0 }) = pin {
+                if *b0 != base {
+                    return Err(format!("Refused: PR #{number} now targets {base}, not {b0} as on the card. Deny it and file it again"));
+                }
+                // The head may have moved since the card: merge only what the card showed.
+                return forge.run(cwd, &Op::Merge(*number, *method, Some(h0.clone())));
+            }
+            forge.run(cwd, &Op::Merge(*number, *method, Some(head)))
+        }
         Action::RerunChecks { run: Some(id), .. } => Forge::detect()?.run(cwd, &Op::RerunFailed(*id)),
         Action::RerunChecks { pr, .. } => {
             let n = pr.ok_or("rerun-checks without a target")?;
@@ -1050,8 +1083,13 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
             }
         }
         Action::OpenPr { shape } => {
-            // Re-derived at approval time: the refs may have moved since the card opened.
+            // Re-derived at approval time; a plan that moved since the card refuses.
             let plan = pr_plan(*shape, cwd)?;
+            if let Some(Pin::Plan(p0)) = pin {
+                if *p0 != plan {
+                    return Err("Refused: the branches moved since the card opened (origin/main or origin/staging changed). Deny it and open it again".into());
+                }
+            }
             let forge = Forge::detect()?;
             let mut log = String::new();
             if let Some(sha) = &plan.push_sha {
@@ -1083,7 +1121,14 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
 
 /// What the card shows next to the request: the PR (title, base <- head, mergeable,
 /// checks), the run, or the commits a push would send; and whether a typed yes is needed.
-fn context(action: &Action, cwd: &Path) -> Value {
+/// The head commit (40-hex) and base of a `gh pr view` answer.
+fn merge_pin(pr: &Value) -> Option<(String, String)> {
+    let head = pr.get("headRefOid").and_then(Value::as_str).filter(|h| is_hex_sha(h))?;
+    let base = pr.get("baseRefName").and_then(Value::as_str).filter(|b| !b.is_empty())?;
+    Some((head.to_string(), base.to_string()))
+}
+
+fn context(action: &Action, cwd: &Path) -> (Value, Option<Pin>) {
     let gate = production_gate(action, cwd);
     let (production, refused) = match &gate {
         Ok(p) => (p.clone(), None),
@@ -1097,8 +1142,13 @@ fn context(action: &Action, cwd: &Path) -> Value {
             Err(e) => json!({ "error": e }),
         }
     };
+    let mut pin = None;
     let extra = match action {
-        Action::MergePr { number, .. } => pr_info(*number),
+        Action::MergePr { number, .. } => {
+            let info = pr_info(*number);
+            pin = info.get("pr").and_then(merge_pin).map(|(head, base)| Pin::Merge { head, base });
+            info
+        }
         Action::RerunChecks { pr: Some(n), .. } => pr_info(*n),
         Action::RerunChecks { run: Some(id), .. } => match &forge {
             Ok(f) => json!({ "run": f.json(cwd, &Op::RunView(*id)).unwrap_or_else(|e| json!({ "error": e })) }),
@@ -1106,7 +1156,10 @@ fn context(action: &Action, cwd: &Path) -> Value {
         },
         Action::RerunChecks { .. } => json!({}),
         Action::OpenPr { shape } => match pr_plan(*shape, cwd) {
-            Ok(plan) => json!({ "prPlan": plan }),
+            Ok(plan) => {
+                pin = Some(Pin::Plan(plan.clone()));
+                json!({ "prPlan": plan })
+            }
             Err(_) => json!({}),
         },
         Action::PushBranch { branch } => {
@@ -1120,7 +1173,7 @@ fn context(action: &Action, cwd: &Path) -> Value {
     if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
         o.extend(e.clone());
     }
-    out
+    (out, pin)
 }
 
 // ---- Tauri commands --------------------------------------------------------------------
@@ -1138,7 +1191,9 @@ pub fn host_requests_subscribe(hr: State<'_, Shared>, on_event: Channel<HostEven
 #[tauri::command(async)]
 pub fn host_request_context(hr: State<'_, Shared>, id: String) -> Result<Value, String> {
     let p = hr.get(&id)?;
-    Ok(context(&p.action, Path::new(&p.req.cwd)))
+    let (ctx, pin) = context(&p.action, Path::new(&p.req.cwd));
+    hr.pin_once(&id, pin);
+    Ok(ctx)
 }
 
 /// The PR's diff (merge-pr, or rerun-checks of a PR) or the commits a push would send.
@@ -1299,6 +1354,14 @@ mod tests {
     }
 
     #[test]
+    fn merge_pin_reads_head_and_base() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(merge_pin(&json!({ "headRefOid": oid, "baseRefName": "main" })), Some((oid.to_string(), "main".to_string())));
+        assert_eq!(merge_pin(&json!({ "headRefOid": "--admin", "baseRefName": "main" })), None);
+        assert_eq!(merge_pin(&json!({ "headRefOid": oid })), None);
+    }
+
+    #[test]
     fn merge_gate_needs_yes_for_main_and_refuses_forks() {
         let pr = |base: &str, cross: Value| json!({ "baseRefName": base, "headRefName": "staging", "isCrossRepository": cross, "headRepositoryOwner": { "login": "mallory" } });
         assert_eq!(merge_gate(1, &pr("staging", json!(true))).unwrap(), None, "a fork PR into staging is an ordinary card");
@@ -1341,6 +1404,12 @@ mod tests {
         assert_eq!(p.head, format!("chore/sync-staging-main-{}", &m[..7]));
         assert!(valid_branch(&p.head) && branchrule::production_branch(&cwd, &p.head).is_none());
         assert_eq!(p.title, format!("chore: sync staging with main ({})", &m[..7]));
+
+        // The card pinned this plan: once origin/main moves, Approve refuses before any push.
+        let m2 = mk(&g, "another main commit");
+        g(&["update-ref", "refs/remotes/origin/main", &m2]);
+        let e = execute(&Action::OpenPr { shape: PrShape::StagingSync }, &cwd, Some(&Pin::Plan(p))).unwrap_err();
+        assert!(e.contains("moved since the card"), "{e}");
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
