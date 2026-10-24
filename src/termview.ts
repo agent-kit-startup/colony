@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { api, Channel, errText, focusPolicy, type PtyEvent } from "./api";
-import { onSkin, token } from "./skin";
+import { onSkin, termFont, token } from "./skin";
 
 // The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
 const termTheme = () => ({
@@ -37,8 +37,9 @@ export class TermView {
 
   constructor(readonly pane: HTMLElement) {
     this.term = new Terminal({
-      // Prompt themes need Nerd Font glyphs; then the shared monospace stack.
-      fontFamily: `"JetBrainsMono Nerd Font", "JetBrains Mono", ${getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono")}`,
+      // Omarchy's monospace font on that skin, then the Nerd Font prompt themes need,
+      // then the shared monospace stack.
+      fontFamily: termFont(),
       fontSize: 13,
       cursorBlink: true,
       scrollback: 10000,
@@ -46,7 +47,14 @@ export class TermView {
     });
     this.term.loadAddon(this.fitAddon);
     this.term.open(pane);
-    this.offSkin = onSkin(() => (this.term.options.theme = termTheme()));
+    this.offSkin = onSkin(() => {
+      this.term.options.theme = termTheme();
+      const font = termFont();
+      if (this.term.options.fontFamily !== font) {
+        this.term.options.fontFamily = font;
+        this.fit();
+      }
+    });
   }
   private offSkin: () => void;
 

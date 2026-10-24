@@ -38,8 +38,9 @@ pub struct WorkspaceSettings {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Look of the whole window. `skin`: `bare-metal` (default) or `legacy`; Colony also
-/// selects the matching skin of the Mission Control web panel.
+/// Look of the whole window. `skin`: `bare-metal` (default), `legacy`, or `omarchy` (the
+/// live Omarchy theme, the default on Omarchy when unset); Colony also selects the
+/// matching skin of the Mission Control web panel.
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UiSettings {
@@ -49,7 +50,7 @@ pub struct UiSettings {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-pub const SKINS: &[&str] = &["bare-metal", "legacy"];
+pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
@@ -162,11 +163,11 @@ pub fn settings_set_workspace(state: State<'_, AppState>, patch: serde_json::Val
     Ok(ws)
 }
 
-/// Remember the window skin (`bare-metal` or `legacy`).
+/// Remember the window skin (`bare-metal`, `legacy` or `omarchy`).
 #[tauri::command]
 pub fn settings_set_skin(state: State<'_, AppState>, skin: String) -> Result<String, String> {
     if !SKINS.contains(&skin.as_str()) {
-        return Err(format!("Unknown skin: {skin} (bare-metal or legacy)"));
+        return Err(format!("Unknown skin: {skin} (bare-metal, legacy or omarchy)"));
     }
     let path = settings_path(&state)?;
     let mut s = load(&path)?;

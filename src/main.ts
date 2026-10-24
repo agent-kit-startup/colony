@@ -26,7 +26,7 @@ import { CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
-import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
+import { kitSkinValue, loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
@@ -91,6 +91,7 @@ document.getElementById("app")!.innerHTML = `
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
   <button data-more="skin" data-skin="legacy">Legacy</button>
+  <button data-more="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -768,15 +769,21 @@ document.body.append(palette.el);
 
 function renderSkinMenu() {
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
+    // The Omarchy skin exists only where Omarchy is installed.
+    if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
     b.classList.toggle("on", on);
     b.textContent = `${on ? "✓ " : ""}${SKINS.find((x) => x.id === b.dataset.skin)?.label}`;
   }
 }
-onSkin(() => {
+let frameKitSkin = "";
+onSkin((s) => {
   renderSkinMenu();
-  // The web panel follows: reload it with the matching kit skin.
-  if (mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
+  // The web panel follows: reload it with the matching kit skin (an Omarchy theme switch
+  // keeps the panel on Bare Metal, so it does not reload then).
+  const kit = kitSkinValue(s);
+  if (mcFrame.getAttribute("src") && kit !== frameKitSkin) mcFrame.src = webPanelUrl();
+  frameKitSkin = kit;
 });
 
 /** The web panel URL; `colony-skin` makes the frame hook select the matching kit skin. */
@@ -1291,6 +1298,12 @@ async function runSmoke(root: string, info: StartupInfo) {
     // Skins: Legacy from the More menu (same handler as the operator's click), saved in
     // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
     const pickSkin = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="skin"][data-skin="${id}"]`)?.click();
+    // On Omarchy with no saved skin the window starts on the system theme: start from Bare Metal.
+    const startSkin = skin();
+    if (startSkin !== "bare-metal") {
+      pickSkin("bare-metal");
+      await wait(800);
+    }
     const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const frameLoad = () => new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     let reloaded = frameLoad();
@@ -1313,7 +1326,23 @@ async function runSmoke(root: string, info: StartupInfo) {
     await Promise.race([reloaded, wait(8000)]);
     await wait(800);
     const backSkin = await frameSkinNow();
+    // Omarchy only: the system theme from colors.toml on the chrome and the terminal font,
+    // the web panel left on Bare Metal; then back where the smoke started.
+    if (omarchyDetected()) {
+      const t = omarchyTheme();
+      const before = mcFrame.src;
+      pickSkin("omarchy");
+      await wait(800);
+      const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
+      const ok = document.documentElement.dataset.skin === "omarchy" && bg === t?.tokens["--bg-primary"] && document.documentElement.dataset.mode === t?.mode && (!t?.font || termFont().startsWith(`"${t.font}"`)) && mcFrame.src === before;
+      await log("skin-omarchy", ok, { theme: t?.name, mode: t?.mode, bg, font: t?.font, frameReloaded: mcFrame.src !== before });
+      pickSkin("bare-metal");
+      await wait(400);
+    } else {
+      await log("skin-omarchy", !!menu.querySelector<HTMLElement>('button[data-skin="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
+    }
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === kitSkinValue("bare-metal") && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
+    if (startSkin !== "bare-metal") pickSkin(startSkin);
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
