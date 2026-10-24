@@ -4,7 +4,8 @@
 # and creates the GitHub release with them. The GitHub Releases of this public
 # repository are the download base of install.sh: a plain v<x.y.z> tag becomes the
 # Latest release (what install.sh installs by default); a tag with a pre-release
-# suffix (v0.2.0-rc.1) stays a prerelease and is only installed with --version.
+# suffix (v0.2.0-rc.1; the three version files must carry it too) stays a prerelease
+# and is only installed with --version.
 name: release
 
 on:
