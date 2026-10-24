@@ -8,11 +8,12 @@ let overlay: HTMLElement | null = null;
 
 function badgeText(s: EngineStatus): { text: string; cls: string; tip: string } {
   const node = s.node ? `node ${s.nodeVersion} (${s.nodeSource})` : `node: ${s.nodeError ?? "not found"}`;
-  const tip = [s.label, s.root ?? "", node, s.note ?? "", s.error ?? "", "Click: More → Engine"].filter(Boolean).join("\n");
+  const tip = [s.label, s.root ?? "", node, s.note ?? "", s.error ?? "", "Click to open the Engine panel (install or update the managed engine)"].filter(Boolean).join("\n");
   if (s.source === "managed") return { text: `engine ${s.manifest?.version ?? "?"}`, cls: s.node ? "" : "warn", tip };
   if (s.source === "env") return { text: `engine ${s.manifest?.version ?? "?"} (COLONY_ENGINE)`, cls: s.node ? "" : "warn", tip };
-  if (s.source === "unmanaged") return { text: "⚠ unmanaged engine", cls: "warn", tip };
-  return { text: "⚠ no engine", cls: "bad", tip };
+  // The warnings name their action: the click opens the Engine panel.
+  if (s.source === "unmanaged") return { text: "Unmanaged engine: install the managed one", cls: "warn", tip };
+  return { text: "No engine: install one", cls: "bad", tip };
 }
 
 /** Fill the status-bar slot; returns the status for callers that need it. */

@@ -76,7 +76,9 @@ export class InboxView {
     const gates = pendingGates();
     const live = gates.map((g) => gateCard(g, this.host, "inbox-card"));
     const att = snapshot.attention.map((a) => this.attention(a));
-    const tickets: J[] = Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
+    // Same source as the Flight Log pointer: the flight log's tickets, else gateExit's.
+    const fl = snapshot.flightLog;
+    const tickets: J[] = Array.isArray(fl.tickets) && fl.tickets.length ? fl.tickets : Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     return [
       card({ title: "Live gates", aside: gates.length ? [pill(`${gates.length} waiting`, "awaiting", "\u23EF")] : [] }, h("div", { class: "inbox-list" }, ...(live.length ? live : [empty("Nothing waits for you. Gates from every agent run in this window land here.")]))),
       ...this.sections.flatMap((s) => s()),
@@ -85,7 +87,17 @@ export class InboxView {
         ? [
             card(
               "Gate exits",
-              ...tickets.map((t) => h("div", { class: "row" }, chip(str(t.branchState, "ticket"), "chip-gate"), h("span", { class: "grow ellipsis", title: str(t.headline) }, `${str(t.askId)} · ${str(t.headline)}`), h("span", { class: "run-meta mono" }, ago(t.openedAt)))),
+              ...tickets.map((t) =>
+                h(
+                  "div",
+                  { class: "row" },
+                  chip(str(t.branchState, "ticket"), "chip-gate"),
+                  h("span", { class: "grow ellipsis", title: `${str(t.askId)} · ${str(t.headline)}` }, `${str(t.askId)} · ${str(t.headline)}`),
+                  h("span", { class: "run-meta mono" }, ago(t.openedAt)),
+                  ...(t.url ? [btn("Copy URL", () => this.host.copy(str(t.url), "ticket URL"), { class: "link" })] : []),
+                ),
+              ),
+              h("div", { class: "hint" }, "Triage with agent-kit ground-control (status / accept / discard) in a terminal."),
               btn("Copy agent-kit ground-control status", () => this.host.copy("agent-kit ground-control status", "command"), { class: "link" }),
             ),
           ]
@@ -124,7 +136,7 @@ export class InboxView {
     const el = h(
       "div",
       { class: "att" },
-      h("div", { class: "row" }, chip(str(a.severity || a.kind, "info"), a.group === "blocking" ? "chip-gate" : ""), h("strong", { class: "grow ellipsis", title: str(a.label) }, str(a.label)), h("span", { class: "run-meta mono" }, ago(a.modifiedAt))),
+      h("div", { class: "row" }, triageChip(a), h("strong", { class: "grow ellipsis", title: str(a.label) }, str(a.label)), h("span", { class: "run-meta mono" }, ago(a.modifiedAt))),
       ...(str(a.findingsSummary) ? [h("div", { class: "dim small clamp-3", title: str(a.findingsSummary) }, str(a.findingsSummary))] : []),
       h("div", { class: "actions" }, ...acts),
     );
@@ -138,6 +150,14 @@ export class InboxView {
  * question and the gate line as text, and the answer controls for a driver run or a
  * button to the terminal that holds it.
  */
+/** One label and colour per triage / attention item, the same in Mission, Inbox and Flight
+ *  Log: severity, else group, else kind; blocking items in the gate colour. */
+export function triageChip(a: J): HTMLElement {
+  const label = str(a.severity || a.group || a.kind, "info");
+  const tone = a.group === "blocking" || /^(error|critical|high)$/i.test(str(a.severity)) ? "chip-gate" : "";
+  return chip(label, tone);
+}
+
 export function gateCard(g: PendingGate, host: CockpitHost, cls: string): HTMLElement {
   const term = !g.gate;
   const jump = term

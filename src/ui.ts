@@ -66,11 +66,11 @@ export function bar(done: number, total: number): HTMLElement {
  * green, the current one blue (shimmer while live), the rest on --border. Over 40 to-dos
  * it falls back to the continuous bar.
  */
-export function stepbar(done: number, total: number, current: boolean, label = true): HTMLElement {
+export function stepbar(done: number, total: number, current: boolean, label = true, unit = ""): HTMLElement {
   const d = Math.min(Math.max(done, 0), total);
   const cur = current && d < total;
   const rest = Math.max(0, total - d - (cur ? 1 : 0));
-  const aria = `${d} of ${total} to-dos complete${cur ? ", 1 in progress" : ""}`;
+  const aria = `${d} of ${total} ${unit || "to-dos"}${unit.endsWith("done") ? "" : " complete"}${cur ? ", 1 in progress" : ""}`;
   const track =
     total > 40
       ? bar(d, total)
@@ -81,7 +81,8 @@ export function stepbar(done: number, total: number, current: boolean, label = t
           ...(cur ? [h("span", { class: "now-stepbar-seg now-stepbar-seg-current" })] : []),
           ...Array.from({ length: rest }, () => h("span", { class: "now-stepbar-seg" })),
         );
-  return h("div", { class: "now-stepbar-row" }, track, ...(label ? [h("span", { class: "now-stepbar-label" }, `${d} of ${total}`)] : []));
+  // `unit` names what is counted (to-dos, plans) so two bars never read as one count.
+  return h("div", { class: "now-stepbar-row" }, track, ...(label ? [h("span", { class: "now-stepbar-label" }, `${d} of ${total}${unit ? ` ${unit}` : ""}`)] : []));
 }
 
 export interface Step {
@@ -125,6 +126,8 @@ export interface Meta {
   mono?: boolean;
   /** Spin the icon (the dashboard's executing Mode icon). */
   live?: boolean;
+  /** Make the item a button (e.g. the engine opens the run dialog). */
+  onClick?: () => void;
 }
 
 /** Quiet metadata strip with icons (dashboard .now-meta). */
@@ -134,9 +137,13 @@ export function metaRow(items: (Meta | null | false | undefined)[], cls = ""): H
     { class: `now-meta ${cls}`.trim(), role: "group" },
     ...items
       .filter((m): m is Meta => !!m && !!m.text)
-      .map((m) =>
-        h("span", { class: "now-meta-item", title: m.title ?? m.text }, icon(m.icon, `now-meta-icon${m.live ? " now-meta-icon-executing" : ""}`), h("span", { class: `now-meta-value${m.mono ? " mono" : ""}` }, m.text)),
-      ),
+      .map((m) => {
+        const parts = [icon(m.icon, `now-meta-icon${m.live ? " now-meta-icon-executing" : ""}`), h("span", { class: `now-meta-value${m.mono ? " mono" : ""}` }, m.text)];
+        if (!m.onClick) return h("span", { class: "now-meta-item", title: m.title ?? m.text }, ...parts);
+        const b = btn("", m.onClick, { class: "now-meta-item now-meta-btn", title: m.title ?? m.text });
+        b.replaceChildren(...parts);
+        return b;
+      }),
   );
 }
 
@@ -145,6 +152,8 @@ const CARD_ICONS: Record<string, IconKind> = {
   "Current mission": "current-mission",
   "Needs you": "inbox",
   "Agent runs": "monitor",
+  "Crew Monitor": "monitor",
+  Health: "health",
   Chats: "commands",
   Queue: "queue",
   "Queue status (HANDOFF)": "queue",
@@ -209,11 +218,20 @@ export function ago(iso: unknown): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/** Keep a view's scroll position across a full re-render. */
+/**
+ * Keep a view's scroll position across a full re-render: the view's own, and that of every
+ * panel marked `data-keep-scroll="<key>"` (the one-fold Mission cards scroll inside).
+ */
 export function rerender(scroller: HTMLElement, render: () => void) {
   const top = scroller.scrollTop;
+  const inner = new Map<string, number>();
+  for (const el of scroller.querySelectorAll<HTMLElement>("[data-keep-scroll]")) if (el.scrollTop) inner.set(el.dataset.keepScroll!, el.scrollTop);
   render();
   scroller.scrollTop = top;
+  for (const el of scroller.querySelectorAll<HTMLElement>("[data-keep-scroll]")) {
+    const t = inner.get(el.dataset.keepScroll!);
+    if (t) el.scrollTop = t;
+  }
 }
 
 export async function copyText(text: string): Promise<boolean> {

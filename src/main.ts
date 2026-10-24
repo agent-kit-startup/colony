@@ -1,14 +1,14 @@
-// Colony window: the cockpit. Center tabs hold the native Mission Control views (Mission,
-// Plans, Queue, Inbox, Review, Git, CI/CD, Flight Log), one tab per agent run (its transcript),
-// terminal tabs for the interactive vendor CLI and the queue runner, and the editor files.
-// Explorer on the left, shell terminals at the bottom. The kit's web panel stays reachable
-// under More as a fallback.
+// Colony window: the cockpit. A vertical rail holds the primary views (Mission, Inbox,
+// Review, Git, Terminal, Pipelines) and More (Plans, Flight Log, Activity, commands); the
+// tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
+// the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
+// (a fallback under More). Explorer next to the rail, shell terminals at the bottom.
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
-import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
+import { ActivityView, type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
@@ -32,6 +32,7 @@ import "./styles.css";
 import { Terminals } from "./terminal";
 import { TermView } from "./termview";
 import { AgentTab } from "./transcript";
+import { icon, type IconKind } from "./icons";
 import { ago, copyText } from "./ui";
 
 const RECENTS_KEY = "colony.recentWorkspaces";
@@ -43,16 +44,13 @@ document.getElementById("app")!.innerHTML = `
     <button id="btn-open" title="Open folder (Ctrl+O)">Open folder</button>
     <span id="ws-name" class="dim">No folder open</span>
     <span class="spacer"></span>
-    <button id="btn-run" class="primary" title="Run the active plan (agent-kit run-plan --events ndjson): the run opens as a tab with its transcript and gates">▶ Run plan</button>
-    <button id="btn-interactive" title="Open the engine's own CLI (claude or codex) in a terminal tab, on your login">⌘ Interactive</button>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
-    <button id="btn-term" class="toggle on" title="Terminal (Ctrl+\`)">Terminal</button>
-    <button id="btn-more" title="More">More ▾</button>
     <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </header>
+  <nav id="rail" aria-label="Views"></nav>
   <aside id="side">
-    <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh">↻</button></div>
+    <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh"></button></div>
     <div id="tree"></div>
   </aside>
   <main id="center">
@@ -76,6 +74,11 @@ document.getElementById("app")!.innerHTML = `
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="more-menu" class="menu" hidden>
+  <div class="menu-label">Views</div>
+  <button data-more="view" data-view="plans" title="Ctrl+7">Plans</button>
+  <button data-more="view" data-view="flight" title="Ctrl+8">Flight Log</button>
+  <button data-more="view" data-view="activity" title="Ctrl+9">Activity</button>
+  <div class="menu-sep"></div>
   <button data-more="commands" title="Ctrl+Shift+P">Commands…</button>
   <button data-more="web">Mission Control (web panel)</button>
   <button data-more="run-elsewhere">Run plan in another folder…</button>
@@ -104,12 +107,14 @@ let workspace: WorkspaceInfo | null = null;
 let mcUrl = "";
 let mcOrigin = "";
 
-// ---- tabs ------------------------------------------------------------------------------
+// ---- tabs and rail --------------------------------------------------------------------
 interface Tab {
   id: string;
   label: string;
-  icon: string;
+  /** Kit SVG icon of the tab ("" for none: editor files). */
+  icon: IconKind | "";
   tip: string;
+  /** A view of the rail or of More, not a document: never in the tab strip, never closed. */
   pinned: boolean;
   el: HTMLElement;
   /** `extra`: a second, separate count next to the first (the Inbox: gates, then attention). */
@@ -124,6 +129,25 @@ const tabs = new Map<string, Tab>();
 const order: string[] = [];
 let activeTab = "mission";
 
+/**
+ * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git, Terminal and
+ * Pipelines; everything else under More). A rail item shows one view, or a group of views
+ * with a switch at the head of the tab strip; Terminal toggles the bottom panel.
+ */
+interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[] }
+const RAIL: RailItem[] = [
+  { id: "mission", label: "Mission", icon: "current-mission", tip: "Mission: the active plan, what needs you, agent runs and the queue (Ctrl+1)", views: ["mission"] },
+  { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+2)", views: ["inbox"] },
+  { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+3)", views: ["review"] },
+  { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push (Ctrl+4)", views: ["git"] },
+  { id: "terminal", label: "Terminal", icon: "terminals", tip: "Show or hide the shell terminals (Ctrl+5 or Ctrl+`)", views: [] },
+  { id: "pipelines", label: "Pipelines", icon: "devops", tip: "Pipelines: the run-plan-all queue and the CI/CD runs of this branch (Ctrl+6)", views: ["queue", "cicd"] },
+];
+/** Views under More, after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
+const MORE_VIEWS = ["plans", "flight", "activity"];
+/** The member a group's rail item opens: the one shown last. */
+const lastInGroup = new Map<string, string>();
+
 function addTab(t: Tab, focus = true) {
   if (!tabs.has(t.id)) order.push(t.id);
   tabs.set(t.id, t);
@@ -134,40 +158,94 @@ function addTab(t: Tab, focus = true) {
   else renderTabs();
 }
 
+function badges(t: Tab | undefined): HTMLElement[] {
+  const b = t?.badge?.();
+  if (!t || !b) return [];
+  return [
+    h("span", { class: `badge ${b.cls}`, ...(b.tip ? { title: b.tip } : {}), ...(t.id === "inbox" && b.cls === "warn" ? { id: "inbox-badge" } : {}) }, b.text),
+    ...(b.extra ? [h("span", { class: `badge ${b.extra.cls}`, ...(b.extra.tip ? { title: b.extra.tip } : {}) }, b.extra.text)] : []),
+  ];
+}
+
+function renderRail() {
+  const rail = $("rail");
+  if (!workspace) return rail.replaceChildren();
+  const terminalOn = !shell.classList.contains("no-bottom");
+  const items = RAIL.map((r) => {
+    const on = r.id === "terminal" ? terminalOn : r.views.includes(activeTab);
+    const el = h(
+      "button",
+      // Terminal is a toggle (the bottom panel), not a view: "on", never "active".
+      { class: `tab rail-item ${on ? (r.id === "terminal" ? "on" : "active") : ""}`, title: r.tip, ...(r.id === "terminal" ? { "aria-pressed": String(on) } : { "aria-current": on ? "page" : "false" }) },
+      h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon"), ...r.views.flatMap((v) => badges(tabs.get(v)))),
+      h("span", { class: "lbl" }, r.label),
+    );
+    el.dataset.tab = r.id;
+    el.addEventListener("click", () => openRail(r));
+    return el;
+  });
+  const more = h("button", { id: "btn-more", class: `tab rail-item ${MORE_VIEWS.includes(activeTab) ? "active" : ""}`, title: "More: Plans, Flight Log, Activity, commands, engine, skin", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
+  more.dataset.tab = "more";
+  more.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleMore(more);
+  });
+  rail.replaceChildren(...items, h("span", { class: "spacer" }), more);
+}
+
+function openRail(r: RailItem) {
+  if (r.id === "terminal") return toggleTerminal();
+  showTab(lastInGroup.get(r.id) ?? r.views[0]);
+}
+
+/** The tab strip: documents only (runs, terminals, files, the web panel), after the switch of
+ *  a rail group with more than one view (Pipelines: Queue | CI/CD). */
 function renderTabs() {
+  renderRail();
   const bar = $("tabs");
   if (!workspace) return bar.replaceChildren();
-  const els = order
+  const docs = order
     .map((id) => tabs.get(id))
-    .filter((t): t is Tab => !!t)
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+    .filter((t): t is Tab => !!t && !t.pinned)
     .map((t) => {
-      const b = t.badge?.();
       const el = h(
         "button",
-        { class: `tab ${t.pinned ? "pin" : ""} ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
-        h("span", { class: "tab-icon" }, t.icon),
+        { class: `tab ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
+        ...(t.icon ? [h("span", { class: "tab-icon" }, icon(t.icon, "tab-svg"))] : []),
         h("span", { class: "lbl" }, t.label),
-        ...(b ? [h("span", { class: `badge ${b.cls}`, ...(b.tip ? { title: b.tip } : {}), ...(t.id === "inbox" && b.cls === "warn" ? { id: "inbox-badge" } : {}) }, b.text)] : []),
-        ...(b?.extra ? [h("span", { class: `badge ${b.extra.cls}`, ...(b.extra.tip ? { title: b.extra.tip } : {}) }, b.extra.text)] : []),
+        ...badges(t),
       );
       el.dataset.tab = t.id;
-      if (!t.pinned) {
-        const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, t.cls?.().includes("dirty") ? "●" : "×");
-        close.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          void closeTab(t.id);
-        });
-        el.append(close);
-      }
+      const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, t.cls?.().includes("dirty") ? "●" : "×");
+      close.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void closeTab(t.id);
+      });
+      el.append(close);
       el.addEventListener("click", () => showTab(t.id));
       return el;
     });
-  const pins = els.filter((e) => e.classList.contains("pin"));
-  const docs = els.filter((e) => !e.classList.contains("pin"));
-  // Pinned views stay in place; only the document tabs (runs, terminals, files) scroll.
+  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(activeTab));
+  const sw = group
+    ? [
+        h(
+          "div",
+          { class: "view-switch", role: "tablist", "aria-label": group.label },
+          ...group.views.map((id) => {
+            const t = tabs.get(id);
+            const b = h("button", { class: `view-switch-btn ${activeTab === id ? "active" : ""}`, role: "tab", "aria-selected": String(activeTab === id), title: t?.tip ?? id }, ...(t?.icon ? [icon(t.icon, "tab-svg")] : []), t?.label ?? id);
+            b.dataset.view = id;
+            b.addEventListener("click", () => showTab(id));
+            return b;
+          }),
+        ),
+      ]
+    : [];
+  // Only the document tabs scroll.
   const docBar = h("div", { class: "tabs-docs" }, ...docs);
-  bar.replaceChildren(h("div", { class: "tabs-pins" }, ...pins), ...(docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
+  bar.replaceChildren(...sw, ...(sw.length && docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
+  // No document and no switch: the strip takes no room.
+  bar.classList.toggle("tabbar-empty", !docs.length && !sw.length);
   docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
@@ -181,6 +259,8 @@ function showTab(id: string) {
   }
   for (const other of tabs.values()) if (other !== t && other.el !== t.el) other.el.hidden = true;
   activeTab = id;
+  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
+  if (group) lastInGroup.set(group.id, id);
   t.el.hidden = false;
   $("welcome").hidden = true;
   t.show?.();
@@ -287,7 +367,7 @@ $("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => void t
 function toggleTerminal(force?: boolean) {
   const show = force ?? shell.classList.contains("no-bottom");
   shell.classList.toggle("no-bottom", !show);
-  $("btn-term").classList.toggle("on", show);
+  renderRail();
   if (show) {
     if (workspace && terminals.count === 0) void terminals.create();
     requestAnimationFrame(() => {
@@ -297,7 +377,6 @@ function toggleTerminal(force?: boolean) {
   }
   requestAnimationFrame(() => editors.layout());
 }
-$("btn-term").addEventListener("click", () => toggleTerminal());
 
 $("resizer").addEventListener("pointerdown", (down) => {
   const startY = down.clientY;
@@ -324,7 +403,7 @@ new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 /** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
 type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
 
-async function openTermTab(argv: string[], label: string, tip: string, icon: string, agent?: TermAgent): Promise<{ id: string; view: TermView } | undefined> {
+async function openTermTab(argv: string[], label: string, tip: string, icon: IconKind, agent?: TermAgent): Promise<{ id: string; view: TermView } | undefined> {
   const id = `term:${++termCounter}`;
   const el = h("div", { class: "term-center" });
   const pane = h("div", { class: "term-pane" });
@@ -391,7 +470,8 @@ const host: CockpitHost = {
   },
   runPlan: async () => {
     if (!workspace) return status("Open a folder first");
-    return controls.start();
+    // The engine form is a dialog now (not in the Mission hero); Start in it runs the plan.
+    controls.openDialog({ plan: snapshot.activePlanFile });
   },
   runQueue: async () => {
     if (!workspace) return status("Open a folder first");
@@ -417,7 +497,7 @@ const host: CockpitHost = {
     try {
       const l = await api.termLaunch({ kind: "run-plan-all", engine, model: controls.model.value.trim(), dryRun: smokeDryRun });
       status([mode.note, l.note].filter(Boolean).join(" · "));
-      return openTermTab(l.argv, l.label, l.argv.join(" "), "⇶", { kind: "queue", plan: "", backend: engine, engine });
+      return openTermTab(l.argv, l.label, l.argv.join(" "), "queue", { kind: "queue", plan: "", backend: engine, engine });
     } catch (e) {
       status(`Run queue: ${errText(e)}`);
     }
@@ -433,7 +513,7 @@ const host: CockpitHost = {
       const l = await api.termLaunch({ kind: "interactive", engine, model: controls.model.value.trim(), prompt });
       if (l.note) status(l.note);
       const vendor = l.label.split(" ")[0];
-      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: promptPlan(prompt), backend: vendor, engine: vendor });
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: promptPlan(prompt), backend: vendor, engine: vendor });
     } catch (e) {
       status(`Open interactive: ${errText(e)}`);
     }
@@ -452,7 +532,7 @@ const host: CockpitHost = {
       const l = await api.termLaunch({ kind: "interactive", engine: "claude", resume: id });
       if (l.note) status(l.note);
       const label = !title ? l.label : title.length > 32 ? `${title.slice(0, 31)}…` : title;
-      const t = await openTermTab(l.argv, label, `${title || "Untitled chat"}\n${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
+      const t = await openTermTab(l.argv, label, `${title || "Untitled chat"}\n${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
       if (t) chatTabs.set(id, t.id);
       return t;
     } catch (e) {
@@ -474,14 +554,13 @@ const host: CockpitHost = {
   workspaceRoot: () => workspace?.root ?? "",
 };
 
-$("btn-run").addEventListener("click", () => void host.runPlan());
-$("btn-interactive").addEventListener("click", () => void host.interactive());
 
 // ---- views -----------------------------------------------------------------------------
 const mission = new MissionView(host, controls);
 const plans = new PlansView(host);
 const queue = new QueueView(host);
 const flight = new FlightLogView(host);
+const activity = new ActivityView(host);
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -531,28 +610,27 @@ function inboxBadge(): ReturnType<NonNullable<Tab["badge"]>> {
 }
 
 function pinViews() {
-  const pin = (id: string, label: string, icon: string, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
+  const pin = (id: string, label: string, icon: IconKind, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
     addTab({ id, label, icon, tip, pinned: true, el, show: () => v.show(), hide: () => v.hide(), badge }, false);
-  pin("mission", "Mission", "◉", "Mission: the active plan, what needs you, runs, queue, activity", mission.el, mission);
-  pin("plans", "Plans", "☰", "Plans and backlog (Mission Control snapshot)", plans.el, plans);
-  pin("queue", "Queue", "⇶", "run-plan-all queue", queue.el, queue);
-  pin("inbox", "Inbox", "▣", "Inbox: live gates from every run, attention items, gate exits", inbox.el, inbox, () =>
-    inboxBadge(),
-  );
+  pin("mission", "Mission", "current-mission", "Mission: the active plan, what needs you, runs, queue", mission.el, mission);
+  pin("inbox", "Inbox", "inbox", "Inbox: live gates from every run, attention items, gate exits", inbox.el, inbox, () => inboxBadge());
   pin(
     "review",
     "Review",
-    "◇",
+    "review",
     "Per-tick review of agent runs",
     $("view-review"),
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "⎇", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
+  pin("git", "Git", "git", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
     hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
   );
-  pin("cicd", "CI/CD", "⟳", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
-  pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
+  pin("queue", "Queue", "queue", "run-plan-all queue", queue.el, queue);
+  pin("cicd", "CI/CD", "devops", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
+  pin("plans", "Plans", "plans", "Plans and backlog (Mission Control snapshot)", plans.el, plans);
+  pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
+  pin("activity", "Activity", "activity", "Saved chats, recent activity and health checks", activity.el, activity);
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -578,7 +656,7 @@ function openRunTab(run: Run) {
   addTab({
     id: `run:${run.id}`,
     label: `#${run.id} ${run.command === "run-plan-all" ? "queue" : run.plan ? run.plan.replace(/\.plan\.md$/, "") : run.name}`,
-    icon: run.command === "run-plan-all" ? "⇶" : "▶",
+    icon: run.command === "run-plan-all" ? "queue" : "play",
     tip: `${run.cmd}\n${run.root}`,
     pinned: false,
     el: tab.el,
@@ -605,24 +683,28 @@ runs.on((c) => {
   }
 });
 
-// ---- More menu -------------------------------------------------------------------------
+// ---- More menu (rail) ------------------------------------------------------------------
 const menu = $("more-menu");
-$("btn-more").addEventListener("click", (ev) => {
-  ev.stopPropagation();
-  const r = $("btn-more").getBoundingClientRect();
-  menu.style.top = `${r.bottom + 4}px`;
-  menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
-  menu.hidden = !menu.hidden;
-});
+function toggleMore(anchor: HTMLElement) {
+  if (!menu.hidden) return (menu.hidden = true);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${r.right + 6}px`;
+  menu.style.right = "auto";
+  menu.style.top = "auto";
+  menu.style.bottom = `${Math.max(8, window.innerHeight - r.bottom)}px`;
+  menu.hidden = false;
+}
 window.addEventListener("click", () => (menu.hidden = true));
 menu.addEventListener("click", (ev) => {
-  const what = (ev.target as HTMLElement).dataset.more;
+  const el = ev.target as HTMLElement;
+  const what = el.dataset.more;
   menu.hidden = true;
-  if (what === "web") openWebPanel();
+  if (what === "view" && el.dataset.view) showTab(el.dataset.view);
+  else if (what === "web") openWebPanel();
   else if (what === "run-elsewhere") void controls.startElsewhere();
   else if (what === "refresh") void snapshot.refresh();
   else if (what === "skin") {
-    const next = (ev.target as HTMLElement).dataset.skin as Skin;
+    const next = el.dataset.skin as Skin;
     void setSkin(next).then(
       () => status(`Skin: ${SKINS.find((x) => x.id === next)?.label} (saved in settings.json)`),
       (e) => status(`Skin: ${errText(e)}`),
@@ -657,7 +739,7 @@ const palette = new CommandPalette({
     if (!workspace) return status("Open a folder first");
     try {
       const l = await api.termLaunch({ kind: "interactive", engine: "claude" });
-      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "⌘", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
+      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
     } catch (e) {
       status(`Open Claude: ${errText(e)}`);
     }
@@ -690,7 +772,7 @@ function openWebPanel() {
   if (!workspace) return;
   if (!mcUrl) return status("Mission Control server is not running");
   if (!mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
-  if (!tabs.has("web")) addTab({ id: "web", label: "Mission Control (web)", icon: "◎", tip: `The kit's web panel, ${mcUrl} (fallback; actions copy unless allowlisted)`, pinned: false, el: h("div", { class: "web-view" }, mcFrame) });
+  if (!tabs.has("web")) addTab({ id: "web", label: "Mission Control (web)", icon: "monitor", tip: `The kit's web panel, ${mcUrl} (fallback; actions copy unless allowlisted)`, pinned: false, el: h("div", { class: "web-view" }, mcFrame) });
   else showTab("web");
 }
 
@@ -804,6 +886,8 @@ async function pickFolder() {
 }
 $("btn-open").addEventListener("click", () => void pickFolder());
 $("welcome-open").addEventListener("click", () => void pickFolder());
+$("tree-refresh").replaceChildren(icon("refresh", "btn-icon"));
+$("tree-refresh").setAttribute("aria-label", "Refresh the Explorer");
 $("tree-refresh").addEventListener("click", () => void tree.refresh());
 
 async function openWorkspace(path: string) {
@@ -828,6 +912,7 @@ async function openWorkspace(path: string) {
     order.splice(order.indexOf(id), 1);
     if (t.el !== $("view-editor")) t.el.remove();
   }
+  document.getElementById("run-dialog")?.remove();
   editors.closeAll();
   terminals.closeAll();
   snapshot.reset();
@@ -840,7 +925,10 @@ async function openWorkspace(path: string) {
   mcOrigin = "";
   mcFrame.removeAttribute("src");
   alerts.setBase(`${workspace.name} · Colony`);
-  $("ws-name").textContent = workspace.root;
+  // The folder name never truncates; its parent path ellipsizes (full path in the title).
+  const parent = workspace.root.slice(0, workspace.root.length - workspace.name.length);
+  $("ws-name").replaceChildren(h("span", { class: "ws-parent" }, parent), h("strong", { class: "ws-leaf" }, workspace.name));
+  $("ws-name").title = workspace.root;
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
   shell.classList.remove("no-folder");
@@ -956,7 +1044,12 @@ window.addEventListener(
     else if (key === "t" && ev.shiftKey) {
       toggleTerminal(true);
       void terminals.create();
-    } else if (!ev.shiftKey && !inTerm && /^[1-8]$/.test(key)) showTab(["mission", "plans", "queue", "inbox", "review", "git", "cicd", "flight"][Number(key) - 1]);
+    } else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
+      // Ctrl+1..6: the rail (5 toggles the terminal); Ctrl+7..9: Plans, Flight Log, Activity.
+      const n = Number(key) - 1;
+      if (n < RAIL.length) openRail(RAIL[n]);
+      else showTab(MORE_VIEWS[n - RAIL.length]);
+    }
     else handled = false;
     if (handled) {
       ev.preventDefault();
@@ -965,6 +1058,15 @@ window.addEventListener(
   },
   true,
 );
+
+// No native WebKit context menu (Back / Reload / Open Frame) over the app or a terminal:
+// it can navigate the window away. Text fields and the editor keep theirs (copy / paste),
+// and handlers that open their own menu (the Explorer) run before this one.
+window.addEventListener("contextmenu", (ev) => {
+  const t = ev.target as HTMLElement | null;
+  if (ev.defaultPrevented || t?.closest("input, textarea, [contenteditable='true'], .monaco-editor")) return;
+  ev.preventDefault();
+});
 
 window.addEventListener("beforeunload", (ev) => {
   if (editors.paths().some((p) => editors.isDirty(p))) ev.preventDefault();
@@ -1141,13 +1243,13 @@ async function runSmoke(root: string, info: StartupInfo) {
     // Skins: Legacy from the More menu (same handler as the operator's click), saved in
     // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
     const pickSkin = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="skin"][data-skin="${id}"]`)?.click();
-    const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const frameLoad = () => new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     let reloaded = frameLoad();
     pickSkin("legacy");
     await Promise.race([reloaded, wait(8000)]);
     await wait(800);
-    const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const savedSkin = ((await api.settingsGet()).settings as { ui?: { skin?: string } } | null)?.ui?.skin;
     const frameSkin = await frameSkinNow();
     showTab("mission");
@@ -1186,11 +1288,14 @@ async function runSmoke(root: string, info: StartupInfo) {
     await wait(300);
     const remembered = await api.settingsWorkspace();
     await log("engine-remembered", remembered.backend === "codex" && remembered.onLimit === "claude" && remembered.model === "smoke-model", remembered);
-    // A view action starts the run: the Mission view's Run plan button, same click handler
-    // as the operator's. The run must open and focus its own agent tab.
+    // A view action starts the run: the Mission view's Run plan button opens the run
+    // dialog, then its Start, same click handlers as the operator's. The run must open and
+    // focus its own agent tab.
     showTab("mission");
     const before = runs.list().length;
     view("mission").querySelector<HTMLButtonElement>('[data-act="run-plan"]')?.click();
+    await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
+    document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-start"]')?.click();
     await until(() => runs.list().length > before, 10000);
     const run = runs.list()[before];
     if (!run) throw new Error("the Mission view's Run plan did not start a run");
@@ -1423,8 +1528,9 @@ renderRecents();
 api
   .appInfo()
   .then(async (info: StartupInfo) => {
-    $("st-env").textContent = `v${info.version} · DMA-BUF ${info.webkitDmabuf}`;
-    $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
+    // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
+    $("st-env").textContent = `v${info.version}`;
+    $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
     if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {

@@ -1,5 +1,5 @@
 // Engine picker and run start for `agent-kit run-plan --events ndjson` (driver mode).
-// The controls live in the Mission view's run bar; each run then opens its own center
+// The controls live in the run dialog (Run plan in Mission); each run then opens its own center
 // tab (./transcript.ts). Runs live in ./runs.ts. Colony never answers a gate by itself.
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, type BackendChoice, errText, h } from "./api";
@@ -129,6 +129,49 @@ export class RunControls {
     } catch (e) {
       this.status(`Agent: ${errText(e)}`);
     }
+  }
+
+  /**
+   * The run dialog: the engine form (Engine / Ticks / On limit / Model) with Start, over
+   * the window like the Engine panel. `plan` names what Start runs; with no plan the form
+   * still opens (the engine also picks the vendor CLI of Open interactive) but Start is off.
+   */
+  openDialog(o: { plan: string; onStarted?: (run: Run | undefined) => void }) {
+    document.getElementById("run-dialog")?.remove();
+    const close = () => {
+      overlay.remove();
+      window.removeEventListener("keydown", onKey, true);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      // Removed from outside (a folder switch): drop the listener too.
+      if (!overlay.isConnected) return window.removeEventListener("keydown", onKey, true);
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
+    };
+    const start = h("button", { class: "primary", "data-act": "run-start", title: "agent-kit run-plan --events ndjson on the active plan; the run opens as a tab with its transcript and gates" }, "Start run");
+    start.disabled = !o.plan;
+    start.addEventListener("click", async () => {
+      close();
+      o.onStarted?.(await this.start());
+    });
+    const cancel = h("button", { "data-act": "run-cancel" }, o.plan ? "Cancel" : "Close");
+    cancel.addEventListener("click", close);
+    const box = h(
+      "div",
+      { class: "engine-box run-box", role: "dialog", "aria-modal": "true", "aria-label": "Run plan" },
+      h("strong", {}, "Run plan"),
+      h("div", { class: "dim small", title: o.plan }, o.plan ? `Runs the HANDOFF plan ${o.plan}. Each tick may run /git-staging; it never runs /git-prod.` : "HANDOFF names no active plan: agent-kit run-plan would stop with \u201cno active plan\u201d. The engine below still picks the CLI of Open interactive."),
+      this.el,
+      this.note,
+      h("div", { class: "engine-actions" }, start, cancel),
+    );
+    const overlay = h("div", { id: "run-dialog" }, box);
+    overlay.addEventListener("click", (ev) => ev.target === overlay && close());
+    window.addEventListener("keydown", onKey, true);
+    document.body.append(overlay);
+    (o.plan ? start : this.backend).focus();
   }
 
   async startElsewhere() {

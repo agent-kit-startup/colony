@@ -1,6 +1,6 @@
 // COLONY_SMOKE steps for the live launches (./launches.ts) and the context sources strip
 // (./contextstrip.ts). Called by the main smoke after its driver run and interactive tabs:
-// the Mission view's Agent runs card lists the driver run and a `/run-plan <plan>`
+// the Mission view's Crew Monitor card lists the driver run and a `/run-plan <plan>`
 // interactive tab (fixture `fake-claude.sh`, which prints a HITL_GATE line), the hero shows
 // that plan as launched from Colony until HANDOFF switches to it over SSE, the queue card
 // shows a queue held by an out-of-queue run, and both kinds of agent tab list their
@@ -25,7 +25,7 @@ export interface SmokeLiveCtx {
   activeTab(): string;
   closeTab(id: string): Promise<void>;
   openInEditor(path: string): Promise<unknown>;
-  /** The Mission view's engine picker (focused while HANDOFF switches, as after a pick). */
+  /** The run dialog's engine picker (focused while HANDOFF switches, as after a pick). */
   picker: HTMLElement;
 }
 
@@ -120,9 +120,12 @@ export async function smokeLive(c: SmokeLiveCtx) {
   if (original === null) {
     await c.log("handoff-switch", false, "no .cursor/HANDOFF.md in the smoke folder");
   } else {
-    // The operator's last click was the engine picker: the view must still follow HANDOFF.
+    // The operator's last click was the engine picker (in the run dialog, over Mission):
+    // the view must still follow HANDOFF.
     c.host.showTab("mission");
     await c.wait(200);
+    void c.host.runPlan();
+    await c.wait(100);
     c.picker.focus();
     const pickerFocused = document.activeElement === c.picker;
     const updatesBefore = snapshot.feed.updates;
@@ -137,6 +140,7 @@ export async function smokeLive(c: SmokeLiveCtx) {
     const pendingLive = !!mission().querySelector(".launch-pending");
     const heldLive = !!mission().querySelector(".queue-held");
     await c.log("mission-follows-with-focus", switched && pickerFocused && heroLive === planId && !pendingLive && heldLive && stillFocused, { pickerFocused, heroLive, pendingLive, heldLive, stillFocused });
+    document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-cancel"]')?.click();
     c.host.showTab("mission");
     await c.wait(400);
     const hero = mission().querySelector(".hero h2")?.textContent ?? "";
