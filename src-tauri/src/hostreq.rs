@@ -459,7 +459,7 @@ pub fn cli_run(args: &[String], spool: Option<PathBuf>, cwd: &Path, poll: Durati
             }
         }
         let b = branch.clone().unwrap_or_default();
-        if let Some(why) = branchrule::production_branch(cwd, &b) {
+        if let Some(why) = branchrule::request_production_reason(&b) {
             eprintln!("colony request: refused: {why}. A production branch is pushed by the operator from Colony's Git tab, never on request.");
             return EXIT_USAGE;
         }
@@ -977,11 +977,11 @@ fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String
         Action::MergePr { number, .. } => {
             let pr = Forge::detect()?.json(cwd, &Op::PrView(*number))?;
             let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default().to_string();
-            Ok(branchrule::production_branch(cwd, &base).map(|why| format!("PR #{number} targets {base}: {why}")))
+            Ok(branchrule::request_production_reason(&base).map(|why| format!("PR #{number} targets {base}: {why}")))
         }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
-            match branchrule::production_branch(cwd, b) {
+            match branchrule::request_production_reason(b) {
                 Some(why) => Err(format!("Refused: {why}. Push a production branch yourself from the Git tab (typed yes)")),
                 None => Ok(None),
             }
@@ -1054,7 +1054,7 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
                 return Err(format!("Not a branch name: {b}"));
             }
             gitops::git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).map_err(|_| format!("No local branch {b}"))?;
-            if let Some(why) = branchrule::production_branch(cwd, b) {
+            if let Some(why) = branchrule::request_production_reason(b) {
                 return Err(format!("Refused: {why}"));
             }
             // Never forced: no --force, no +refspec.
