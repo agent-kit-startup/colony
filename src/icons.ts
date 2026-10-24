@@ -39,6 +39,8 @@ const PATHS = {
   updated: '<circle cx="8" cy="8" r="5.25"/><path d="M8 5.25V8l1.75 1.75"/>',
   // Colony: branch-less metadata (folder, engine)
   folder: '<path d="M2 4.5a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>',
+  // Colony: refresh (circular arrow), replaces the unicode ↻ on reload buttons
+  refresh: '<path d="M13 8a5 5 0 11-1.46-3.54"/><path d="M13 2.5v3h-3"/>',
   engine: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2"/>',
 } as const;
 
