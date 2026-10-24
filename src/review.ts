@@ -4,6 +4,7 @@
 import * as monaco from "monaco-editor";
 import { api, errText, h, type FileChange, type TickReview } from "./api";
 import { runLabel, runs } from "./runs";
+import { monoFont, onSkin } from "./skin";
 
 const STATUS_NAMES: Record<string, string> = { A: "added", M: "modified", D: "deleted", R: "renamed", C: "copied", T: "type changed" };
 
@@ -121,14 +122,16 @@ export class ReviewView {
     );
     if (!this.diff) {
       this.diff = monaco.editor.createDiffEditor(this.diffHost, {
-        theme: "colony-dark",
+        theme: "colony",
         automaticLayout: true,
         readOnly: true,
         originalEditable: false,
         renderSideBySide: true,
         fontSize: 13,
-        fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono"),
+        fontFamily: monoFont(),
       });
+      const diff = this.diff;
+      onSkin(() => diff.updateOptions({ fontFamily: monoFont() }));
     }
     const old = this.diff.getModel();
     const lang = languageFor(f.path);

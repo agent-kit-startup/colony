@@ -6,6 +6,7 @@ import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { api, focusPolicy } from "./api";
+import { monoFont, onSkin } from "./skin";
 
 self.MonacoEnvironment = {
   getWorker(_id: string, label: string) {
@@ -17,7 +18,8 @@ self.MonacoEnvironment = {
   },
 };
 
-monaco.editor.defineTheme("colony-dark", {
+// Boot placeholder until src/skin.ts defines "colony" from the skin tokens.
+monaco.editor.defineTheme("colony", {
   base: "vs-dark",
   inherit: true,
   rules: [],
@@ -38,14 +40,16 @@ export class Editors {
   constructor(el: HTMLElement, private onChange: () => void) {
     this.editor = monaco.editor.create(el, {
       model: null,
-      theme: "colony-dark",
+      theme: "colony",
       automaticLayout: true,
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono"),
+      fontFamily: monoFont(),
       fontSize: 13,
       minimap: { enabled: true },
       smoothScrolling: true,
       renderWhitespace: "selection",
     });
+    // The Omarchy skin follows the system monospace font.
+    onSkin(() => this.editor.updateOptions({ fontFamily: monoFont() }));
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void this.save();
     });

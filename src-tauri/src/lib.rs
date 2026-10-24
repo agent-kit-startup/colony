@@ -15,6 +15,7 @@ mod hostreq;
 mod instance;
 mod launch;
 mod mcdata;
+mod omarchy;
 mod pty;
 mod review;
 mod settings;
@@ -335,6 +336,7 @@ pub fn run() {
             settings::settings_set_workspace,
             settings::settings_set_skin,
             launch::open_in_editor,
+            omarchy::omarchy_subscribe,
             context::context_sources,
             review::review_ticks,
             review::review_file,

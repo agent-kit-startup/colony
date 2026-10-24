@@ -111,6 +111,8 @@ export const api = {
   mcConfig: () => invoke<string | null>("mc_config"),
   mcSubscribe: (onEvent: Channel<McEvent>) => invoke<void>("mc_subscribe", { onEvent }),
   /** Folders a later `colony <folder>` launch hands to this window (single instance). */
+  /** The Omarchy theme and font now (`null` off Omarchy), then on every switch. */
+  omarchySubscribe: (onEvent: Channel<OmarchyTheme | null>) => invoke<void>("omarchy_subscribe", { onEvent }),
   instanceSubscribe: (onEvent: Channel<InstanceEvent>) => invoke<void>("instance_subscribe", { onEvent }),
   termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; resume?: string; dryRun?: boolean }) =>
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
@@ -154,6 +156,14 @@ export const api = {
 };
 
 export { Channel };
+
+/** `src-tauri/src/omarchy.rs` Theme: the Omarchy palette as skin tokens, and the monospace font. */
+export interface OmarchyTheme {
+  name: string | null;
+  mode: "dark" | "light";
+  tokens: Record<string, string>;
+  font: string | null;
+}
 
 /** `src-tauri/src/instance.rs` InstanceEvent. */
 export type InstanceEvent = { kind: "open"; folder: string };

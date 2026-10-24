@@ -5,6 +5,10 @@
 :root {
   color-scheme: dark;
 }
+/* A light Omarchy theme (src/skin.ts sets data-mode from colors.toml). */
+html[data-mode="light"] {
+  color-scheme: light;
+}
 ::selection { background: var(--mc-selection); }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
