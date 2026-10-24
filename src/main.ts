@@ -1300,7 +1300,9 @@ async function hostMcAction(record: McRecord): Promise<McReply> {
     });
     return { handled: true, message: "Confirm the run in Colony" };
   }
-  if (d.action === "rerun-run" && workspace) {
+  // Only the run the Ship lane itself names (security review 2026-10-24, finding 7): a
+  // script in the frame cannot fill the Requests list with arbitrary run ids.
+  if (d.action === "rerun-run" && workspace && d.run === snapshot.data?.shipLane?.remote?.tagCi?.runId) {
     try {
       const id = await hostApi.local("rerun-checks", { run: d.run });
       showTab("git");

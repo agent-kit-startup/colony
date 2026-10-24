@@ -907,6 +907,10 @@ impl HostRequests {
             if items.iter().any(|p| p.origin == Origin::Colony && p.action == action && p.req.cwd == req.cwd) {
                 return Err(format!("{} is already waiting on a card", action.summary()));
             }
+            // Same cap as the spool (security review 2026-10-24, finding 7).
+            if items.len() >= MAX_PENDING {
+                return Err(format!("{MAX_PENDING} requests are already waiting: answer some first"));
+            }
             items.push(Pending { req, action, origin: Origin::Colony, running: false, pin: None });
         }
         self.broadcast();
