@@ -28,11 +28,28 @@ Release files:
 
 | File | What |
 |------|------|
-| `colony-<version>-linux-x86_64.tar.gz` | `colony-<version>-linux-x86_64/colony` (binary) and `colony.png` (icon): what `install.sh` installs |
+| `colony-<version>-linux-x86_64.tar.gz` | `colony-<version>-linux-x86_64/colony` (binary, direct channel) and `colony.png` (icon): what `install.sh` installs |
+| `colony-<version>-linux-x86_64-package.tar.gz` | the same layout, binary built with `--no-default-features` (package channel, no updater): the source of distro packages (AUR `colony-bin`, omarchy-pkgs) |
 | `Colony_<version>_amd64.deb` | the Tauri `.deb` bundle (system install with `sudo apt install ./Colony_...deb`) |
+| `Colony_<version>_amd64.AppImage` | the Tauri AppImage (direct channel): the build that updates itself in place |
+| `Colony_<version>_amd64.AppImage.sig` | its updater signature (`createUpdaterArtifacts`, release key) |
+| `latest.json` | the updater manifest (`tauri-plugin-updater` static JSON): version, notes, date and the AppImage entry `linux-x86_64-appimage` (URL + signature) |
 | `install.sh` | the installer of this release |
-| `SHA256SUMS` | sha256 of the three files above |
+| `SHA256SUMS` | sha256 of every file above |
 | `SHA256SUMS.sig` | base64 of a minisign signature of `SHA256SUMS` by key `9A9BB4349C2248C6` |
+
+## App updates and distribution channels
+
+The channel is chosen at build time with a Cargo feature (`src-tauri/src/appupdate.rs`); a tag builds both:
+
+| Channel | Build | Updates |
+|---------|-------|---------|
+| `direct` (default feature `channel-direct`) | `pnpm tauri build` | The official `tauri-plugin-updater` reads `https://github.com/agent-kit-startup/colony/releases/latest/download/latest.json` (prereleases are never "latest", so they never reach it), checks the minisign signature of the download against `plugins.updater.pubkey` (the release key `9A9BB4349C2248C6`, the same key `install.sh` pins) with `requireSignedVersion` (the signed trusted comment must name the announced version: no downgrade through a crafted `latest.json`), and installs it in place. User-started only: `More → About Colony… → Check for updates / Update and restart`; nothing checks on a timer or at startup. |
+| `package` | `pnpm tauri build --no-bundle -- --no-default-features` | The updater crate is not compiled in. About says updates come from the package manager (`pacman -Syu` on Arch and Omarchy). AUR `colony-bin` and omarchy-pkgs package the `-package` tarball. |
+
+What updates in place, on Linux: the plugin (2.14) installs an AppImage (rewrites the file, per user, no root) or a `.deb`/`.rpm` (as root through `pkexec dpkg -i` / `rpm -U`). It has no installer for the per-user tarball of `install.sh`; an unmarked binary falls through to the AppImage routine, which would overwrite it with AppImage bytes. So Colony installs in place only when it runs from the AppImage (`APPIMAGE` set and the AppImage bundle marker). From the tarball the check still says whether a newer release exists, and the update is the install line again (it keeps the previous version); from the `.deb` it is the newer `.deb`. `latest.json` lists only the AppImage.
+
+`createUpdaterArtifacts` is passed with `--config` in the release workflow, not set in `tauri.conf.json`, so a local `pnpm tauri build` needs no signing key. The release workflow fails when the AppImage signature or `latest.json` is missing.
 
 ## Where `install.sh` downloads from
 
@@ -75,6 +92,6 @@ Environment: `COLONY_DOWNLOAD_BASE` (`https://` or `file://`; default `https://g
 
 ## Not yet
 
-- The Tauri updater (`tauri-plugin-updater` with `plugins.updater.pubkey` in `tauri.conf.json`): the signing key is the updater key, so turning it on later needs no new key.
-- macOS and Windows builds, arm64, AppImage.
+- `install.sh` installing the AppImage (so the curl install updates itself too): the AppImage needs FUSE (`fuse2`) on the host, which Omarchy and Arch do not install by default.
+- macOS and Windows builds, arm64.
 - The managed engine's own signature check (`ENGINE_SIGNING_PUBKEY` in `src-tauri/src/engine.rs`) waits for the kit's engine signing key.
