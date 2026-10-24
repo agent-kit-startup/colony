@@ -1,8 +1,11 @@
 #!/bin/sh
-# COLONY_SMOKE fixture: stands in for `agent-kit run-plan --events ndjson` (driver
-# protocol 1.1.0, docs/driver-events-protocol.md in the kit) so the smoke can exercise a
-# HITL gate answer, the per-tick review and the engine choice end to end without a real
-# agent. One tick: edit two files, open gate `smoke-gate`, wait for one stdin line.
+# COLONY_SMOKE fixture: stands in for `agent-kit run-plan --events ndjson` and
+# `agent-kit run-plan-all --events ndjson` (driver protocol 1.2.0,
+# docs/driver-events-protocol.md in the kit) so the smoke can exercise a HITL gate answer,
+# the per-tick review, the queue runner and the engine choice end to end without a real
+# agent. run-plan: one tick that edits two files, opens gate `smoke-gate` and waits for
+# one stdin line. run-plan-all: one session with a queue_state change and gate
+# `smoke-queue-gate`. `engine-info --json` announces the protocol.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
 cmd=${1:-}
@@ -14,6 +17,7 @@ while [ $# -gt 0 ]; do
     --cwd) cwd=$2; shift ;;
     --on-limit) onlimit=$2; shift ;;
     --model) model=$2; shift ;;
+    --events) events=$2; shift ;;
   esac
   shift
 done
@@ -36,16 +40,41 @@ if [ "$cmd" = commands ]; then
 JSON
   exit 0
 fi
-if [ "$cmd" = run-plan-all ]; then
-  # Queue runner stand-in (a PTY tab in Colony): print one line and leave a proof file.
-  echo "fixture run-plan-all backend=$backend"
-  printf 'run-plan-all backend=%s\n' "$backend" > run-plan-all-proof.txt
+if [ "$cmd" = engine-info ]; then
+  printf '{"name":"@dadado/agent-kit-cli","version":"0.0.0-fixture","node":">=20","driverProtocol":"1.2.0","dashboardDataVersion":"1.0.0"}\n'
   exit 0
 fi
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
+if [ "$cmd" = run-plan-all ] && [ "${events:-}" = ndjson ]; then
+  # Queue runner in driver mode: one session (no ticks), queue_state at start and after the
+  # cursor moves, one gate answered on stdin. The HANDOFF itself is not touched.
+  q0='"cursor":0,"total":2,"current":"colony-queue-a.plan.md","status":"running"'
+  ev "\"type\":\"run_start\",\"protocol\":\"1.2.0\",\"command\":\"run-plan-all\",\"backend\":\"$backend\",\"plan\":null,\"pending\":null,\"maxTicks\":null,\"hitl\":\"driver\",\"queue\":{$q0}"
+  ev "\"type\":\"queue_state\",$q0"
+  ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture queue args: backend=$backend model=${model:-none}\""
+  sleep 1
+  ev "\"type\":\"queue_state\",\"cursor\":1,\"total\":2,\"current\":\"colony-queue-b.plan.md\",\"status\":\"running\""
+  ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Plan a is done; the queue moved to b. **Confirm** before I continue:\\n\\nHITL_GATE: smoke-queue-gate | Continue | Stop the queue\"}]}}"
+  ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-queue-gate\",\"labels\":[\"Continue\",\"Stop the queue\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-queue-gate | Continue | Stop the queue\""
+  if ! IFS= read -r reply; then
+    ev "\"type\":\"run_end\",\"exitCode\":4,\"ticks\":1,\"pending\":null,\"reason\":\"gate EOF\",\"planExhausted\":false,\"replies\":[],\"stop\":{\"askId\":\"smoke-queue-gate\",\"cause\":\"EOF\",\"message\":\"stdin closed\",\"exitCode\":4}"
+    exit 4
+  fi
+  printf '%s\n' "$reply" > queue-reply.json
+  ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"user\",\"isReplay\":true,\"message\":{\"content\":\"HITL_REPLY: smoke-queue-gate | relayed by the fixture\"}}"
+  ev "\"type\":\"run_end\",\"exitCode\":0,\"ticks\":1,\"pending\":null,\"reason\":\"session ended\",\"planExhausted\":false,\"replies\":[],\"stop\":null"
+  exit 0
+fi
+if [ "$cmd" = run-plan-all ]; then
+  # Queue runner stand-in without --events (a PTY tab in Colony on an older engine): print
+  # one line and leave a proof file.
+  echo "fixture run-plan-all backend=$backend"
+  printf 'run-plan-all backend=%s\n' "$backend" > run-plan-all-proof.txt
+  exit 0
+fi
 
-ev "\"type\":\"run_start\",\"protocol\":\"1.1.0\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
+ev "\"type\":\"run_start\",\"protocol\":\"1.2.0\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
 ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture args: backend=$backend on-limit=${onlimit:-none} model=${model:-none}\""
 sleep 1
 ev "\"type\":\"tick_start\",\"tick\":1,\"maxTicks\":$max,\"pending\":1,\"log\":\".cursor/loop-logs/tick-fixture.log\",\"prompt\":\"TICK_PROMPT fixture\",\"backend\":\"$backend\""

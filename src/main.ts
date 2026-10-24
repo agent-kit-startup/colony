@@ -1297,7 +1297,9 @@ async function runSmoke(root: string, info: StartupInfo) {
     } else {
       await log("agent-transcript", !!runEl.querySelector(".tr-end, .tr-line"), { lines: runEl.querySelectorAll(".tr > *").length, end: runEl.querySelector(".tr-end")?.textContent ?? null });
     }
-    // Queue runner from the Queue view (fixture: the fake CLI; real: --dry-run, no agent).
+    // Queue runner from the Queue view. Fixture: the fake CLI announces driver protocol
+    // 1.2.0, so the queue starts as a driver run: the Queue view follows its queue_state and
+    // its gate is answered from the Inbox. Real CLI: --dry-run in a terminal tab, no agent.
     const realConfirmAction = confirmAction;
     let confirmed = "";
     confirmAction = async (m) => {
@@ -1307,14 +1309,45 @@ async function runSmoke(root: string, info: StartupInfo) {
     smokeDryRun = !fixture;
     showTab("queue");
     const qBtn = view("queue").querySelector<HTMLButtonElement>('[data-act="run-queue"]');
-    const termsBefore = centerTerms.size;
-    qBtn?.click();
-    await until(() => centerTerms.size > termsBefore, 5000);
-    const qTab = activeTab;
-    const qView = centerTerms.get(qTab);
-    await until(() => !!qView?.exited, 30000);
-    const qOut = (qView?.output ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
-    await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && (fixture ? qOut.includes("fixture run-plan-all backend=codex") : qView?.exitCode === 0 && qOut.length > 0), { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
+    if (fixture) {
+      const before = new Set(runs.runs.keys());
+      const newQueueRun = () => runs.list().find((r) => !before.has(r.id) && r.command === "run-plan-all");
+      qBtn?.click();
+      await until(() => !!newQueueRun()?.gate, 15000);
+      const qRun = newQueueRun();
+      showTab("queue");
+      queue.flush();
+      const qNote = view("queue").querySelector<HTMLElement>(".queue-live");
+      const followed = !!qRun && qNote?.dataset.run === String(qRun.id) && qNote.dataset.cursor === "1" && qRun.queue?.current === "colony-queue-b.plan.md";
+      showTab("inbox");
+      await wait(300);
+      const qCard = qRun ? inbox.el.querySelector<HTMLElement>(`.inbox-card[data-run="${qRun.id}"][data-ask="smoke-queue-gate"]`) : null;
+      qCard?.querySelector<HTMLButtonElement>('.gate-buttons button[data-reply="1"]')?.click();
+      await until(() => !!qRun && !qRun.running, 15000);
+      const qReply = await api.readTextFile(`${root}/queue-reply.json`).catch((e) => `missing: ${errText(e)}`);
+      let qSent: Record<string, unknown> = {};
+      try {
+        qSent = JSON.parse(qReply);
+      } catch {
+        // logged below
+      }
+      const states = qRun?.items.filter((i) => i.kind === "ev" && i.ev.type === "queue_state").length ?? 0;
+      await log(
+        "queue-driver",
+        !!qBtn && !!qRun && confirmed.includes("Inbox") && followed && !!qCard && qSent.askId === "smoke-queue-gate" && qSent.reply === 1 && qRun.exitCode === 0 && states === 2 && tabs.has(`run:${qRun.id}`),
+        { run: qRun?.id, cmd: qRun?.cmd, cursor: qNote?.dataset.cursor ?? null, current: qRun?.queue?.current ?? null, card: !!qCard, reply: qReply.slice(0, 120), exit: qRun?.exitCode, states },
+      );
+      if (qRun) await closeTab(`run:${qRun.id}`);
+    } else {
+      const termsBefore = centerTerms.size;
+      qBtn?.click();
+      await until(() => centerTerms.size > termsBefore, 5000);
+      const qTab = activeTab;
+      const qView = centerTerms.get(qTab);
+      await until(() => !!qView?.exited, 30000);
+      const qOut = (qView?.output ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && qView?.exitCode === 0 && qOut.length > 0, { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
+    }
     smokeDryRun = false;
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
     // real: the argv is resolved, the real vendor CLI is not started by the smoke).
