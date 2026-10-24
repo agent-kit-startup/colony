@@ -596,6 +596,8 @@ const alerts = new GateAlerts((key) => {
   inbox.reveal(key);
 });
 alerts.showing = (g) => activeTab === g.tabId || activeTab === "inbox";
+// The omarchy-shell bar widget reads this window's folder, open gates and live runs.
+const pushShellStatus = publishShellStatus(() => workspace?.root ?? null);
 // Terminal tabs carry a gate marker while their output shows an open HITL_GATE line.
 launches.on(() => renderTabs());
 let reviewCount = 0;
@@ -974,6 +976,7 @@ async function openWorkspace(path: string) {
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
+  pushShellStatus();
   await startMc();
 }
 
@@ -1650,8 +1653,7 @@ api
     };
     void api.instanceSubscribe(forwarded).catch((e) => status(`Single instance: ${errText(e)}`));
     if (info.initialView) showView(info.initialView);
-    // The omarchy-shell bar widget reads this window's open gates and live runs.
-    publishShellStatus(() => workspace?.root ?? null)();
+    pushShellStatus();
     if (info.smoke && workspace) await runSmoke(workspace.root, info);
   })
   .catch((e) => status(errText(e)));
