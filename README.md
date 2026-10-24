@@ -6,7 +6,7 @@ Open source under the [Apache License 2.0](LICENSE) ([NOTICE](NOTICE)). Contribu
 
 ## Status
 
-Cockpit alpha. Linux (Omarchy / Hyprland) is the first target.
+Cockpit alpha. Omarchy 4 is the reference Linux platform: Linux features are designed and verified on Omarchy 4 first, other distributions and window managers keep working (see Omarchy below).
 
 The cockpit is the center of the window. Its first tabs are Mission Control itself, as native views fed by the kit's own data (see Mission Control data): Mission, Plans, Queue, Inbox, Review, Git, CI/CD and Flight Log (Ctrl+1 to Ctrl+8). Every agent run opens as its own tab next to them, and so does an interactive agent. Files open in tabs after those.
 
@@ -70,6 +70,14 @@ packaging/install-local-launcher.sh
 ```
 
 This writes `~/.local/bin/colony` (wrapper around `src-tauri/target/release/colony`) and `~/.local/share/applications/colony.desktop`, so Colony shows up in the app launcher. `colony ~/code/some-repo` opens a folder directly. Rebuilding updates the same binary; the launcher does not need to be reinstalled.
+
+## Omarchy
+
+Omarchy 4.x is the reference Linux platform: a Linux feature is designed and verified there first. The surfaces below act only where Omarchy is installed; without Omarchy Colony behaves exactly as on any other Linux desktop. It reads Omarchy state freely and never writes under `~/.config/hypr`, `~/.config/omarchy` or `~/.local/state/omarchy` without an explicit step of yours, which lists the files first and has a matching remove step.
+
+| Surface | What Colony does |
+|---------|------------------|
+| Default agent | When Colony has no engine choice for the folder yet, the engine picker starts on the agent in `~/.config/omarchy/defaults/agent` (`omarchy-default-agent`): `claude`, `codex` and `cursor-agent` map one to one, and the note under the picker says "Omarchy default agent". The other Omarchy agents (`opencode`, `pi`, `gemini`, ...) have no Agent Kit backend, so Colony keeps its own default (`claude`). A choice you make in the picker always wins. The file is only read. |
 
 ## Settings
 
