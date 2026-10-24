@@ -4,7 +4,8 @@
 # and creates the GitHub release with them. The GitHub Releases of this public
 # repository are the download base of install.sh: a plain v<x.y.z> tag becomes the
 # Latest release (what install.sh installs by default); a tag with a pre-release
-# suffix (v0.2.0-rc.1) stays a prerelease and is only installed with --version.
+# suffix (v0.2.0-rc.1; the three version files must carry it too) stays a prerelease
+# and is only installed with --version.
 # Two channels from one tag (src-tauri/src/appupdate.rs): the direct build (default
 # features: tauri-plugin-updater in; tarball, .deb, AppImage + updater signature and
 # latest.json for in-app updates) and the package build (--no-default-features: no
