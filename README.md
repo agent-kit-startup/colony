@@ -2,7 +2,7 @@
 
 Colony is the Mission Kit desktop IDE: a Tauri 2 cockpit with Mission Control as its home screen. It drives the open [Agent Kit](https://github.com/agent-kit-startup/agent-kit) CLI and each vendor's own agent on the user's own subscription or API key.
 
-Private, closed-source product repository. No open-source license is granted.
+Open source under the [Apache License 2.0](LICENSE) ([NOTICE](NOTICE)). Contributions come in under the Developer Certificate of Origin (`git commit -s`, see [CONTRIBUTING.md](CONTRIBUTING.md)). Colony collects no telemetry: its only network calls of its own are the engine and Node runtime downloads you start from `More → Engine…` (see [PRIVACY.md](PRIVACY.md)).
 
 ## Status
 
@@ -141,3 +141,7 @@ Colony runs the engine's unforked dashboard server for the opened folder (`node 
 ## Mission Control web panel
 
 The kit's own page stays reachable under `More → Mission Control (web panel)`. Colony follows the kit's embeddable contract (`docs/mission-control-embedding.md` in the kit): it runs `node <engine>/dashboard/serve.mjs` with `MISSION_CONTROL_REPO_ROOT=<opened folder>` and `PORT=<free port>`, loads `http://127.0.0.1:<port>/?colony-skin=<skin>` in that tab, and defines `window.__MISSION_CONTROL_ACTIONS__` inside that frame only. The hook offers every record (always `kind: "copy"`, every string untrusted) to the Colony window first. The same frame script selects the panel's skin to match Colony's before the panel paints: it writes the kit's own preference key (`agent-kit:dashboard-skin`, `bare-metal` or `legacy`; `src/skin.ts` maps Colony's skin to the kit's value; kits before agent-kit #1260 spelled Bare Metal `cursor`, which newer kits still read as an alias). Colony runs a real host action for exactly two shapes and keeps the copy for everything else (`src/mcactions.ts`): a `filePicker` record holding a plain repo-relative path (no absolute, `~`, `..` or control characters; the Rust side still jails it to the folder) opens that file in a Colony tab, and a `chatInput` record that is exactly `/run-plan` or `/run-plan <plan basename>` starts an agent run (its own tab) of the folder's active plan after a native confirmation dialog. Terminal commands, PIDs, prompts, `/run-plan-all` and `/git-prod` stay copy, as does any record Colony does not answer within 1.5 s. The server is stopped when Colony exits (also on a crash, through a parent-death signal). Its log is under `~/.cache/colony/dashboard-<port>.log`.
+
+## License
+
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). The license covers the code, not the names "Mission Kit", "Agent Kit" or the helmet logo ([CONTRIBUTING.md](CONTRIBUTING.md#names-and-logo)). Privacy and network calls: [PRIVACY.md](PRIVACY.md).
