@@ -9,7 +9,7 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { ActivityView, type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
@@ -440,6 +440,50 @@ function toggleExplorer(force?: boolean) {
   relayout();
   layoutChanged();
 }
+
+// Layout persistence (settings.json ui.layout): saved after every panel change (debounced),
+// applied when the window opens. A size is saved only once a splitter set it.
+const px = (name: string) => {
+  const v = Number.parseFloat(shell.style.getPropertyValue(name));
+  return Number.isFinite(v) ? Math.round(v) : null;
+};
+function layoutNow(): Required<{ [K in keyof LayoutSettings]: LayoutSettings[K] | null }> {
+  return {
+    terminalDock: dock(),
+    terminalVisible: !shell.classList.contains("no-bottom"),
+    explorerVisible: !shell.classList.contains("no-side"),
+    explorerWidth: px("--side-w"),
+    terminalHeight: px("--bottom-h"),
+    terminalWidth: px("--term-w"),
+  };
+}
+/** Put a saved layout on the window (no save back). */
+function applyLayout(l: LayoutSettings) {
+  shell.dataset.dock = l.terminalDock === "top" || l.terminalDock === "side" ? l.terminalDock : "bottom";
+  shell.classList.toggle("no-bottom", l.terminalVisible === false);
+  shell.classList.toggle("no-side", l.explorerVisible === false);
+  const size = (name: string, v: number | undefined) => (typeof v === "number" && v > 0 ? shell.style.setProperty(name, `${v}px`) : shell.style.removeProperty(name));
+  size("--side-w", l.explorerWidth);
+  size("--bottom-h", l.terminalHeight);
+  size("--term-w", l.terminalWidth);
+  renderDock();
+  renderRail();
+  relayout();
+}
+async function loadLayout(): Promise<LayoutSettings> {
+  const info = await api.settingsGet().catch(() => null);
+  const l = ((info?.settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout ?? {}) as LayoutSettings;
+  applyLayout(l);
+  return l;
+}
+let layoutTimer = 0;
+let layoutSaved: Promise<unknown> = Promise.resolve();
+layoutChanged = () => {
+  window.clearTimeout(layoutTimer);
+  layoutTimer = window.setTimeout(() => {
+    layoutSaved = api.settingsSetLayout(layoutNow()).catch((e) => status(`Layout: ${errText(e)}`));
+  }, 400);
+};
 
 $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
@@ -1333,7 +1377,7 @@ window.addEventListener("beforeunload", (ev) => {
 });
 
 // ---- code-path smoke (COLONY_SMOKE=<log>): no human input, every step logged -------------
-async function runSmoke(root: string, info: StartupInfo) {
+async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSettings) {
   const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const until = async (cond: () => boolean, ms: number) => {
@@ -1353,6 +1397,15 @@ async function runSmoke(root: string, info: StartupInfo) {
   };
   try {
     await log("workspace", true, root);
+    // The layout this window opened with is the one settings.json had (a previous run's).
+    {
+      const now = layoutNow();
+      const sideW = Math.round($("side").getBoundingClientRect().width);
+      const want = Object.entries(bootLayout) as [keyof LayoutSettings, unknown][];
+      const mismatch = want.filter(([k, v]) => now[k] !== v).map(([k, v]) => `${k}: saved ${v}, applied ${now[k]}`);
+      const widthOk = bootLayout.explorerWidth === undefined || bootLayout.explorerVisible === false || sideW === bootLayout.explorerWidth;
+      await log("layout-boot", !mismatch.length && widthOk, { saved: bootLayout, applied: now, explorerWidth: sideW, mismatch });
+    }
     await log("tree", $("tree").querySelectorAll(".tree-row").length > 0, `${$("tree").querySelectorAll(".tree-row").length} rows`);
     // Native views from the kit server's snapshot (GET + SSE through the Rust proxy).
     const gotData = await until(() => !!snapshot.data, 20000);
@@ -1555,6 +1608,34 @@ async function runSmoke(root: string, info: StartupInfo) {
     await wait(500);
     const termH2 = box("bottom").height;
     await log("dock-terminal", Object.values(docked).every((x) => x.placed && x.fitted && x.button) && explorerHidden && explorerBack && Math.abs(sideW2 - sideW - 60) <= 1 && Math.abs(termH2 - termH - 50) <= 1 && fitted(), { ...docked, explorerHidden, explorerBack, explorerWidth: `${sideW} -> ${sideW2}`, terminalHeight: `${termH} -> ${termH2}`, fittedAfterDrag: fitted() });
+    // Layout persistence: the panel changes above are in settings.json (debounced save);
+    // then the window is reset to the defaults and the layout read back from the file, as
+    // the next start does (layout-boot checks a real restart).
+    const savedLayout = async () => ((await api.settingsGet()).settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout ?? {};
+    await api.smokeMenuClick("dock:side");
+    await until(() => dock() === "side", 2000);
+    dragSplitter($("resizer"), -40, 0);
+    let lOnDisk: LayoutSettings = {};
+    const wantW = Math.round(box("bottom").width);
+    for (let i = 0; i < 20; i++) {
+      await wait(200);
+      await layoutSaved;
+      lOnDisk = await savedLayout();
+      if (lOnDisk.terminalDock === "side" && lOnDisk.terminalWidth === wantW) break;
+    }
+    const lBefore = layoutNow();
+    applyLayout({});
+    const reset = dock() === "bottom" && px("--side-w") === null && px("--term-w") === null;
+    const reread = await loadLayout();
+    await wait(400);
+    const lAfter = layoutNow();
+    const restored = JSON.stringify(lAfter) === JSON.stringify(lBefore) && Math.round(box("bottom").width) === wantW && fitted();
+    await log("layout-persist", lOnDisk.terminalDock === "side" && lOnDisk.terminalWidth === wantW && lOnDisk.explorerWidth === Math.round(sideW2) && lOnDisk.terminalHeight === Math.round(termH2) && reset && restored, { lOnDisk, reset, reread, before: lBefore, after: lAfter, terminalWidth: wantW });
+    // Back to the bottom; the sizes stay saved for the next start (layout-boot).
+    await api.smokeMenuClick("dock:bottom");
+    await until(() => dock() === "bottom", 2000);
+    await wait(600);
+    await layoutSaved;
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
@@ -1970,6 +2051,7 @@ api
     applyTitleBar(info);
     titleBar.saved = ((await api.settingsGet().catch(() => null))?.settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar === "custom" ? "custom" : "native";
     renderTitleBarMenu();
+    const savedLayout = await loadLayout();
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];
     if (start) await openWorkspace(start);
@@ -1985,6 +2067,6 @@ api
     void api.instanceSubscribe(forwarded).catch((e) => status(`Single instance: ${errText(e)}`));
     if (info.initialView) showView(info.initialView);
     pushShellStatus();
-    if (info.smoke && workspace) await runSmoke(workspace.root, info);
+    if (info.smoke && workspace) await runSmoke(workspace.root, info, savedLayout);
   })
   .catch((e) => status(errText(e)));

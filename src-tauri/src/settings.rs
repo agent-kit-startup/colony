@@ -51,8 +51,76 @@ pub struct UiSettings {
     /// controls). Read when the window opens, so a change applies on the next start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_bar: Option<String>,
+    /// Panels: where the terminal is docked, what is shown, the splitter sizes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutSettings>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The window layout, saved on every panel change and applied when the window opens.
+/// Sizes are CSS pixels; an unset field keeps Colony's default.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LayoutSettings {
+    /// `bottom`, `top` or `side`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_dock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explorer_visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explorer_width: Option<u32>,
+    /// Terminal panel height, docked at the bottom or the top.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_height: Option<u32>,
+    /// Terminal panel width, docked at the side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_width: Option<u32>,
+}
+
+pub const DOCKS: &[&str] = &["bottom", "top", "side"];
+/// Sizes outside this range are refused (a typo in settings.json, not a real window).
+const LAYOUT_PX: std::ops::RangeInclusive<u64> = 40..=8000;
+
+/// Merge a patch into the layout: a known field set to a valid value replaces it, `null`
+/// clears it, anything else is an error (nothing is written then).
+pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<LayoutSettings, String> {
+    let obj = patch.as_object().ok_or("layout patch must be an object")?;
+    for (k, v) in obj {
+        let px = |v: &serde_json::Value| -> Result<Option<u32>, String> {
+            if v.is_null() {
+                return Ok(None);
+            }
+            match v.as_u64() {
+                Some(n) if LAYOUT_PX.contains(&n) => Ok(Some(n as u32)),
+                _ => Err(format!("layout.{k}: {v} is not a size in pixels")),
+            }
+        };
+        let flag = |v: &serde_json::Value| -> Result<Option<bool>, String> {
+            if v.is_null() {
+                return Ok(None);
+            }
+            v.as_bool().map(Some).ok_or_else(|| format!("layout.{k}: {v} is not true or false"))
+        };
+        match k.as_str() {
+            "terminalDock" => {
+                l.terminal_dock = match v.as_str() {
+                    None if v.is_null() => None,
+                    Some(d) if DOCKS.contains(&d) => Some(d.to_string()),
+                    _ => return Err(format!("layout.terminalDock: {v} (bottom, top or side)")),
+                }
+            }
+            "terminalVisible" => l.terminal_visible = flag(v)?,
+            "explorerVisible" => l.explorer_visible = flag(v)?,
+            "explorerWidth" => l.explorer_width = px(v)?,
+            "terminalHeight" => l.terminal_height = px(v)?,
+            "terminalWidth" => l.terminal_width = px(v)?,
+            _ => return Err(format!("Unknown layout field: {k}")),
+        }
+    }
+    Ok(l)
 }
 
 pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
@@ -79,7 +147,7 @@ pub struct Settings {
 }
 
 fn is_default_ui(u: &UiSettings) -> bool {
-    u.skin.is_none() && u.title_bar.is_none() && u.extra.is_empty()
+    u.skin.is_none() && u.title_bar.is_none() && u.layout.is_none() && u.extra.is_empty()
 }
 
 const TEMPLATE: &str = r#"{
@@ -204,6 +272,19 @@ pub fn settings_set_title_bar(state: State<'_, AppState>, mode: String) -> Resul
     Ok(mode)
 }
 
+/// Save the window layout (merge; see `merge_layout`). Called after every panel change.
+#[tauri::command]
+pub fn settings_set_layout(state: State<'_, AppState>, patch: serde_json::Value) -> Result<LayoutSettings, String> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_writer = WRITE.lock().map_err(|_| "settings lock poisoned")?;
+    let path = settings_path(&state)?;
+    let mut s = load(&path)?;
+    let l = merge_layout(s.ui.layout.clone().unwrap_or_default(), &patch)?;
+    s.ui.layout = if l == LayoutSettings::default() { None } else { Some(l.clone()) };
+    save(&path, &s)?;
+    Ok(l)
+}
+
 #[tauri::command]
 pub fn settings_workspace(state: State<'_, AppState>) -> Result<WorkspaceSettings, String> {
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
@@ -259,6 +340,33 @@ mod tests {
         assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["titleBar"], "custom");
         assert!(serde_json::from_str::<serde_json::Value>(TEMPLATE).unwrap()["ui"]["titleBar"] == "native");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn layout_merges_validates_and_round_trips() {
+        let l = merge_layout(LayoutSettings::default(), &serde_json::json!({"terminalDock": "side", "explorerWidth": 300, "terminalVisible": false})).unwrap();
+        assert_eq!(l.terminal_dock.as_deref(), Some("side"));
+        assert_eq!(l.explorer_width, Some(300));
+        assert_eq!(l.terminal_visible, Some(false));
+        // null clears one field and keeps the rest
+        let l = merge_layout(l, &serde_json::json!({"explorerWidth": null, "terminalWidth": 420})).unwrap();
+        assert_eq!(l.explorer_width, None);
+        assert_eq!(l.terminal_width, Some(420));
+        assert_eq!(l.terminal_dock.as_deref(), Some("side"));
+        for bad in [
+            serde_json::json!({"terminalDock": "left"}),
+            serde_json::json!({"explorerWidth": 5}),
+            serde_json::json!({"terminalHeight": -1}),
+            serde_json::json!({"terminalHeight": "200px"}),
+            serde_json::json!({"explorerVisible": "yes"}),
+            serde_json::json!({"panels": 1}),
+            serde_json::json!([1]),
+        ] {
+            assert!(merge_layout(l.clone(), &bad).is_err(), "{bad}");
+        }
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260}}}"#).unwrap();
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260}));
     }
 
     #[test]

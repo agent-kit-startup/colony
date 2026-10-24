@@ -20,6 +20,15 @@ export interface StartupInfo {
 }
 /** One menu of the native menu bar, read back from the window (menu.rs menu_state). */
 export interface MenuState { label: string; items: { id: string; label: string; enabled: boolean }[] }
+/** settings.json `ui.layout` (settings.rs LayoutSettings): unset fields keep the defaults. */
+export interface LayoutSettings {
+  terminalDock?: "bottom" | "top" | "side";
+  terminalVisible?: boolean;
+  explorerVisible?: boolean;
+  explorerWidth?: number;
+  terminalHeight?: number;
+  terminalWidth?: number;
+}
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }
 export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string; engine: string }
@@ -158,6 +167,7 @@ export const api = {
   settingsEnsure: () => invoke<string>("settings_ensure"),
   settingsSetSkin: (skin: string) => invoke<string>("settings_set_skin", { skin }),
   settingsSetTitleBar: (mode: string) => invoke<string>("settings_set_title_bar", { mode }),
+  settingsSetLayout: (patch: Partial<Record<keyof LayoutSettings, unknown>>) => invoke<LayoutSettings>("settings_set_layout", { patch }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),
