@@ -7,7 +7,7 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { ActivityView, type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
@@ -1589,6 +1589,15 @@ api
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];
     if (start) await openWorkspace(start);
+    // Single instance: `colony <folder>` from a terminal or launcher while this window
+    // runs raises it (Rust side) and opens that folder here, after the startup folder.
+    const forwarded = new Channel<InstanceEvent>();
+    forwarded.onmessage = (m) => {
+      if (m.kind !== "open" || m.folder === workspace?.root) return;
+      status(`Opening ${m.folder} (from another colony launch)`);
+      void openWorkspace(m.folder);
+    };
+    void api.instanceSubscribe(forwarded).catch((e) => status(`Single instance: ${errText(e)}`));
     if (info.smoke && workspace) await runSmoke(workspace.root, info);
   })
   .catch((e) => status(errText(e)));

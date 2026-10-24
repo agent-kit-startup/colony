@@ -110,6 +110,8 @@ export const api = {
   mcSnapshot: () => invoke<string>("mc_snapshot"),
   mcConfig: () => invoke<string | null>("mc_config"),
   mcSubscribe: (onEvent: Channel<McEvent>) => invoke<void>("mc_subscribe", { onEvent }),
+  /** Folders a later `colony <folder>` launch hands to this window (single instance). */
+  instanceSubscribe: (onEvent: Channel<InstanceEvent>) => invoke<void>("instance_subscribe", { onEvent }),
   termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; resume?: string; dryRun?: boolean }) =>
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
   commandsCatalog: () => invoke<CommandsCatalog>("commands_catalog"),
@@ -152,6 +154,9 @@ export const api = {
 };
 
 export { Channel };
+
+/** `src-tauri/src/instance.rs` InstanceEvent. */
+export type InstanceEvent = { kind: "open"; folder: string };
 
 /** Off during the COLONY_SMOKE run, so a smoke window never takes keyboard input. */
 export const focusPolicy = { enabled: true };
