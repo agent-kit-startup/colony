@@ -260,6 +260,22 @@ export async function gitCicdSmoke(c: SmokeCtx) {
     gh = await untilFile("gh-proof.txt", (x) => x.includes("pr merge 9 --merge"), 15000);
     await c.log("ship-merge-main-yes", m9.el?.dataset.production === "yes" && /type yes/i.test(refusedText) && /type yes/i.test(direct) && !before && gh.includes("pr merge 9 --merge"), { refusedText, direct });
 
+    // Security review fixes: a fork PR into main is refused on its card (no typed yes helps),
+    // and every merge is pinned to the head commit the card showed.
+    await c.term(`( "$COLONY_HOST_CLI" request merge-pr 10 --method merge > fork10.out 2>&1; echo "exit=$?" >> fork10.out ) &\n`);
+    const f10 = await ready("merge-pr", 10, "agent");
+    const fText = f10.el?.textContent ?? "";
+    const approveOff = !!f10.el?.querySelector<HTMLButtonElement>('button[data-act="approve"]')?.disabled;
+    const forced = await hostApi.approve(f10.r?.id ?? "", "yes").then(() => "approved", errText);
+    click(f10.el, "deny");
+    const fOut = await untilFile("fork10.out", (x) => x.includes("exit="), 15000);
+    gh = await proof();
+    await c.log(
+      "ship-fork-refused",
+      fText.includes("mallory:staging") && fText.includes("another repository") && approveOff && /Refused/.test(forced) && fOut.includes("exit=2") && !gh.includes("pr merge 10") && /pr merge 9 --merge --match-head-commit [0-9a-f]{40}/.test(gh),
+      { forced, approveOff, out: fOut.slice(-200), text: fText.slice(0, 300) },
+    );
+
     // open-pr takes a fixed shape only: free branches, a merge method or an unknown shape exit 64.
     await c.term(`for a in "open-pr main" "open-pr --base main --head feat/x" "open-pr promote --method merge" "open-pr"; do "$COLONY_HOST_CLI" request $a >> open-pr-refused.out 2>&1; echo "exit=$?" >> open-pr-refused.out; done\n`);
     const outF = await untilFile("open-pr-refused.out", (x) => (x.match(/exit=/g) ?? []).length >= 4, 10000);

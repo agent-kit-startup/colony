@@ -42,6 +42,13 @@ import { ago, copyText } from "./ui";
 
 const RECENTS_KEY = "colony.recentWorkspaces";
 
+// Content-Security-Policy violations (tauri.conf.json app.security.csp), kept so the smoke
+// can prove the policy blocks nothing Colony itself needs.
+const cspViolations: string[] = [];
+document.addEventListener("securitypolicyviolation", (e) => {
+  if (cspViolations.length < 50) cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`.trim());
+});
+
 document.getElementById("app")!.innerHTML = `
 <div id="shell">
   <header id="top">
@@ -1062,7 +1069,9 @@ function webPanelUrl() {
   return u.toString();
 }
 
-const mcFrame = h("iframe", { id: "mc", title: "Mission Control (web panel)", allow: "clipboard-read; clipboard-write" });
+// Sandboxed (security review 2026-10-24, finding 3): the panel keeps its own origin
+// (skin storage, clipboard) and scripts, but may not navigate Colony's window.
+const mcFrame = h("iframe", { id: "mc", title: "Mission Control (web panel)", allow: "clipboard-read; clipboard-write", sandbox: "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads" });
 function openWebPanel() {
   if (!workspace) return;
   if (!mcUrl) return status("Mission Control server is not running");
@@ -2065,6 +2074,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");
+    await log("csp-clean", cspViolations.length === 0, { violations: cspViolations });
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));
