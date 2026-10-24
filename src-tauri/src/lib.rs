@@ -16,6 +16,7 @@ mod instance;
 mod launch;
 mod mcdata;
 mod omarchy;
+mod omarchy_shell;
 mod pty;
 mod review;
 mod settings;
@@ -52,6 +53,8 @@ pub struct AppState {
 struct StartupInfo {
     version: String,
     initial_workspace: Option<String>,
+    /// `--inbox` / `--open-folder` on a first launch: the view to show once the folder is open.
+    initial_view: Option<String>,
     webkit_dmabuf: String,
     path_added: Vec<String>,
     agent_kit: Option<String>,
@@ -247,10 +250,15 @@ pub fn run() {
     if std::env::args().nth(1).as_deref() == Some("request") {
         std::process::exit(hostreq::cli_main());
     }
+    // `colony status [--bar]`: the open gates and live runs of the running windows (the
+    // omarchy-shell bar widget polls it), no GUI.
+    if std::env::args().nth(1).as_deref() == Some("status") {
+        std::process::exit(omarchy_shell::cli_main());
+    }
     // Single instance: a running window for this binary and engine takes the request
     // (it raises itself and opens the folder, if any) and this process ends here.
     #[cfg(unix)]
-    let instance = match instance::socket_path().map(|p| instance::claim_at(&p, initial_workspace().as_deref())) {
+    let instance = match instance::socket_path().map(|p| instance::claim_at(&p, initial_workspace().as_deref(), instance::view_arg(std::env::args().skip(1)).as_deref())) {
         Some(instance::Claim::Forwarded) => return,
         Some(instance::Claim::Primary(listener, path)) => Some((listener, path)),
         _ => None,
@@ -263,6 +271,7 @@ pub fn run() {
     let startup = StartupInfo {
         version: env!("CARGO_PKG_VERSION").into(),
         initial_workspace: initial_workspace(),
+        initial_view: instance::view_arg(std::env::args().skip(1)),
         webkit_dmabuf: dmabuf,
         path_added: added.iter().map(|p| p.display().to_string()).collect(),
         agent_kit: engine::kit_command().ok().map(|k| format!("{} ({})", k.display(), k.source)),
@@ -337,6 +346,9 @@ pub fn run() {
             settings::settings_set_skin,
             launch::open_in_editor,
             omarchy::omarchy_subscribe,
+            omarchy_shell::omarchy_integration_plan,
+            omarchy_shell::omarchy_integration_apply,
+            omarchy_shell::shell_status_set,
             context::context_sources,
             review::review_ticks,
             review::review_file,
@@ -347,11 +359,14 @@ pub fn run() {
             #[cfg(unix)]
             if let Some((listener, path)) = instance {
                 let handle = app.handle().clone();
-                instance::serve(listener, move |folder| {
+                instance::serve(listener, move |folder, view| {
                     let state = handle.state::<AppState>();
                     let open = state.workspace.lock().ok().and_then(|w| w.clone());
                     if let instance::Route::Open(f) = instance::route(folder.as_deref(), open.as_deref()) {
                         state.instance_inbox.push(f);
+                    }
+                    if let Some(v) = view {
+                        state.instance_inbox.show(&v);
                     }
                     if let Some(w) = handle.get_webview_window("main") {
                         let _ = w.unminimize();
@@ -386,6 +401,12 @@ pub fn run() {
             handle.state::<hostreq::Shared>().cleanup();
             if let Some(p) = state.instance_socket.lock().ok().and_then(|mut p| p.take()) {
                 let _ = std::fs::remove_file(p);
+            }
+            if let Some(p) = omarchy_shell::status_path() {
+                let _ = std::fs::remove_file(&p);
+                if let Some(dir) = p.parent() {
+                    let _ = std::fs::remove_dir(dir); // only when empty (the host-request spool may share it)
+                }
             }
         }
     });

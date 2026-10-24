@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "missionkit.colony",
+  "name": "Colony",
+  "version": "1.0.0",
+  "author": "Mission Kit",
+  "license": "Apache-2.0",
+  "description": "Open HITL gates and live agent runs of the Colony windows, with a click to the window or its Inbox.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Colony.qml"
+  },
+  "barWidget": {
+    "displayName": "Colony",
+    "description": "Open gates and live runs of Colony (Mission Kit). Left click: open the Inbox when a gate waits, else focus Colony. Right click: focus Colony.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

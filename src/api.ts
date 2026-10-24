@@ -4,6 +4,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 export interface StartupInfo {
   version: string;
   initialWorkspace: string | null;
+  /** `colony --inbox` / `colony --open-folder` on a first launch. */
+  initialView: string | null;
   webkitDmabuf: string;
   pathAdded: string[];
   agentKit: string | null;
@@ -113,6 +115,11 @@ export const api = {
   /** Folders a later `colony <folder>` launch hands to this window (single instance). */
   /** The Omarchy theme and font now (`null` off Omarchy), then on every switch. */
   omarchySubscribe: (onEvent: Channel<OmarchyTheme | null>) => invoke<void>("omarchy_subscribe", { onEvent }),
+  /** More → Omarchy integration: what Install / Remove would do, then do it (src-tauri/src/omarchy_shell.rs). */
+  omarchyIntegrationPlan: (action: "install" | "remove") => invoke<OmarchyPlan>("omarchy_integration_plan", { action }),
+  omarchyIntegrationApply: (action: string) => invoke<string[]>("omarchy_integration_apply", { action }),
+  /** This window's open gates and live runs, for the omarchy-shell bar widget (Omarchy only). */
+  shellStatusSet: (folder: string | null, gates: number, runs: number) => invoke<void>("shell_status_set", { folder, gates, runs }),
   instanceSubscribe: (onEvent: Channel<InstanceEvent>) => invoke<void>("instance_subscribe", { onEvent }),
   termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; resume?: string; dryRun?: boolean }) =>
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
@@ -166,7 +173,16 @@ export interface OmarchyTheme {
 }
 
 /** `src-tauri/src/instance.rs` InstanceEvent. */
-export type InstanceEvent = { kind: "open"; folder: string };
+export type InstanceEvent = { kind: "open"; folder: string } | { kind: "show"; view: string };
+
+/** `src-tauri/src/omarchy_shell.rs` Plan: every step listed before it runs. */
+export interface OmarchyPlan {
+  action: "install" | "remove";
+  widget: string;
+  menu: string;
+  steps: { kind: "write" | "remove" | "run"; target: string }[];
+  blocked: string | null;
+}
 
 /** Off during the COLONY_SMOKE run, so a smoke window never takes keyboard input. */
 export const focusPolicy = { enabled: true };
