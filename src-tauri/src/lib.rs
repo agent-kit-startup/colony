@@ -1,6 +1,7 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
 mod agent;
+mod appupdate;
 mod branchrule;
 mod catalog;
 mod chats;
@@ -255,13 +256,17 @@ pub fn run() {
     };
 
     let hook = mc_action_hook(startup.smoke.is_some());
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    let app = appupdate::register(builder)
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
         .manage(host_requests.clone())
         .invoke_handler(tauri::generate_handler![
             app_info,
+            appupdate::app_update_status,
+            appupdate::app_update_check,
+            appupdate::app_update_install,
             smoke_log,
             smoke_exit,
             workspace::open_workspace,

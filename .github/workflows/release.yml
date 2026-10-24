@@ -6,6 +6,10 @@
 # Latest release (what install.sh installs by default); a tag with a pre-release
 # suffix (v0.2.0-rc.1; the three version files must carry it too) stays a prerelease
 # and is only installed with --version.
+# Two channels from one tag (src-tauri/src/appupdate.rs): the direct build (default
+# features: tauri-plugin-updater in; tarball, .deb, AppImage + updater signature and
+# latest.json for in-app updates) and the package build (--no-default-features: no
+# updater; the -package tarball distro packages are made from).
 name: release
 
 on:
@@ -54,7 +58,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Rust stable
         run: |
@@ -73,14 +77,38 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm tauri build
+      # Direct channel. createUpdaterArtifacts signs the AppImage for the updater with the
+      # release key (Colony_<v>_amd64.AppImage.sig); kept out of tauri.conf.json so local
+      # builds need no signing key.
+      - name: Build (direct channel)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          pnpm tauri build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          v="${{ steps.version.outputs.version }}"
+          test -s "src-tauri/target/release/bundle/appimage/Colony_${v}_amd64.AppImage.sig"
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp src-tauri/target/release/colony "$RUNNER_TEMP/bin/colony-direct"
+
+      # Package channel: same sources, updater compiled out. Overwrites target/release/colony,
+      # so the direct binary was copied first.
+      - name: Build (package channel)
+        run: |
+          pnpm tauri build --no-bundle -- --no-default-features
+          cp src-tauri/target/release/colony "$RUNNER_TEMP/bin/colony-package"
 
       - name: Test (after the build, the Tauri context needs dist/)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Release files
-        run: packaging/make-release.sh "${{ steps.version.outputs.version }}" release
+        env:
+          COLONY_RELEASE_BIN: ${{ runner.temp }}/bin/colony-direct
+          COLONY_PACKAGE_BIN: ${{ runner.temp }}/bin/colony-package
+          COLONY_RELEASE_REPO: ${{ github.repository }}
+        run: |
+          packaging/make-release.sh "${{ steps.version.outputs.version }}" release
+          test -s release/latest.json
 
       - name: Sign SHA256SUMS
         env:
