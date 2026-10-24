@@ -66,11 +66,11 @@ export function bar(done: number, total: number): HTMLElement {
  * green, the current one blue (shimmer while live), the rest on --border. Over 40 to-dos
  * it falls back to the continuous bar.
  */
-export function stepbar(done: number, total: number, current: boolean, label = true): HTMLElement {
+export function stepbar(done: number, total: number, current: boolean, label = true, unit = ""): HTMLElement {
   const d = Math.min(Math.max(done, 0), total);
   const cur = current && d < total;
   const rest = Math.max(0, total - d - (cur ? 1 : 0));
-  const aria = `${d} of ${total} to-dos complete${cur ? ", 1 in progress" : ""}`;
+  const aria = `${d} of ${total} ${unit || "to-dos"}${unit.endsWith("done") ? "" : " complete"}${cur ? ", 1 in progress" : ""}`;
   const track =
     total > 40
       ? bar(d, total)
@@ -81,7 +81,8 @@ export function stepbar(done: number, total: number, current: boolean, label = t
           ...(cur ? [h("span", { class: "now-stepbar-seg now-stepbar-seg-current" })] : []),
           ...Array.from({ length: rest }, () => h("span", { class: "now-stepbar-seg" })),
         );
-  return h("div", { class: "now-stepbar-row" }, track, ...(label ? [h("span", { class: "now-stepbar-label" }, `${d} of ${total}`)] : []));
+  // `unit` names what is counted (to-dos, plans) so two bars never read as one count.
+  return h("div", { class: "now-stepbar-row" }, track, ...(label ? [h("span", { class: "now-stepbar-label" }, `${d} of ${total}${unit ? ` ${unit}` : ""}`)] : []));
 }
 
 export interface Step {
@@ -151,6 +152,8 @@ const CARD_ICONS: Record<string, IconKind> = {
   "Current mission": "current-mission",
   "Needs you": "inbox",
   "Agent runs": "monitor",
+  "Crew Monitor": "monitor",
+  Health: "health",
   Chats: "commands",
   Queue: "queue",
   "Queue status (HANDOFF)": "queue",

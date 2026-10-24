@@ -1,6 +1,6 @@
 // COLONY_SMOKE steps for the live launches (./launches.ts) and the context sources strip
 // (./contextstrip.ts). Called by the main smoke after its driver run and interactive tabs:
-// the Mission view's Agent runs card lists the driver run and a `/run-plan <plan>`
+// the Mission view's Crew Monitor card lists the driver run and a `/run-plan <plan>`
 // interactive tab (fixture `fake-claude.sh`, which prints a HITL_GATE line), the hero shows
 // that plan as launched from Colony until HANDOFF switches to it over SSE, the queue card
 // shows a queue held by an out-of-queue run, and both kinds of agent tab list their

@@ -9,7 +9,7 @@ import type { RunControls } from "./agent";
 import { chats } from "./chats";
 import { pendingGates } from "./gates";
 import { icon, type IconKind } from "./icons";
-import { gateCard } from "./inbox";
+import { gateCard, triageChip } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
@@ -117,8 +117,21 @@ function statusMeta(status: string): [string, Tone, string] {
   return ["Idle", "idle", "\u25CB"];
 }
 
-/** Previous / current / next steps as the dashboard's renderNowStepper() words them. */
-function missionSteps(prev: Todo, cur: Todo, next: Todo, o: { status: string; planDone: boolean; nextUpPlan: string }): Step[] {
+/**
+ * Previous / current / next steps as the dashboard's renderNowStepper() words them; a
+ * completed mission shows its renderNowCompletedStepper(): Final step, then Next (up).
+ */
+function missionSteps(prev: Todo, cur: Todo, next: Todo, o: { status: string; planDone: boolean; nextUpPlan: string; done: number; total: number }): Step[] {
+  if (o.status === "completed") {
+    const count = o.total > 0 ? `${Math.min(o.done, o.total)} of ${o.total} steps done` : "no steps recorded";
+    const last = cur ?? prev;
+    return [
+      { label: "Final step", todo: last, text: "Plan complete", mark: "\u2713", state: "done", cls: "now-step-final now-step-done" },
+      o.nextUpPlan
+        ? { label: "Next up", text: `${planName(o.nextUpPlan)} (next plan in the run queue)`, mark: "\u25CB", state: "pending", cls: "now-step-next" }
+        : { label: "Next", text: `None: mission complete (${count})`, mark: "\u2014", state: "empty", cls: "now-step-next now-step-terminal" },
+    ];
+  }
   const live = statusMeta(o.status)[2];
   const mark = o.planDone ? "\u2713" : o.status === "executing" || o.status === "awaiting_user" ? live : "\u25B6";
   const awaiting = o.status === "awaiting_user";
@@ -195,6 +208,20 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
   if (l.queue) row.dataset.queueCursor = String(l.queue.cursor ?? "");
   row.addEventListener("click", () => (l.runId !== undefined ? host.focusRun(l.runId) : host.showTab(l.tabId)));
   return row;
+}
+
+/** A queue plan is finished when its outcome or its lifecycle says completed (a deferred or
+ *  blocked plan behind the cursor is passed, not done: no green check for it). */
+function finished(q: J, file: string): boolean {
+  if (String(q.outcomes?.[file] ?? "") === "completed") return true;
+  return snapshot.plans().find((p) => p.file === file)?.lifecycle === "completed";
+}
+
+/** Run queue is the primary action only when the queue can move: not held, cursor inside the
+ *  queue, and some plan from the cursor on without an outcome yet. */
+function queueRunnable(q: J, queue: string[], cursor: number, held: boolean): boolean {
+  if (held || !queue.length || cursor >= queue.length) return false;
+  return queue.slice(Math.max(cursor, 0)).some((f) => !q.outcomes?.[f]);
 }
 
 /** `queue 2/8 · <current plan>` for a driver queue run. */
@@ -376,8 +403,8 @@ export class MissionView extends View {
       h("div", { class: "hero-file mono" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”."),
       ...pending,
       ...(liveQ ? [liveQueueNote(liveQ, this.host)] : []),
-      ...(total ? [stepbar(done, total, !!cur && !planDone)] : []),
-      ...(plan || pend ? [stepper(missionSteps(prev, cur, next, { status, planDone, nextUpPlan: pend ? "" : str(now.nextUpPlan) }))] : []),
+      ...(total ? [stepbar(done, total, !!cur && !planDone, true, "to-dos")] : []),
+      ...(plan || pend ? [stepper(missionSteps(prev, cur, next, { status, planDone, nextUpPlan: pend ? "" : str(now.nextUpPlan), done, total }))] : []),
       ...(gaps ? [h("div", { class: "gaps clamp-3", title: plainMd(gaps) }, h("span", { class: "ag-warn" }, "Gaps "), ...inlineMd(gaps))] : []),
       meta,
       actions,
@@ -407,7 +434,7 @@ export class MissionView extends View {
     const items: Node[] = [];
     if (gates.length) items.push(h("div", { class: "row" }, chip(`${gates.length}`, "chip-gate"), h("span", { class: "grow" }, `gate${gates.length === 1 ? "" : "s"} pinned at the top of Mission`)));
     for (const a of att.slice(0, 4)) {
-      const row = h("div", { class: "row click" }, chip(str(a.severity || a.group, "info"), a.group === "blocking" ? "chip-gate" : ""), h("span", { class: "grow ellipsis", title: str(a.findingsSummary) || str(a.label) }, str(a.label)));
+      const row = h("div", { class: "row click" }, triageChip(a), h("span", { class: "grow ellipsis", title: str(a.findingsSummary) || str(a.label) }, str(a.label)));
       row.addEventListener("click", () => this.host.showTab("inbox"));
       items.push(row);
     }
@@ -438,7 +465,8 @@ export class MissionView extends View {
       rows.push(r);
     }
     const live = mine.filter((l) => l.state !== "ended").length;
-    const c = card({ title: "Agent runs", aside: live ? [pill(`${live} live`, "running", "▶")] : [] }, ...(rows.length ? rows : [empty("No runs in this window. Run plan, Open interactive and the plan actions start one; each opens as its own tab.")]));
+    // The web Mission Control's name for this panel: Crew Monitor.
+    const c = card({ title: "Crew Monitor", aside: live ? [pill(`${live} live`, "running", "▶")] : [] }, ...(rows.length ? rows : [empty("No runs in this window. Run plan, Open interactive and the plan actions start one; each opens as its own tab.")]));
     c.classList.add("runs-card");
     c.dataset.keepScroll = "runs";
     return c;
@@ -447,7 +475,7 @@ export class MissionView extends View {
   private queueCard(): HTMLElement {
     const { q, queue, cursor, hold, live } = queueNow(this.host.workspaceRoot());
     const mark = (i: number) => (i !== cursor ? String(i + 1) : hold ? "⏸" : "▶");
-    const rows = queue.map((p, i) => h("div", { class: `row q-mini ${i < cursor ? "past" : i === cursor ? (hold ? "held" : "current") : ""}`, title: q.outcomes?.[p] ? `${p} · ${String(q.outcomes[p])}` : p }, h("span", { class: "q-mark" }, mark(i)), h("span", { class: "grow ellipsis" }, planName(p)), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
+    const rows = queue.map((p, i) => h("div", { class: `row q-mini ${i < cursor ? (finished(q, p) ? "past" : "past-open") : i === cursor ? (hold ? "held" : "current") : ""}`, title: q.outcomes?.[p] ? `${p} · ${String(q.outcomes[p])}` : p }, h("span", { class: "q-mark" }, mark(i)), h("span", { class: "grow ellipsis" }, planName(p)), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
     const held = hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "⏸"), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
     const acts = h(
       "div",
@@ -455,7 +483,7 @@ export class MissionView extends View {
       iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: "status-bar-btn", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
       btn("Open Queue", () => this.host.showTab("queue"), { class: "link" }),
     );
-    const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono" }, `${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];
+    const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono", title: "Queue cursor: the plan the queue runs now" }, `plan ${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];
     const liveRow = live ? [h("div", { class: "row dim small queue-live-row" }, chip("live", "chip-done"), h("span", { class: "grow ellipsis" }, `queue run #${live.id} · ${live.backend}${live.queue?.status ? ` · ${live.queue.status}` : ""}`))] : [];
     const c = card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), ...(queue.length ? [acts] : []));
     c.classList.add("queue-card");
@@ -543,6 +571,8 @@ const PLAN_FILTERS: [string, string, (p: McPlan) => boolean][] = [
   ["completed", "Completed", (p) => p.lifecycle === "completed"],
   ["all", "All", () => true],
 ];
+/** Frontmatter strings can reach the snapshot with their YAML escapes (\\"): show plain quotes. */
+const unescapeQuotes = (t: string) => t.replace(/\\"/g, '"');
 const TODO_ICON: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○", cancelled: "✕" };
 
 /** run-plan-all queue role (dashboard .queue-role-pill: colored text, no fill). */
@@ -628,7 +658,7 @@ export class PlansView extends View {
           h("span", { class: "plan-count" }, p.progress.label || `${p.progress.completed} of ${p.progress.total} complete`),
         ),
         ...(p.progress.total ? [stepbar(p.progress.completed, p.progress.total, inProgress > 0, false)] : []),
-        ...(p.overview ? [h("div", { class: "plan-overview clamp-2", title: p.overview }, p.overview)] : []),
+        ...(p.overview ? [h("div", { class: "plan-overview clamp-2", title: unescapeQuotes(p.overview) }, unescapeQuotes(p.overview))] : []),
         metaRow([
           { icon: "plans", text: p.file, mono: true, title: p.path },
           { icon: "checklist", text: `${pct}%`, mono: true },
@@ -646,7 +676,7 @@ export class PlansView extends View {
     });
     if (!open) return head;
     const todos = p.todos.length
-      ? p.todos.map((t) => h("div", { class: `todo st-${t.status}` }, h("span", { class: "todo-icon" }, TODO_ICON[t.status] ?? "·"), h("span", { class: "now-todo-id" }, t.id), h("span", { class: "clamp-2", title: t.content }, t.content)))
+      ? p.todos.map((t) => h("div", { class: `todo st-${t.status}` }, h("span", { class: "todo-icon" }, TODO_ICON[t.status] ?? "·"), h("span", { class: "now-todo-id" }, t.id), h("span", { class: "clamp-2", title: unescapeQuotes(t.content) }, unescapeQuotes(t.content))))
       : [empty("No to-do list in the snapshot.")];
     return h("div", { class: "plan-wrap open" }, head, h("div", { class: "todos" }, ...todos));
   }
@@ -665,7 +695,9 @@ export class QueueView extends View {
     if (nd) return nd;
     const { q, queue, cursor, hold, live } = queueNow(this.host.workspaceRoot());
     const plans = new Map(snapshot.plans().map((p) => [p.file, p]));
-    const done = queue.filter((f, i) => i < cursor || q.outcomes?.[f] === "completed").length;
+    // Done = finished plans only (a passed, deferred plan is not done); the label says plans.
+    const done = queue.filter((f) => finished(q, f)).length;
+    const runnable = queueRunnable(q, queue, cursor, !!hold);
     const running = live ? live.queue?.status?.toLowerCase() !== "stopped" : /\brunning\b/i.test(str(q.status));
     const [stLabel, stTone, stMark]: [string, Tone, string] = hold ? ["Held", "awaiting", "\u23F8"] : running ? ["Running", "executing", "\u25B6"] : queue.length ? ["Idle", "idle", "\u25CB"] : ["No queue", "idle", "\u25CB"];
     const head = h(
@@ -673,25 +705,26 @@ export class QueueView extends View {
       { class: "hero card" },
       cardHeader({ title: "Run queue", icon: "queue", aside: [pill(stLabel, stTone, stMark)] }),
       h("h2", { class: "now-plan-name" }, queue.length ? `${queue.length} plans · cursor ${cursor >= 0 ? cursor + 1 : "-"}${hold ? " · held" : ""}` : "No queue"),
-      ...(queue.length ? [stepbar(done, queue.length, cursor >= 0 && cursor < queue.length && !hold)] : []),
+      ...(queue.length ? [stepbar(done, queue.length, cursor >= 0 && cursor < queue.length && !hold, true, "plans done")] : []),
       metaRow([
         { icon: "mode", text: "run-plan-all", mono: true },
         q.nextUpPlan ? { icon: "plans", text: `Next up: ${planName(String(q.nextUpPlan))}`, mono: true } : null,
-        str(q.status) ? { icon: "updated", text: str(q.status).split("\n")[0].slice(0, 80), title: str(q.status) } : null,
+        // No cut at a fixed length: the meta value ellipsizes by width, the title has it all.
+        str(q.status) ? { icon: "updated", text: str(q.status).split("\n")[0], title: str(q.status) } : null,
       ]),
       ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "\u23F8"), h("span", { class: "grow" }, holdText(hold, queue[cursor] ?? ""), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
       ...(live ? [liveQueueNote(live, this.host)] : []),
       h(
         "div",
         { class: "actions now-actions" },
-        iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: "primary", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
+        iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: runnable ? "primary" : "status-bar-btn", "data-act": "run-queue", title: runnable ? RUN_QUEUE_TIP : `${RUN_QUEUE_TIP}. Nothing left to run from the cursor: every plan has an outcome or the queue is held.` }),
         btn("Open HANDOFF", () => this.host.openRepoFile(".cursor/HANDOFF.md"), { class: "status-bar-btn" }),
       ),
       h("p", { class: "hint" }, "Run queue starts agent-kit run-plan-all. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
     );
     const rows = queue.map((file, i) => {
       const p = plans.get(file);
-      const state = i < cursor ? "past" : i === cursor ? (hold ? "held" : "current") : "future";
+      const state = i < cursor ? (finished(q, file) ? "past" : "past-open") : i === cursor ? (hold ? "held" : "current") : "future";
       const outcome = q.outcomes?.[file] ? String(q.outcomes[file]) : "";
       const marker = state === "past" ? "\u2713" : state === "current" ? "\u25B6" : state === "held" ? "\u23F8" : String(i + 1);
       const r = h(
@@ -701,7 +734,7 @@ export class QueueView extends View {
         h(
           "div",
           { class: "grow q-main" },
-          h("div", { class: "plan-title-line" }, h("strong", { class: "ellipsis", title: `${p?.id || planName(file)}\n${file}` }, p?.id || planName(file)), ...(p ? [lifecycleChip(p.lifecycle)] : []), ...(outcome ? [chip(outcome, outcome === "completed" ? "chip-done" : "chip-parked")] : []), ...(p ? [h("span", { class: "plan-count" }, p.progress.label || `${p.progress.completed} of ${p.progress.total} complete`)] : [])),
+          h("div", { class: "plan-title-line" }, h("strong", { class: "ellipsis", title: `${p?.id || planName(file)}\n${file}` }, p?.id || planName(file)), ...(p ? [lifecycleChip(p.lifecycle)] : []), ...(outcome && outcome !== p?.lifecycle ? [chip(outcome, outcome === "completed" ? "chip-done" : "chip-parked")] : []), ...(p ? [h("span", { class: "plan-count" }, p.progress.label || `${p.progress.completed} of ${p.progress.total} complete`)] : [])),
           ...(p && p.progress.total ? [stepbar(p.progress.completed, p.progress.total, p.todos.some((t) => t.status === "in_progress"), false)] : []),
           p ? metaRow([{ icon: "plans", text: file, mono: true }, p.currentTodo ? { icon: "mode", text: `Next: ${p.currentTodo.id}`, mono: true, title: p.currentTodo.content } : null]) : h("div", { class: "dim small" }, "plan file not in the snapshot"),
         ),
@@ -746,7 +779,7 @@ export class FlightLogView extends View {
     const tickets = Array.isArray(f.tickets) && f.tickets.length ? f.tickets : Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     if (tickets.length) out.push(h("div", { class: "row" }, chip(String(tickets.length), "chip-gate"), h("span", { class: "grow" }, `gate-exit ticket${tickets.length === 1 ? "" : "s"} pending`), btn("Open in the Inbox", () => this.host.showTab("inbox"), { class: "link" })));
     const triages = Array.isArray(f.quietOpenTriages) ? f.quietOpenTriages : [];
-    if (triages.length) out.push(card("Open triages", ...triages.map((t: J) => h("div", { class: "row" }, chip(str(t.kind)), h("span", { class: "grow ellipsis", title: str(t.findingsSummary) }, str(t.label)), btn("Inbox", () => this.host.showTab("inbox"), { class: "link" })))));
+    if (triages.length) out.push(card("Open triages", ...triages.map((t: J) => h("div", { class: "row" }, triageChip(t), h("span", { class: "grow ellipsis", title: str(t.findingsSummary) }, str(t.label)), btn("Inbox", () => this.host.showTab("inbox"), { class: "link" })))));
     const past = Array.isArray(f.past) ? f.past : [];
     for (const p of past) out.push(entry("Earlier", str(p.text), str(p.kind), str(p.sourcePath), null, str(p.at)));
     // Ticks of the runs in this window (live), then the at-rest tick logs (runLogs).

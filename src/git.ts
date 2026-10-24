@@ -178,13 +178,21 @@ export class GitView {
       return o.ahead === undefined && o.behind === undefined ? null : h("div", { class: "row" }, h("span", { class: "dim grow" }, label), h("span", { class: "mono" }, `↑${o.ahead ?? 0} ↓${o.behind ?? 0}`));
     };
     const graph: string[] = Array.isArray(g.graph) ? g.graph.map(String) : [];
+    const sameCount = (a: unknown, b: unknown) => {
+      const x = obj(a);
+      const y = obj(b);
+      return x.ahead !== undefined && x.ahead === y.ahead && x.behind === y.behind;
+    };
     this.repo.replaceChildren(
       card(
         "Repository",
         h("div", { class: "row" }, h("strong", { class: "git-branch" }, icon("git", "btn-icon"), str(g.branch, "?")), chip(g.dirty ? `${g.dirtyCount ?? "?"} changed` : "clean", g.dirty ? "chip-gate" : "chip-done"), h("span", { class: "dim" }, `↑${g.ahead ?? 0} ↓${g.behind ?? 0} upstream`)),
         ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
-        ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
-        ...(graph.length ? [h("pre", { class: "git-graph" }, graph.slice(0, 40).join("\n"))] : []),
+        // On staging, "vs main" and "staging vs main" are the same count: show it once.
+        ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), sameCount(flow.vsMain, flow.stagingVsMain) ? null : ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
+        // One line per graph row, cut by width with the full line in its title (no inner
+        // horizontal scroll, no fixed height).
+        ...(graph.length ? [h("div", { class: "git-graph" }, ...graph.slice(0, 40).map((l) => h("div", { class: "git-graph-line", title: l }, l)))] : []),
       ),
     );
   }

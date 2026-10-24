@@ -251,7 +251,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color 0.2s, box-shadow 0.2s; }
 .card:hover { border-color: var(--border-active); box-shadow: var(--mc-shadow-card-hover); }
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: var(--mc-space-md); margin-bottom: var(--mc-space-sm); min-height: 22px; }
-.card-title { display: inline-flex; align-items: center; gap: var(--mc-chrome-label-gap); min-width: 0; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); line-height: 1.2; color: var(--text-primary); }
+.card-title { white-space: nowrap; display: inline-flex; align-items: center; gap: var(--mc-chrome-label-gap); min-width: 0; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); line-height: 1.2; color: var(--text-primary); }
 .card > .card-title { margin-bottom: var(--mc-space-sm); }
 .card-aside { display: inline-flex; align-items: center; gap: var(--mc-space-sm); flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 .card-count { font-size: var(--mc-chrome-meta-size); color: var(--text-muted); }
@@ -426,6 +426,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .plan-wrap .plan-row { border-bottom: 0; }
 .todos { padding: 2px 12px 12px 34px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); margin: 0 12px; padding-left: 10px; padding-top: 8px; }
 .todo { display: flex; gap: 8px; align-items: baseline; font-size: var(--mc-chrome-subtitle-size); min-width: 0; color: var(--text-secondary); }
+.todo .now-todo-id { flex: none; white-space: nowrap; }
 .todo-icon { width: 12px; flex: none; color: var(--text-muted); font-size: 10px; }
 .todo.st-completed { color: var(--text-muted); }
 .todo.st-completed .todo-icon { color: var(--green); }
@@ -437,6 +438,9 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .q-row.past:not(:last-child)::after { background: var(--green); }
 .q-row.past { opacity: 0.75; }
 .q-row.past .now-step-marker { border-color: var(--green); background: var(--green-bg); color: var(--green); }
+/* Passed by the cursor but not finished (deferred, blocked): muted, never the green check. */
+.q-row.past-open { opacity: 0.75; }
+.q-mini.past-open { color: var(--text-muted); }
 .q-row.current { background: var(--bg-secondary); border-color: var(--border-active); box-shadow: inset 3px 0 0 var(--blue); }
 .q-row.current .now-step-marker { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
 .q-idx { flex: none; }
@@ -477,10 +481,12 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .git-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; max-width: none; }
 @media (max-width: 1250px) { .git-grid { grid-template-columns: minmax(0, 1fr); } }
 .git-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.git-work { min-height: 420px; }
+/* No min-heights: an empty output box under Commit / Push read as broken. */
+.git-out:empty { display: none; }
 .git-work .git-files { max-height: 260px; }
-.git-work .git-out { min-height: 160px; max-height: 420px; }
-.git-graph { margin: 0; font-family: var(--mono); font-size: 11px; color: var(--fg-dim); background: var(--bg); border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); padding: 6px; overflow: auto; max-height: 300px; white-space: pre; }
+.git-work .git-out { max-height: 420px; }
+.git-graph { margin: 0; font-family: var(--mono); font-size: var(--mc-chrome-meta-size); color: var(--fg-dim); background: var(--bg); border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); padding: 6px; min-width: 0; }
+.git-graph-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .prod-card { border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
 .prod-card input.yes { width: 110px; }
 
@@ -577,3 +583,4 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .engine-box .warn, #st-engine.warn { color: var(--warn); }
 .engine-box .bad, #st-engine.bad { color: var(--danger); }
 #st-engine { cursor: pointer; margin-right: 10px; }
+#st-engine.warn, #st-engine.bad { text-decoration: underline dotted; text-underline-offset: 3px; }

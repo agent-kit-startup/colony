@@ -1059,6 +1059,15 @@ window.addEventListener(
   true,
 );
 
+// No native WebKit context menu (Back / Reload / Open Frame) over the app or a terminal:
+// it can navigate the window away. Text fields and the editor keep theirs (copy / paste),
+// and handlers that open their own menu (the Explorer) run before this one.
+window.addEventListener("contextmenu", (ev) => {
+  const t = ev.target as HTMLElement | null;
+  if (ev.defaultPrevented || t?.closest("input, textarea, [contenteditable='true'], .monaco-editor")) return;
+  ev.preventDefault();
+});
+
 window.addEventListener("beforeunload", (ev) => {
   if (editors.paths().some((p) => editors.isDirty(p))) ev.preventDefault();
 });
@@ -1519,8 +1528,9 @@ renderRecents();
 api
   .appInfo()
   .then(async (info: StartupInfo) => {
-    $("st-env").textContent = `v${info.version} · DMA-BUF ${info.webkitDmabuf}`;
-    $("st-env").title = [`agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
+    // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
+    $("st-env").textContent = `v${info.version}`;
+    $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
     if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {

@@ -136,7 +136,7 @@ export class InboxView {
     const el = h(
       "div",
       { class: "att" },
-      h("div", { class: "row" }, chip(str(a.severity || a.kind, "info"), a.group === "blocking" ? "chip-gate" : ""), h("strong", { class: "grow ellipsis", title: str(a.label) }, str(a.label)), h("span", { class: "run-meta mono" }, ago(a.modifiedAt))),
+      h("div", { class: "row" }, triageChip(a), h("strong", { class: "grow ellipsis", title: str(a.label) }, str(a.label)), h("span", { class: "run-meta mono" }, ago(a.modifiedAt))),
       ...(str(a.findingsSummary) ? [h("div", { class: "dim small clamp-3", title: str(a.findingsSummary) }, str(a.findingsSummary))] : []),
       h("div", { class: "actions" }, ...acts),
     );
@@ -150,6 +150,14 @@ export class InboxView {
  * question and the gate line as text, and the answer controls for a driver run or a
  * button to the terminal that holds it.
  */
+/** One label and colour per triage / attention item, the same in Mission, Inbox and Flight
+ *  Log: severity, else group, else kind; blocking items in the gate colour. */
+export function triageChip(a: J): HTMLElement {
+  const label = str(a.severity || a.group || a.kind, "info");
+  const tone = a.group === "blocking" || /^(error|critical|high)$/i.test(str(a.severity)) ? "chip-gate" : "";
+  return chip(label, tone);
+}
+
 export function gateCard(g: PendingGate, host: CockpitHost, cls: string): HTMLElement {
   const term = !g.gate;
   const jump = term
