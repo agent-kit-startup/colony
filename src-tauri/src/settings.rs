@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -166,29 +167,117 @@ pub fn load(path: &Path) -> Result<Settings, String> {
     }
 }
 
-/// Write via a temp file + rename so a crash never leaves half a file.
-pub fn save(path: &Path, s: &Settings) -> Result<(), String> {
+/// Write via a temp file + rename so a crash never leaves half a file. Only `Store` calls
+/// this (under its lock); the temp name carries the pid so two Colony processes never
+/// write into each other's temp file.
+fn save(path: &Path, s: &Settings) -> Result<(), String> {
+    let mut text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    text.push('\n');
+    write_atomic(path, &text)
+}
+
+fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
-    let mut text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    text.push('\n');
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let mut f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    f.write_all(text.as_bytes()).and_then(|_| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", path.display())
+    })
+}
+
+/// settings.json and the one way it is written. Every writer (skin, title bar, layout,
+/// workspace entries, the template) goes through `update`: lock, read the file as it is
+/// now, change only the caller's keys, write it atomically. So two updates to different
+/// keys never drop each other, and an edit made in an editor in between is kept.
+/// The in-process mutex serializes this window's writers; an advisory `flock` on
+/// `settings.json.lock` serializes them with another Colony process on the same file
+/// (a dev build next to the installed one, `--new-instance`).
+#[derive(Default)]
+pub struct Store {
+    path: Mutex<Option<PathBuf>>,
+    write: Mutex<()>,
+}
+
+impl Store {
+    pub fn at(path: PathBuf) -> Self {
+        Store { path: Mutex::new(Some(path)), write: Mutex::new(()) }
+    }
+
+    /// Set once at startup (`<app config dir>/settings.json`).
+    pub fn set_path(&self, path: PathBuf) {
+        *self.path.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+    }
+
+    pub fn path(&self) -> Result<PathBuf, String> {
+        self.path.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "No app config dir".to_string())
+    }
+
+    /// The file as it is now (a write is a rename, so a read never sees half of one).
+    pub fn load(&self) -> Result<Settings, String> {
+        load(&self.path()?)
+    }
+
+    /// Read-modify-write under the lock. `f` errs: nothing is written. An unreadable
+    /// file also writes nothing (it is never replaced by defaults).
+    pub fn update<T>(&self, f: impl FnOnce(&mut Settings) -> Result<T, String>) -> Result<T, String> {
+        // The guarded data is `()`: a panic in another writer leaves nothing half-changed.
+        let _one_writer = self.write.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.path()?;
+        let _other_processes = FileLock::acquire(&path)?;
+        let mut s = load(&path)?;
+        let out = f(&mut s)?;
+        save(&path, &s)?;
+        Ok(out)
+    }
+
+    /// Create the file from the template when it does not exist yet; its path.
+    pub fn ensure(&self) -> Result<PathBuf, String> {
+        let _one_writer = self.write.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.path()?;
+        let _other_processes = FileLock::acquire(&path)?;
+        if !path.exists() {
+            write_atomic(&path, TEMPLATE)?;
+        }
+        Ok(path)
+    }
+}
+
+/// An exclusive `flock` on `settings.json.lock`, released when dropped (the fd closes).
+struct FileLock(#[allow(dead_code)] std::fs::File);
+
+impl FileLock {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        use std::os::fd::AsRawFd;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let lock = path.with_extension("json.lock");
+        let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock).map_err(|e| format!("{}: {e}", lock.display()))?;
+        loop {
+            // SAFETY: flock(2) on an fd this File owns for the whole call.
+            if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(FileLock(f));
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("{}: {e}", lock.display()));
+            }
+        }
+    }
 }
 
 pub fn settings_path(state: &AppState) -> Result<PathBuf, String> {
-    state
-        .settings_path
-        .lock()
-        .map_err(|_| "settings lock poisoned".to_string())?
-        .clone()
-        .ok_or_else(|| "No app config dir".to_string())
+    state.settings.path()
 }
 
 pub fn current(state: &AppState) -> Result<Settings, String> {
-    load(&settings_path(state)?)
+    state.settings.load()
 }
 
 #[derive(Serialize)]
@@ -212,38 +301,28 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<SettingsInfo, String> 
 /// Make sure the file exists (for opening it in the editor) and return its path.
 #[tauri::command]
 pub fn settings_ensure(state: State<'_, AppState>) -> Result<String, String> {
-    let path = settings_path(&state)?;
-    if !path.exists() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&path, TEMPLATE).map_err(|e| e.to_string())?;
-    }
-    Ok(path.display().to_string())
+    Ok(state.settings.ensure()?.display().to_string())
 }
 
 /// Merge the given fields into the opened folder's entry (null clears a field).
 #[tauri::command]
 pub fn settings_set_workspace(state: State<'_, AppState>, patch: serde_json::Value) -> Result<WorkspaceSettings, String> {
-    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _one_writer = WRITE.lock().map_err(|_| "settings lock poisoned")?;
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
-    let path = settings_path(&state)?;
-    let mut s = load(&path)?;
-    let mut entry = serde_json::to_value(s.workspaces.get(&root).cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
-    if let (Some(obj), Some(p)) = (entry.as_object_mut(), patch.as_object()) {
-        for (k, v) in p {
-            if v.is_null() {
-                obj.remove(k);
-            } else {
-                obj.insert(k.clone(), v.clone());
+    state.settings.update(|s| {
+        let mut entry = serde_json::to_value(s.workspaces.get(&root).cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
+        if let (Some(obj), Some(p)) = (entry.as_object_mut(), patch.as_object()) {
+            for (k, v) in p {
+                if v.is_null() {
+                    obj.remove(k);
+                } else {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
-    }
-    let ws: WorkspaceSettings = serde_json::from_value(entry).map_err(|e| e.to_string())?;
-    s.workspaces.insert(root, ws.clone());
-    save(&path, &s)?;
-    Ok(ws)
+        let ws: WorkspaceSettings = serde_json::from_value(entry).map_err(|e| e.to_string())?;
+        s.workspaces.insert(root, ws.clone());
+        Ok(ws)
+    })
 }
 
 /// Remember the window skin (`bare-metal`, `legacy` or `omarchy`).
@@ -252,11 +331,10 @@ pub fn settings_set_skin(state: State<'_, AppState>, skin: String) -> Result<Str
     if !SKINS.contains(&skin.as_str()) {
         return Err(format!("Unknown skin: {skin} (bare-metal, legacy or omarchy)"));
     }
-    let path = settings_path(&state)?;
-    let mut s = load(&path)?;
-    s.ui.skin = Some(skin.clone());
-    save(&path, &s)?;
-    Ok(skin)
+    state.settings.update(|s| {
+        s.ui.skin = Some(skin.clone());
+        Ok(skin)
+    })
 }
 
 /// Remember the title bar mode (`native` or `custom`); it applies when the window next opens.
@@ -265,24 +343,20 @@ pub fn settings_set_title_bar(state: State<'_, AppState>, mode: String) -> Resul
     if !TITLE_BARS.contains(&mode.as_str()) {
         return Err(format!("Unknown title bar: {mode} (native or custom)"));
     }
-    let path = settings_path(&state)?;
-    let mut s = load(&path)?;
-    s.ui.title_bar = Some(mode.clone());
-    save(&path, &s)?;
-    Ok(mode)
+    state.settings.update(|s| {
+        s.ui.title_bar = Some(mode.clone());
+        Ok(mode)
+    })
 }
 
 /// Save the window layout (merge; see `merge_layout`). Called after every panel change.
 #[tauri::command]
 pub fn settings_set_layout(state: State<'_, AppState>, patch: serde_json::Value) -> Result<LayoutSettings, String> {
-    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _one_writer = WRITE.lock().map_err(|_| "settings lock poisoned")?;
-    let path = settings_path(&state)?;
-    let mut s = load(&path)?;
-    let l = merge_layout(s.ui.layout.clone().unwrap_or_default(), &patch)?;
-    s.ui.layout = if l == LayoutSettings::default() { None } else { Some(l.clone()) };
-    save(&path, &s)?;
-    Ok(l)
+    state.settings.update(|s| {
+        let l = merge_layout(s.ui.layout.clone().unwrap_or_default(), &patch)?;
+        s.ui.layout = if l == LayoutSettings::default() { None } else { Some(l.clone()) };
+        Ok(l)
+    })
 }
 
 #[tauri::command]
@@ -367,6 +441,104 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260}}}"#).unwrap();
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260}));
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("colony-settings-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("settings.json")
+    }
+
+    /// Writers of different keys, in parallel, each `ROUNDS` times: every key ends at its
+    /// writer's last value. `stores` > 1 gives each writer its own `Store` on the same file
+    /// (another Colony process: only the file lock is shared).
+    fn concurrent_writers_keep_every_key(name: &str, stores: usize) {
+        const ROUNDS: u32 = 40;
+        let path = scratch(name);
+        std::fs::write(&path, r#"{"editor":{"command":"zed"},"future":{"kept":true}}"#).unwrap();
+        let shared: Vec<std::sync::Arc<Store>> = (0..stores).map(|_| std::sync::Arc::new(Store::at(path.clone()))).collect();
+        let store = |i: usize| shared[i % stores].clone();
+        let mut threads = Vec::new();
+        let s = store(0);
+        threads.push(std::thread::spawn(move || {
+            for i in 0..ROUNDS {
+                let skin = SKINS[i as usize % SKINS.len()].to_string();
+                s.update(|x| Ok(x.ui.skin = Some(skin))).unwrap();
+            }
+        }));
+        let s = store(1);
+        threads.push(std::thread::spawn(move || {
+            for i in 0..ROUNDS {
+                s.update(|x| {
+                    let l = merge_layout(x.ui.layout.clone().unwrap_or_default(), &serde_json::json!({"explorerWidth": 100 + i}))?;
+                    x.ui.layout = Some(l);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }));
+        let s = store(2);
+        threads.push(std::thread::spawn(move || {
+            for i in 0..ROUNDS {
+                s.update(|x| Ok(x.ui.title_bar = Some(TITLE_BARS[i as usize % 2].to_string()))).unwrap();
+            }
+        }));
+        for w in 0..2u32 {
+            let s = store(3 + w as usize);
+            threads.push(std::thread::spawn(move || {
+                for i in 0..ROUNDS {
+                    s.update(|x| Ok(x.workspaces.entry(format!("/w/{w}")).or_default().max_ticks = Some(i))).unwrap();
+                }
+            }));
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+        let s = load(&path).unwrap();
+        let last = ROUNDS as usize - 1;
+        assert_eq!(s.ui.skin.as_deref(), Some(SKINS[last % SKINS.len()]));
+        assert_eq!(s.ui.layout.and_then(|l| l.explorer_width), Some(100 + last as u32));
+        assert_eq!(s.ui.title_bar.as_deref(), Some(TITLE_BARS[last % 2]));
+        for w in 0..2 {
+            assert_eq!(s.workspaces[&format!("/w/{w}")].max_ticks, Some(last as u32), "/w/{w}");
+        }
+        assert_eq!(s.editor.command, Some(serde_json::json!("zed")));
+        assert_eq!(s.extra["future"], serde_json::json!({"kept": true}));
+        let dir = path.parent().unwrap();
+        let left: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name()).filter(|n| n.to_string_lossy().ends_with(".tmp")).collect();
+        assert!(left.is_empty(), "temp files left: {left:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_updates_to_different_keys_all_survive() {
+        concurrent_writers_keep_every_key("race", 1);
+    }
+
+    #[test]
+    fn two_stores_on_one_file_do_not_drop_each_other() {
+        concurrent_writers_keep_every_key("race2", 5);
+    }
+
+    #[test]
+    fn a_failed_update_or_unreadable_file_writes_nothing() {
+        let path = scratch("nowrite");
+        let store = Store::at(path.clone());
+        store.update(|x| Ok(x.ui.skin = Some("legacy".into()))).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(store.update(|x| { x.ui.skin = Some("omarchy".into()); Err::<(), _>("refused".into()) }).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(store.update(|x| Ok(x.ui.skin = Some("omarchy".into()))).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json");
+        // ensure keeps an existing file, and creates the template when there is none
+        assert_eq!(store.ensure().unwrap(), path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json");
+        std::fs::remove_file(&path).unwrap();
+        store.ensure().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

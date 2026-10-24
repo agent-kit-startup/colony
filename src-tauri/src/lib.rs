@@ -39,8 +39,8 @@ pub struct AppState {
     pub agents: agent::AgentRegistry,
     pub reviews: std::sync::Arc<review::ReviewStore>,
     pub mc_feed: std::sync::Arc<mcdata::McFeed>,
-    /// `<app config dir>/settings.json`, set once at startup.
-    pub settings_path: Mutex<Option<PathBuf>>,
+    /// `<app config dir>/settings.json` (path set once at startup) and its one writer.
+    pub settings: settings::Store,
     /// The single-instance socket this window serves (removed on exit).
     instance_socket: Mutex<Option<PathBuf>>,
     /// Folders a later `colony <folder>` forwarded to this window.
@@ -414,12 +414,12 @@ pub fn run() {
                 *app.state::<AppState>().instance_socket.lock().expect("instance lock") = Some(path);
             }
             if let Ok(dir) = app.path().app_config_dir() {
-                *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
+                app.state::<AppState>().settings.set_path(dir.join("settings.json"));
             }
             // Title bar (settings.json `ui.titleBar`, read once here): native keeps the
             // system decorations and the GTK menu bar; custom drops both, and the window
             // draws its own bar with the same menu and the window controls.
-            let custom = app.state::<AppState>().settings_path.lock().ok().and_then(|p| p.clone()).is_some_and(|p| settings::title_bar_mode(&p) == "custom");
+            let custom = app.state::<AppState>().settings.path().is_ok_and(|p| settings::title_bar_mode(&p) == "custom");
             if let Ok(mut s) = app.state::<AppState>().startup.lock() {
                 s.title_bar = if custom { "custom" } else { "native" }.into();
             }

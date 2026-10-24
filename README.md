@@ -92,7 +92,7 @@ Omarchy 4.x is the reference Linux platform: a Linux feature is designed and ver
 
 ## Settings
 
-`~/.config/io.missionkit.colony/settings.json` (the ⚙ button creates it and opens it in a Colony tab). Read on every use: a saved edit applies at once.
+`~/.config/io.missionkit.colony/settings.json` (the ⚙ button creates it and opens it in a Colony tab). Read on every use: a saved edit applies at once. Colony changes only the keys it writes, one write at a time (also across Colony processes, via `settings.json.lock`), so a layout save and a skin change never drop each other or an edit you saved meanwhile.
 
 ```json
 {
