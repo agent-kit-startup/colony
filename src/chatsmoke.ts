@@ -50,9 +50,10 @@ export async function chatSmoke(c: ChatSmokeCtx) {
     await c.term(`sh '${c.root}/packaging/smoke/seed-chats.sh' '${c.root}' > chats-seeded.txt 2>&1; echo "exit=$?" >> chats-seeded.txt\n`);
     const seeded = await untilFile("chats-seeded.txt", (t) => t.includes("exit="), 8000);
 
-    // The card's refresh button reads them; exactly three rows, newest first.
-    c.showTab("mission");
-    const mission = c.view("mission");
+    // The card's refresh button reads them; exactly three rows, newest first. Chats live
+    // in the Activity view (out of the one-fold Mission home).
+    c.showTab("activity");
+    const mission = c.view("activity");
     mission.querySelector<HTMLButtonElement>('[data-act="chats-refresh"]')?.click();
     const rows = () => [...mission.querySelectorAll<HTMLElement>(".chat-row")];
     await c.until(() => rows().length >= 3 && !chats.loading, 8000);
@@ -72,7 +73,7 @@ export async function chatSmoke(c: ChatSmokeCtx) {
     const tab = c.activeTab();
     const proof = await untilFile("interactive-proof.txt", (t) => t.includes("--resume"), 8000);
     const label = c.tabLabel(tab);
-    c.showTab("mission");
+    c.showTab("activity");
     await c.wait(200);
     rows()[0]?.click();
     await c.wait(400);

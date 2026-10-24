@@ -20,7 +20,7 @@ export interface TranscriptHost {
 }
 
 /** Inline markdown subset (code, bold) as DOM nodes; never innerHTML. */
-function inline(text: string): Node[] {
+export function inlineMd(text: string): Node[] {
   const out: Node[] = [];
   const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
   let last = 0;
@@ -34,6 +34,11 @@ function inline(text: string): Node[] {
   return out;
 }
 
+/** The same text without the inline markers, for a `title` tooltip. */
+export function plainMd(text: string): string {
+  return text.replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/`([^`\n]+)`/g, "$1");
+}
+
 /** Prose block: paragraphs, bullet lists, headings, fenced code. */
 export function prose(text: string): HTMLElement {
   const root = h("div", { class: "prose" });
@@ -41,7 +46,7 @@ export function prose(text: string): HTMLElement {
   let para: string[] = [];
   let list: HTMLElement | null = null;
   const flushPara = () => {
-    if (para.length) root.append(h("p", {}, ...inline(para.join(" "))));
+    if (para.length) root.append(h("p", {}, ...inlineMd(para.join(" "))));
     para = [];
   };
   for (let i = 0; i < lines.length; i++) {
@@ -61,14 +66,14 @@ export function prose(text: string): HTMLElement {
         list = h("ul");
         root.append(list);
       }
-      list.append(h("li", {}, ...inline(bullet[1])));
+      list.append(h("li", {}, ...inlineMd(bullet[1])));
       continue;
     }
     const head = /^#{1,4}\s+(.*)$/.exec(line);
     if (head) {
       flushPara();
       list = null;
-      root.append(h("h4", {}, ...inline(head[1])));
+      root.append(h("h4", {}, ...inlineMd(head[1])));
       continue;
     }
     if (!line.trim()) {

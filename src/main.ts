@@ -8,7 +8,7 @@ import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
 import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
-import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
+import { ActivityView, type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
@@ -391,7 +391,8 @@ const host: CockpitHost = {
   },
   runPlan: async () => {
     if (!workspace) return status("Open a folder first");
-    return controls.start();
+    // The engine form is a dialog now (not in the Mission hero); Start in it runs the plan.
+    controls.openDialog({ plan: snapshot.activePlanFile });
   },
   runQueue: async () => {
     if (!workspace) return status("Open a folder first");
@@ -482,6 +483,7 @@ const mission = new MissionView(host, controls);
 const plans = new PlansView(host);
 const queue = new QueueView(host);
 const flight = new FlightLogView(host);
+const activity = new ActivityView(host);
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -553,6 +555,7 @@ function pinViews() {
   );
   pin("cicd", "CI/CD", "⟳", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
   pin("flight", "Flight Log", "⌖", "Flight log: residuals, warnings, tick logs", flight.el, flight);
+  pin("activity", "Activity", "∿", "Saved chats, recent activity and health checks", activity.el, activity);
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -828,6 +831,7 @@ async function openWorkspace(path: string) {
     order.splice(order.indexOf(id), 1);
     if (t.el !== $("view-editor")) t.el.remove();
   }
+  document.getElementById("run-dialog")?.remove();
   editors.closeAll();
   terminals.closeAll();
   snapshot.reset();
@@ -1186,11 +1190,14 @@ async function runSmoke(root: string, info: StartupInfo) {
     await wait(300);
     const remembered = await api.settingsWorkspace();
     await log("engine-remembered", remembered.backend === "codex" && remembered.onLimit === "claude" && remembered.model === "smoke-model", remembered);
-    // A view action starts the run: the Mission view's Run plan button, same click handler
-    // as the operator's. The run must open and focus its own agent tab.
+    // A view action starts the run: the Mission view's Run plan button opens the run
+    // dialog, then its Start, same click handlers as the operator's. The run must open and
+    // focus its own agent tab.
     showTab("mission");
     const before = runs.list().length;
     view("mission").querySelector<HTMLButtonElement>('[data-act="run-plan"]')?.click();
+    await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
+    document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-start"]')?.click();
     await until(() => runs.list().length > before, 10000);
     const run = runs.list()[before];
     if (!run) throw new Error("the Mission view's Run plan did not start a run");

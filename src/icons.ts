@@ -41,6 +41,11 @@ const PATHS = {
   folder: '<path d="M2 4.5a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1z"/>',
   // Colony: refresh (circular arrow), replaces the unicode ↻ on reload buttons
   refresh: '<path d="M13 8a5 5 0 11-1.46-3.54"/><path d="M13 2.5v3h-3"/>',
+  // Colony: run / hold marks, in place of the unicode ▶ and ⏸ on buttons and rows
+  play: '<path d="M5 3.25l7.5 4.75L5 12.75z"/>',
+  pause: '<path d="M5.75 3.5v9M10.25 3.5v9"/>',
+  // Colony: More (three dots)
+  more: '<circle cx="3.5" cy="8" r="0.9" fill="currentColor"/><circle cx="8" cy="8" r="0.9" fill="currentColor"/><circle cx="12.5" cy="8" r="0.9" fill="currentColor"/>',
   engine: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2"/>',
 } as const;
 

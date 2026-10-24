@@ -217,7 +217,8 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
    .lifecycle-pill / .now-status, .now-stepbar, .now-stepper, .now-meta, .flight-log-card,
    .status-bar-btn), on the same tokens. */
 .cv { overflow: auto; background: var(--bg); }
-.cv-body { padding: var(--mc-space-xl) var(--mc-space-xl) var(--mc-space-2xl); display: flex; flex-direction: column; gap: var(--mc-space-xl); max-width: 1400px; }
+/* No max-width: a cap left a wide empty gutter at 1920px while text truncated inside. */
+.cv-body { padding: var(--mc-space-xl) var(--mc-space-xl) var(--mc-space-2xl); display: flex; flex-direction: column; gap: var(--mc-space-xl); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
 .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color 0.2s, box-shadow 0.2s; }
 .card:hover { border-color: var(--border-active); box-shadow: var(--mc-shadow-card-hover); }
@@ -337,6 +338,45 @@ input.search { width: 220px; max-width: 100%; }
 .engine-bar label { display: inline-flex; gap: 6px; align-items: center; font-size: var(--mc-chrome-subtitle-size); }
 .engine-bar input.model { width: 150px; }
 .run-note { margin: 0; }
+/* Run dialog (agent.ts openDialog): the engine form over the window, like the Engine panel. */
+#run-dialog { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+.run-box { width: min(560px, 92vw); gap: var(--mc-space-md); }
+.run-box .engine-bar { border-top: 0; padding-top: 0; }
+/* A clickable meta item (the hero's engine): looks like the others, underlines on hover. */
+button.now-meta-btn { background: transparent; border: 0; padding: 0; font-size: inherit; color: inherit; }
+button.now-meta-btn:hover { background: transparent; color: var(--text-primary); }
+button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: var(--text-primary); }
+
+/* ---- Mission home: one fold (dashboard overview, min-width 1024px) ----------------- */
+/* Pilot order in the DOM (gates, Current mission, Needs you, Agent runs, Flight Log,
+   Queue): narrow windows stack it and the view scrolls; from 1024px it is a 2x2 grid that
+   fills the view, the page does not scroll and every panel scrolls inside. */
+.mission-fold { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
+.mission-stack { display: flex; flex-direction: column; gap: var(--mc-space-xl); min-width: 0; min-height: 0; }
+.mission-fold .card { container-type: inline-size; }
+@media (min-width: 1024px) and (min-height: 560px) {
+  .cv-mission { overflow: hidden; }
+  .cv-mission .cv-body { height: 100%; padding-bottom: var(--mc-space-xl); gap: var(--mc-space-lg); }
+  .cv-mission .gate-strip { flex: none; max-height: 38%; overflow: auto; margin-bottom: 0; }
+  .mission-fold { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "now attention" "flight queue"; align-items: stretch; gap: var(--mc-space-lg); }
+  .mission-fold > .hero { grid-area: now; }
+  .mission-fold > .mission-stack { grid-area: attention; gap: var(--mc-space-lg); }
+  .mission-fold > .flight-card { grid-area: flight; }
+  .mission-fold > .queue-card { grid-area: queue; }
+  .mission-fold .card { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+  .mission-fold .card > * { flex-shrink: 0; }
+  /* Needs you takes what it needs (up to half the cell); Agent runs fills the rest. */
+  .mission-stack > .needs-you { flex: 0 1 auto; max-height: 50%; }
+  .mission-stack > .runs-card { flex: 1 1 0; }
+  /* The hero scrolls inside its cell; its actions stay on the cell's bottom edge. */
+  .mission-fold > .hero > .now-actions { position: sticky; bottom: calc(-1 * var(--mc-card-padding)); z-index: 1; margin: 0 0 calc(-1 * var(--mc-card-padding)); padding: var(--mc-space-md) 0 var(--mc-card-padding); background: var(--bg-card); }
+  .mission-fold-wait { grid-template-rows: minmax(0, 1fr); grid-template-areas: "now ."; }
+}
+/* Run rows drop whole fields as their card narrows, never cut them (kit truncation
+   contract): clock first, then the backend, then the kit-sees-it chip. */
+@container (max-width: 520px) { .run-row .run-clock { display: none; } }
+@container (max-width: 440px) { .run-row .run-backend { display: none; } }
+@container (max-width: 380px) { .run-row .run-kit { display: none; } .run-row .run-kind { min-width: 0; } }
 .gate.compact { padding: 8px; gap: 6px; }
 
 /* Plans (dashboard .plan-accordion-item) and Queue rows. */
@@ -482,7 +522,7 @@ input.search { width: 220px; max-width: 100%; }
 .ctx-why { margin-top: 4px; }
 
 /* ---- launches (Mission: agent runs card, launched-from-Colony hero, held queue) ---- */
-.run-row .run-kind { min-width: 92px; }
+.run-row .run-kind { display: inline-flex; align-items: center; gap: 4px; min-width: 92px; }
 .kit-run { color: var(--fg-dim); }
 .launch-pending { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--green-bg); font-size: var(--mc-chrome-subtitle-size); cursor: pointer; }
 .queue-held { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--yellow-bg); color: var(--yellow); font-size: var(--mc-chrome-subtitle-size); }
