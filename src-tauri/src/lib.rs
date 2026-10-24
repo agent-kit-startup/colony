@@ -65,6 +65,28 @@ struct StartupInfo {
     smoke: Option<String>,
     /// `COLONY_SMOKE_SHOTS=1`: the smoke pauses at a few views for read-only screenshots.
     smoke_shots: bool,
+    /// The title bar this window opened with (`native` or `custom`, settings.json `ui.titleBar`).
+    title_bar: String,
+    /// A tiling window manager (it places the window; native is the advice there).
+    tiling_wm: Option<String>,
+}
+
+/// The tiling window manager this session runs under, if any (from its own variables).
+fn tiling_wm() -> Option<String> {
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    if set("HYPRLAND_INSTANCE_SIGNATURE") {
+        return Some("Hyprland".into());
+    }
+    if set("SWAYSOCK") {
+        return Some("sway".into());
+    }
+    if set("NIRI_SOCKET") {
+        return Some("niri".into());
+    }
+    if set("I3SOCK") {
+        return Some("i3".into());
+    }
+    None
 }
 
 /// WebKitGTK's DMA-BUF renderer hangs on NVIDIA + Wayland (Colony UI benchmark, machine A).
@@ -280,6 +302,8 @@ pub fn run() {
         git: tools::git_bin().map(|p| p.display().to_string()),
         smoke: std::env::var("COLONY_SMOKE").ok().filter(|s| !s.trim().is_empty()),
         smoke_shots: std::env::var("COLONY_SMOKE_SHOTS").as_deref() == Ok("1"),
+        title_bar: "native".into(),
+        tiling_wm: tiling_wm(),
     };
 
     let hook = mc_action_hook(startup.smoke.is_some());
@@ -304,6 +328,7 @@ pub fn run() {
             smoke_log,
             smoke_exit,
             menu::menu_state,
+            menu::menu_popup,
             menu::smoke_menu_click,
             workspace::open_workspace,
             workspace::list_dir,
@@ -353,6 +378,7 @@ pub fn run() {
             settings::settings_workspace,
             settings::settings_set_workspace,
             settings::settings_set_skin,
+            settings::settings_set_title_bar,
             launch::open_in_editor,
             omarchy::omarchy_subscribe,
             omarchy_shell::omarchy_integration_plan,
@@ -389,9 +415,18 @@ pub fn run() {
             if let Ok(dir) = app.path().app_config_dir() {
                 *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
             }
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // Title bar (settings.json `ui.titleBar`, read once here): native keeps the
+            // system decorations and the GTK menu bar; custom drops both, and the window
+            // draws its own bar with the same menu and the window controls.
+            let custom = app.state::<AppState>().settings_path.lock().ok().and_then(|p| p.clone()).is_some_and(|p| settings::title_bar_mode(&p) == "custom");
+            if let Ok(mut s) = app.state::<AppState>().startup.lock() {
+                s.title_bar = if custom { "custom" } else { "native" }.into();
+            }
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Colony")
-                .menu(menu::build(app)?)
+                .decorations(!custom);
+            let window = if custom { window } else { window.menu(menu::build(app)?) };
+            window
                 .inner_size(1500.0, 950.0)
                 .min_inner_size(900.0, 600.0)
                 .initialization_script_for_all_frames(&hook)

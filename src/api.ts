@@ -13,6 +13,10 @@ export interface StartupInfo {
   git: string | null;
   smoke: string | null;
   smokeShots: boolean;
+  /** The title bar this window opened with (settings.json `ui.titleBar`, read at startup). */
+  titleBar: "native" | "custom";
+  /** A tiling window manager (Hyprland, sway, niri, i3), or null. */
+  tilingWm: string | null;
 }
 /** One menu of the native menu bar, read back from the window (menu.rs menu_state). */
 export interface MenuState { label: string; items: { id: string; label: string; enabled: boolean }[] }
@@ -102,6 +106,7 @@ export const api = {
   smokeExit: () => invoke<void>("smoke_exit"),
   menuState: () => invoke<MenuState[]>("menu_state"),
   smokeMenuClick: (id: string) => invoke<void>("smoke_menu_click", { id }),
+  menuPopup: (index: number, x: number, y: number) => invoke<void>("menu_popup", { index, x, y }),
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   listDir: (path: string) => invoke<Entry[]>("list_dir", { path }),
   listFiles: () => invoke<string[]>("list_files"),
@@ -152,6 +157,7 @@ export const api = {
   settingsGet: () => invoke<SettingsInfo>("settings_get"),
   settingsEnsure: () => invoke<string>("settings_ensure"),
   settingsSetSkin: (skin: string) => invoke<string>("settings_set_skin", { skin }),
+  settingsSetTitleBar: (mode: string) => invoke<string>("settings_set_title_bar", { mode }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),

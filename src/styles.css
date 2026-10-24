@@ -67,6 +67,15 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #ws-name { display: inline-flex; min-width: 0; max-width: 50vw; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); }
 #ws-name .ws-parent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 #ws-name .ws-leaf { flex: none; color: var(--text-primary); font-weight: 600; }
+/* Custom title bar (settings.json ui.titleBar = "custom"): #top drags the window and holds
+   the menus and the window controls. Hover changes the border only. */
+#top-menus { display: inline-flex; flex: none; gap: 2px; }
+#win-controls { display: inline-flex; flex: none; gap: 2px; margin-left: 4px; }
+#top-menus button, #win-controls button { background: transparent; border-color: transparent; padding: 2px 8px; min-height: 26px; }
+#top-menus button:hover, #win-controls button:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
+#win-controls button { display: inline-flex; align-items: center; }
+#win-controls button.win-close:hover { border-color: var(--red); color: var(--red); }
+#win-controls svg { width: 14px; height: 14px; }
 
 /* Rail: the primary views (icon over label, never icon-only) and More at the bottom. */
 #rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
