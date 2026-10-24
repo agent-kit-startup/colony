@@ -16,14 +16,17 @@ if [ "$1" = api ]; then
 fi
 printf '%s\n' "$*" >> gh-proof.txt
 pr_json() {
+  cross=false owner=smoke
+  [ "$1" = 10 ] && cross=true owner=mallory
   case "$1" in
     7) base=feat/base head=feat/seven title="Smoke PR seven" ;;
     8) base=release head=feat/eight title="Smoke PR eight (release)" ;;
     9) base=main head=staging title="Promote staging to main" ;;
     11) base=staging head=chore/close-release-6.9.1 title="chore: close release 6.9.1" ;;
+    10) base=main head=staging title="Promote staging to main (fork)" ;;
     *) base=feat/base head=feat/other title="Smoke PR $1" ;;
   esac
-  printf '{"number":%s,"title":"%s","state":"OPEN","headRefName":"%s","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"%s","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","url":"https://example.invalid/pr/%s","author":{"login":"smoke"},"statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}' "$1" "$title" "$head" "$base" "$1"
+  printf '{"number":%s,"title":"%s","state":"OPEN","headRefName":"%s","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"%s","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","url":"https://example.invalid/pr/%s","author":{"login":"smoke"},"isCrossRepository":%s,"headRepositoryOwner":{"login":"%s"},"statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}' "$1" "$title" "$head" "$base" "$1" "$cross" "$owner"
 }
 run_json() {
   case "$1" in

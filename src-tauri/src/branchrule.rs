@@ -6,7 +6,8 @@
 //! in a staging flow `main` is the release line, while in a repository without `staging`
 //! `main` is where development lands. `origin/HEAD` is deliberately not consulted: a
 //! clone made from `staging`, or a forge whose default branch is `staging`, would invert
-//! the rule.
+//! the rule. Host requests use the stricter `request_production_reason`: `main` and
+//! `master` always count there, because the request's folder is the requester's.
 
 use std::path::Path;
 
@@ -31,6 +32,19 @@ pub fn production_reason(branch: &str, flow: &RepoFlow) -> Option<String> {
         return Some(format!("{branch} is always a production branch"));
     }
     (flow.has_staging && DEFAULT_BRANCHES.contains(&branch)).then(|| format!("{branch} is the default branch and the repository has origin/staging"))
+}
+
+/// The rule for host requests (merge-pr, push-branch filed by an agent or started from a
+/// card): `main` and `master` always count, whatever the local refs say. The staging-flow
+/// test reads `refs/remotes/origin/staging` in the request's own folder, which the requester
+/// controls (delete the ref, or file from a single-branch clone), so it cannot decide
+/// whether a typed yes is needed (security review 2026-10-24, finding 2).
+pub fn request_production_reason(branch: &str) -> Option<String> {
+    let branch = branch.trim();
+    if ALWAYS_PRODUCTION.contains(&branch) {
+        return Some(format!("{branch} is always a production branch"));
+    }
+    DEFAULT_BRANCHES.contains(&branch).then(|| format!("{branch} is a default branch: a host request treats it as production"))
 }
 
 /// Read the repository facts the rule needs (no network: local refs only).
@@ -72,6 +86,16 @@ mod tests {
         assert!(production_reason("master", &flow(true)).is_some());
         for b in ["staging", "feat/x", "trunk"] {
             assert_eq!(production_reason(b, &flow(true)), None, "{b}");
+        }
+    }
+
+    #[test]
+    fn host_requests_treat_default_branches_as_production_always() {
+        for b in ["main", "master", "production", "prod", "release"] {
+            assert!(request_production_reason(b).is_some(), "{b}");
+        }
+        for b in ["staging", "feat/x", "mainline", "chore/sync-staging-main-abc1234"] {
+            assert_eq!(request_production_reason(b), None, "{b}");
         }
     }
 

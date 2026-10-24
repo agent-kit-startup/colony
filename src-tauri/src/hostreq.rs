@@ -287,7 +287,10 @@ fn response_path(spool: &Path, id: &str) -> PathBuf {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // Never through a planted symlink: drop whatever sits there, then create exclusively
+    // (O_CREAT|O_EXCL does not follow a link; security review 2026-10-24, finding 9).
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
     drop(f);
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
@@ -459,7 +462,7 @@ pub fn cli_run(args: &[String], spool: Option<PathBuf>, cwd: &Path, poll: Durati
             }
         }
         let b = branch.clone().unwrap_or_default();
-        if let Some(why) = branchrule::production_branch(cwd, &b) {
+        if let Some(why) = branchrule::request_production_reason(&b) {
             eprintln!("colony request: refused: {why}. A production branch is pushed by the operator from Colony's Git tab, never on request.");
             return EXIT_USAGE;
         }
@@ -575,6 +578,18 @@ struct Pending {
     action: Action,
     origin: Origin,
     running: bool,
+    /// What the card showed when its context first loaded; Approve acts on exactly that or
+    /// refuses (security review 2026-10-24, findings 4 and 5).
+    pin: Option<Pin>,
+}
+
+/// The facts a card showed, pinned for Approve.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pin {
+    /// merge-pr: the PR's head commit (merged with `--match-head-commit`) and its base.
+    Merge { head: String, base: String },
+    /// open-pr: the whole plan (branches, sha, title, body).
+    Plan(PrPlan),
 }
 
 /// One approval card, as the UI sees it.
@@ -784,7 +799,7 @@ impl HostRequests {
                 continue;
             }
             match Self::load(&e.path(), id) {
-                Ok((req, action)) => fresh.push(Pending { req, action, origin: Origin::Agent, running: false }),
+                Ok((req, action)) => fresh.push(Pending { req, action, origin: Origin::Agent, running: false, pin: None }),
                 Err(why) => self.reject(spool, id, &why),
             }
         }
@@ -810,6 +825,15 @@ impl HostRequests {
             }
         }
         items.iter().map(|p| p.req.id.clone()).collect::<Vec<_>>() != before
+    }
+
+    /// Keep the first context's facts for Approve (a later reload does not move the pin).
+    fn pin_once(&self, id: &str, pin: Option<Pin>) {
+        if let Ok(mut items) = self.items.lock() {
+            if let Some(p) = items.iter_mut().find(|p| p.req.id == id && p.pin.is_none() && !p.running) {
+                p.pin = pin;
+            }
+        }
     }
 
     fn get(&self, id: &str) -> Result<Pending, String> {
@@ -860,7 +884,7 @@ impl HostRequests {
         }
         let p = self.claim(id)?;
         self.broadcast();
-        let (outcome, output) = match execute(&p.action, &cwd) {
+        let (outcome, output) = match execute(&p.action, &cwd, p.pin.as_ref()) {
             Ok(out) => (Outcome::Succeeded, out),
             Err(out) => (Outcome::Failed, out),
         };
@@ -886,7 +910,11 @@ impl HostRequests {
             if items.iter().any(|p| p.origin == Origin::Colony && p.action == action && p.req.cwd == req.cwd) {
                 return Err(format!("{} is already waiting on a card", action.summary()));
             }
-            items.push(Pending { req, action, origin: Origin::Colony, running: false });
+            // Same cap as the spool (security review 2026-10-24, finding 7).
+            if items.len() >= MAX_PENDING {
+                return Err(format!("{MAX_PENDING} requests are already waiting: answer some first"));
+            }
+            items.push(Pending { req, action, origin: Origin::Colony, running: false, pin: None });
         }
         self.broadcast();
         Ok(id)
@@ -917,6 +945,11 @@ pub struct PrPlan {
 
 const MAX_PR_LOG: usize = 30;
 
+/// Host-request pushes run in the requester's folder: never through an `ext::` transport
+/// its git config might name (security review 2026-10-24, finding 6). The repository's own
+/// hooks still run: its pre-push guard is a safety layer, not a risk to switch off.
+const NO_EXT_PROTOCOL: [&str; 2] = ["-c", "protocol.ext.allow=never"];
+
 fn remote_ref_exists(cwd: &Path, branch: &str) -> bool {
     gitops::git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_ok()
 }
@@ -942,10 +975,12 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
                 return Err(format!("Refused: origin/staging has nothing that origin/{main} lacks"));
             }
             let log = log_of(&format!("{base_ref}..{head_ref}"))?;
-            let list: String = log.lines().map(|l| format!("- {l}\n")).collect();
-            let more = if ahead as usize > MAX_PR_LOG { format!("- ... and {} more\n", ahead as usize - MAX_PR_LOG) } else { String::new() };
+            // Commit subjects are repo text: inside a code block they cannot ping, link or
+            // close issues (security review 2026-10-24, finding 8); backticks cannot end it.
+            let list: String = log.lines().map(|l| format!("{}\n", l.replace('`', "'"))).collect();
+            let more = if ahead as usize > MAX_PR_LOG { format!("... and {} more\n", ahead as usize - MAX_PR_LOG) } else { String::new() };
             let body = format!(
-                "## Summary\n\nPromote `staging` to `{main}` ({ahead} commit(s)). Please merge with a merge commit, so `{main}` stays an ancestor of `staging`.\n\n{list}{more}\nOpened from Colony (Git e CI/CD, Ship lane). The merge into `{main}` needs the operator's typed yes in Colony.\n"
+                "## Summary\n\nPromote `staging` to `{main}` ({ahead} commit(s)). Please merge with a merge commit, so `{main}` stays an ancestor of `staging`.\n\n```text\n{list}{more}```\n\nOpened from Colony (Git e CI/CD, Ship lane). The merge into `{main}` needs the operator's typed yes in Colony.\n"
             );
             Ok(PrPlan { shape, base: main.to_string(), head: "staging".into(), push_sha: None, title: format!("Promote staging to {main}"), body, log })
         }
@@ -971,17 +1006,32 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
     }
 }
 
+/// The merge gate on one `gh pr view` answer (pure, unit-tested): `Err` when a fork PR
+/// targets a production base (its head branch name, e.g. `staging`, is the fork's own and
+/// proves nothing: security review 2026-10-24, finding 1), `Ok(Some(why))` when the typed
+/// yes is needed.
+pub fn merge_gate(number: u64, pr: &Value) -> Result<Option<String>, String> {
+    let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default();
+    let Some(why) = branchrule::request_production_reason(base) else { return Ok(None) };
+    // A missing field counts as a fork: fail closed.
+    if pr.get("isCrossRepository").and_then(Value::as_bool) != Some(false) {
+        let owner = pr.pointer("/headRepositoryOwner/login").and_then(Value::as_str).unwrap_or("?");
+        let head = pr.get("headRefName").and_then(Value::as_str).unwrap_or("?");
+        return Err(format!("Refused: PR #{number} comes from another repository ({owner}:{head}) and targets {base}. A fork PR never merges into a production base from Colony"));
+    }
+    Ok(Some(format!("PR #{number} targets {base}: {why}")))
+}
+
 /// `Ok(Some(why))`: the action needs a typed yes. `Err`: never allowed on request.
 fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String> {
     match action {
         Action::MergePr { number, .. } => {
             let pr = Forge::detect()?.json(cwd, &Op::PrView(*number))?;
-            let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default().to_string();
-            Ok(branchrule::production_branch(cwd, &base).map(|why| format!("PR #{number} targets {base}: {why}")))
+            merge_gate(*number, &pr)
         }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
-            match branchrule::production_branch(cwd, b) {
+            match branchrule::request_production_reason(b) {
                 Some(why) => Err(format!("Refused: {why}. Push a production branch yourself from the Git tab (typed yes)")),
                 None => Ok(None),
             }
@@ -995,9 +1045,21 @@ fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String
 }
 
 /// Run an approved action. `Err` carries the failure output.
-fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
+fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, String> {
     match action {
-        Action::MergePr { number, method } => Forge::detect()?.run(cwd, &Op::Merge(*number, *method)),
+        Action::MergePr { number, method } => {
+            let forge = Forge::detect()?;
+            let pr = forge.json(cwd, &Op::PrView(*number))?;
+            let (head, base) = merge_pin(&pr).ok_or_else(|| format!("PR #{number}: gh pr view has no head commit or base"))?;
+            if let Some(Pin::Merge { head: h0, base: b0 }) = pin {
+                if *b0 != base {
+                    return Err(format!("Refused: PR #{number} now targets {base}, not {b0} as on the card. Deny it and file it again"));
+                }
+                // The head may have moved since the card: merge only what the card showed.
+                return forge.run(cwd, &Op::Merge(*number, *method, Some(h0.clone())));
+            }
+            forge.run(cwd, &Op::Merge(*number, *method, Some(head)))
+        }
         Action::RerunChecks { run: Some(id), .. } => Forge::detect()?.run(cwd, &Op::RerunFailed(*id)),
         Action::RerunChecks { pr, .. } => {
             let n = pr.ok_or("rerun-checks without a target")?;
@@ -1035,14 +1097,19 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
             }
         }
         Action::OpenPr { shape } => {
-            // Re-derived at approval time: the refs may have moved since the card opened.
+            // Re-derived at approval time; a plan that moved since the card refuses.
             let plan = pr_plan(*shape, cwd)?;
+            if let Some(Pin::Plan(p0)) = pin {
+                if *p0 != plan {
+                    return Err("Refused: the branches moved since the card opened (origin/main or origin/staging changed). Deny it and open it again".into());
+                }
+            }
             let forge = Forge::detect()?;
             let mut log = String::new();
             if let Some(sha) = &plan.push_sha {
                 // Never forced: a plain refspec push of the default branch's own tip to a new
                 // non-production branch.
-                log.push_str(&gitops::git(cwd, &["push", "origin", &format!("{sha}:refs/heads/{}", plan.head)])?);
+                log.push_str(&gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", "origin", &format!("{sha}:refs/heads/{}", plan.head)])?);
             }
             let out = forge.run(cwd, &Op::PrCreate { base: plan.base.clone(), head: plan.head.clone(), title: plan.title.clone(), body: plan.body.clone() }).map_err(|e| format!("{log}{e}"))?;
             log.push_str(&out);
@@ -1054,13 +1121,13 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
                 return Err(format!("Not a branch name: {b}"));
             }
             gitops::git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).map_err(|_| format!("No local branch {b}"))?;
-            if let Some(why) = branchrule::production_branch(cwd, b) {
+            if let Some(why) = branchrule::request_production_reason(b) {
                 return Err(format!("Refused: {why}"));
             }
             // Never forced: no --force, no +refspec.
             match gitops::git(cwd, &["config", "--get", &format!("branch.{b}.remote")]).map(|s| s.trim().to_string()) {
-                Ok(remote) if !remote.is_empty() && !remote.starts_with('-') => gitops::git(cwd, &["push", &remote, b]),
-                _ => gitops::git(cwd, &["push", "-u", "origin", b]),
+                Ok(remote) if !remote.is_empty() && !remote.starts_with('-') => gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", &remote, b]),
+                _ => gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", "-u", "origin", b]),
             }
         }
     }
@@ -1068,7 +1135,14 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
 
 /// What the card shows next to the request: the PR (title, base <- head, mergeable,
 /// checks), the run, or the commits a push would send; and whether a typed yes is needed.
-fn context(action: &Action, cwd: &Path) -> Value {
+/// The head commit (40-hex) and base of a `gh pr view` answer.
+fn merge_pin(pr: &Value) -> Option<(String, String)> {
+    let head = pr.get("headRefOid").and_then(Value::as_str).filter(|h| is_hex_sha(h))?;
+    let base = pr.get("baseRefName").and_then(Value::as_str).filter(|b| !b.is_empty())?;
+    Some((head.to_string(), base.to_string()))
+}
+
+fn context(action: &Action, cwd: &Path) -> (Value, Option<Pin>) {
     let gate = production_gate(action, cwd);
     let (production, refused) = match &gate {
         Ok(p) => (p.clone(), None),
@@ -1082,8 +1156,13 @@ fn context(action: &Action, cwd: &Path) -> Value {
             Err(e) => json!({ "error": e }),
         }
     };
+    let mut pin = None;
     let extra = match action {
-        Action::MergePr { number, .. } => pr_info(*number),
+        Action::MergePr { number, .. } => {
+            let info = pr_info(*number);
+            pin = info.get("pr").and_then(merge_pin).map(|(head, base)| Pin::Merge { head, base });
+            info
+        }
         Action::RerunChecks { pr: Some(n), .. } => pr_info(*n),
         Action::RerunChecks { run: Some(id), .. } => match &forge {
             Ok(f) => json!({ "run": f.json(cwd, &Op::RunView(*id)).unwrap_or_else(|e| json!({ "error": e })) }),
@@ -1091,7 +1170,10 @@ fn context(action: &Action, cwd: &Path) -> Value {
         },
         Action::RerunChecks { .. } => json!({}),
         Action::OpenPr { shape } => match pr_plan(*shape, cwd) {
-            Ok(plan) => json!({ "prPlan": plan }),
+            Ok(plan) => {
+                pin = Some(Pin::Plan(plan.clone()));
+                json!({ "prPlan": plan })
+            }
             Err(_) => json!({}),
         },
         Action::PushBranch { branch } => {
@@ -1105,7 +1187,7 @@ fn context(action: &Action, cwd: &Path) -> Value {
     if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
         o.extend(e.clone());
     }
-    out
+    (out, pin)
 }
 
 // ---- Tauri commands --------------------------------------------------------------------
@@ -1123,7 +1205,9 @@ pub fn host_requests_subscribe(hr: State<'_, Shared>, on_event: Channel<HostEven
 #[tauri::command(async)]
 pub fn host_request_context(hr: State<'_, Shared>, id: String) -> Result<Value, String> {
     let p = hr.get(&id)?;
-    Ok(context(&p.action, Path::new(&p.req.cwd)))
+    let (ctx, pin) = context(&p.action, Path::new(&p.req.cwd));
+    hr.pin_once(&id, pin);
+    Ok(ctx)
 }
 
 /// The PR's diff (merge-pr, or rerun-checks of a PR) or the commits a push would send.
@@ -1135,12 +1219,12 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
         Action::MergePr { number, .. } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(&cwd, &Op::PrDiff(*number)),
         Action::PushBranch { branch: Some(b) } => {
             let upstream = gitops::git(&cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).map(|s| s.trim().to_string()).unwrap_or_else(|_| format!("origin/{b}"));
-            gitops::git(&cwd, &["diff", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
+            gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
         }
         Action::OpenPr { shape } => {
             let plan = pr_plan(*shape, &cwd)?;
             let head = plan.push_sha.clone().unwrap_or_else(|| format!("refs/remotes/origin/{}", plan.head));
-            gitops::git(&cwd, &["diff", "--stat", &format!("refs/remotes/origin/{}...{head}", plan.base), "--"])
+            gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", &format!("refs/remotes/origin/{}...{head}", plan.base), "--"])
         }
         _ => Err("No diff for this request".into()),
     }
@@ -1284,6 +1368,38 @@ mod tests {
     }
 
     #[test]
+    fn write_atomic_does_not_follow_a_planted_symlink() {
+        let d = test_dir("symlink");
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let target = d.join("x.response.json");
+        let tmp = target.with_extension(format!("tmp-{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+        write_atomic(&target, b"{}").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn merge_pin_reads_head_and_base() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(merge_pin(&json!({ "headRefOid": oid, "baseRefName": "main" })), Some((oid.to_string(), "main".to_string())));
+        assert_eq!(merge_pin(&json!({ "headRefOid": "--admin", "baseRefName": "main" })), None);
+        assert_eq!(merge_pin(&json!({ "headRefOid": oid })), None);
+    }
+
+    #[test]
+    fn merge_gate_needs_yes_for_main_and_refuses_forks() {
+        let pr = |base: &str, cross: Value| json!({ "baseRefName": base, "headRefName": "staging", "isCrossRepository": cross, "headRepositoryOwner": { "login": "mallory" } });
+        assert_eq!(merge_gate(1, &pr("staging", json!(true))).unwrap(), None, "a fork PR into staging is an ordinary card");
+        assert!(merge_gate(1, &pr("main", json!(false))).unwrap().unwrap().contains("targets main"));
+        let e = merge_gate(1, &pr("main", json!(true))).unwrap_err();
+        assert!(e.contains("mallory:staging") && e.starts_with("Refused"), "{e}");
+        assert!(merge_gate(1, &pr("release", Value::Null)).is_err(), "unknown origin fails closed");
+    }
+
+    #[test]
     fn open_pr_plans_from_local_refs_only() {
         let (cwd, g) = flow_repo();
         let base = g(&["rev-parse", "HEAD"]);
@@ -1302,7 +1418,7 @@ mod tests {
         g(&["update-ref", "refs/remotes/origin/staging", &s2]);
         let p = pr_plan(PrShape::Promote, &cwd).unwrap();
         assert_eq!((p.base.as_str(), p.head.as_str(), p.title.as_str(), p.push_sha.as_deref()), ("main", "staging", "Promote staging to main", None));
-        assert!(p.body.contains("(2 commit(s))") && p.body.contains("merge commit") && p.body.contains("`two`; --admin"));
+        assert!(p.body.contains("(2 commit(s))") && p.body.contains("merge commit") && p.body.contains("fix: $(curl x) 'two'; --admin") && p.body.contains("```text\n"));
         assert!(!p.body.to_lowercase().contains("co-authored") && !p.body.contains("Generated with"));
         assert_eq!(p.log.lines().count(), 2);
         assert_eq!(production_gate(&Action::OpenPr { shape: PrShape::Promote }, &cwd).unwrap(), None, "opening a PR needs no typed yes");
@@ -1316,6 +1432,12 @@ mod tests {
         assert_eq!(p.head, format!("chore/sync-staging-main-{}", &m[..7]));
         assert!(valid_branch(&p.head) && branchrule::production_branch(&cwd, &p.head).is_none());
         assert_eq!(p.title, format!("chore: sync staging with main ({})", &m[..7]));
+
+        // The card pinned this plan: once origin/main moves, Approve refuses before any push.
+        let m2 = mk(&g, "another main commit");
+        g(&["update-ref", "refs/remotes/origin/main", &m2]);
+        let e = execute(&Action::OpenPr { shape: PrShape::StagingSync }, &cwd, Some(&Pin::Plan(p))).unwrap_err();
+        assert!(e.contains("moved since the card"), "{e}");
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
