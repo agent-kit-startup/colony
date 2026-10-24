@@ -57,6 +57,9 @@ pub enum Op {
     Runs { branch: Option<String> },
     RunView(u64),
     RerunFailed(u64),
+    /// Open a pull request. Colony builds every field (hostreq `pr_plan`); never `--web`,
+    /// `--fill` or a draft toggle from the requester.
+    PrCreate { base: String, head: String, title: String, body: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +105,7 @@ impl Provider {
                 }
                 Op::RunView(id) => v(&["run", "view", &id.to_string(), "--json", RUN_FIELDS]),
                 Op::RerunFailed(id) => v(&["run", "rerun", &id.to_string(), "--failed"]),
+                Op::PrCreate { base, head, title, body } => v(&["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body]),
             },
         }
     }
@@ -260,6 +264,13 @@ mod tests {
         assert_eq!(Provider::GitHub.argv(&Op::RerunFailed(99)), ["run", "rerun", "99", "--failed"]);
         let r = Provider::GitHub.argv(&Op::Runs { branch: Some("feat/x".into()) });
         assert_eq!(&r[r.len() - 2..], ["--branch", "feat/x"]);
+    }
+
+    #[test]
+    fn pr_create_argv_is_fixed_fields_only() {
+        let a = Provider::GitHub.argv(&Op::PrCreate { base: "main".into(), head: "staging".into(), title: "T; rm -rf /".into(), body: "$(x)".into() });
+        assert_eq!(a, ["pr", "create", "--base", "main", "--head", "staging", "--title", "T; rm -rf /", "--body", "$(x)"]);
+        assert!(!a.iter().any(|x| x == "--web" || x == "--fill" || x == "--draft"));
     }
 
     #[test]
