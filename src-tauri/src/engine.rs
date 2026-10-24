@@ -34,6 +34,14 @@ use crate::{tools, AppState};
 
 /// Driver events protocol major this Colony build speaks (kit `DRIVER_PROTOCOL_VERSION`).
 pub const DRIVER_PROTOCOL_MAJOR: u64 = 1;
+/// Driver protocol range the engine updater installs (semver requirement): the protocol this
+/// Colony was built and tested against. `Install/Update engine` picks the newest kit release
+/// inside it, never a blind `releases/latest`, and refuses an engine outside it. Running an
+/// engine that is already there (COLONY_ENGINE, PATH, older managed installs) only needs
+/// the major (`check_range`). Raise it with the Colony release that supports a newer protocol.
+pub const ENGINE_PROTOCOL_RANGE: &str = "~1.2";
+/// How many of the newest kit releases the updater looks at for one inside the range.
+const RELEASE_SCAN: usize = 10;
 /// Mission Control snapshot schema major the native views read (`dashboardDataVersion`).
 pub const DASHBOARD_DATA_MAJOR: u64 = 1;
 /// Where kit releases (and their engine artifacts) are published.
@@ -141,7 +149,79 @@ pub fn check_range(m: &Manifest) -> Result<(), String> {
 }
 
 pub fn supported_text() -> String {
-    format!("driver protocol {DRIVER_PROTOCOL_MAJOR}.x, Mission Control data {DASHBOARD_DATA_MAJOR}.x")
+    format!(
+        "driver protocol {DRIVER_PROTOCOL_MAJOR}.x, Mission Control data {DASHBOARD_DATA_MAJOR}.x; installs engines with driver protocol {}",
+        protocol_range_text()
+    )
+}
+
+/// `~1.2` as people read it: `1.2.x`.
+pub fn protocol_range_text() -> String {
+    ENGINE_PROTOCOL_RANGE.strip_prefix('~').map(|v| format!("{v}.x")).unwrap_or_else(|| ENGINE_PROTOCOL_RANGE.to_string())
+}
+
+fn protocol_req() -> VersionReq {
+    VersionReq::parse(ENGINE_PROTOCOL_RANGE).expect("ENGINE_PROTOCOL_RANGE is a semver requirement")
+}
+
+/// Whether the updater may install an engine speaking `protocol`.
+pub fn protocol_installable(protocol: &str) -> bool {
+    Version::parse(protocol.trim()).map(|v| protocol_req().matches(&v)).unwrap_or(false)
+}
+
+/// The updater's gate: the engine's driver protocol must be inside ENGINE_PROTOCOL_RANGE.
+pub fn check_install_range(m: &Manifest) -> Result<(), String> {
+    if protocol_installable(&m.driver_protocol) {
+        return Ok(());
+    }
+    let newer = Version::parse(m.driver_protocol.trim()).map(|v| protocol_req().comparators.iter().all(|c| v.major > c.major || v.minor > c.minor.unwrap_or(0))).unwrap_or(false);
+    Err(format!(
+        "engine {} speaks driver protocol {}; this Colony installs engines with driver protocol {} ({})",
+        m.version,
+        m.driver_protocol,
+        protocol_range_text(),
+        if newer { "update Colony first, or install an older engine version" } else { "install a newer engine version" }
+    ))
+}
+
+/// Stable kit release versions from a GitHub `releases` list, newest first (drafts,
+/// prereleases and tags that are not `v<semver>` without a pre-release suffix are skipped).
+pub fn release_versions(json: &str) -> Result<Vec<Version>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("the releases list is not JSON: {e}"))?;
+    let list = v.as_array().ok_or("the releases list is not an array")?;
+    let mut out: Vec<Version> = list
+        .iter()
+        .filter(|r| !r.get("draft").and_then(|d| d.as_bool()).unwrap_or(false) && !r.get("prerelease").and_then(|d| d.as_bool()).unwrap_or(false))
+        .filter_map(|r| r.get("tag_name")?.as_str().and_then(|t| Version::parse(t.trim_start_matches('v')).ok()))
+        .filter(|v| v.pre.is_empty())
+        .collect();
+    out.sort_by(|a, b| b.cmp(a));
+    out.dedup();
+    Ok(out)
+}
+
+/// The newest of `versions` (newest first) whose published `engine.json` names a driver
+/// protocol inside the range. `protocol_of` returns None when a release has no side
+/// `engine.json` (kit releases before it was published): such a release is taken as it is
+/// and the manifest inside the tarball decides after the download.
+pub fn pick_in_range(versions: &[Version], mut protocol_of: impl FnMut(&Version) -> Option<String>) -> Result<String, String> {
+    let mut skipped = Vec::new();
+    for v in versions.iter().take(RELEASE_SCAN) {
+        match protocol_of(v) {
+            None => return Ok(v.to_string()),
+            Some(p) if protocol_installable(&p) => return Ok(v.to_string()),
+            Some(p) => skipped.push(format!("{v} (driver protocol {p})")),
+        }
+    }
+    if versions.is_empty() {
+        return Err("no kit release found".into());
+    }
+    Err(format!(
+        "no kit release among the newest {} speaks driver protocol {} (skipped: {}); update Colony",
+        versions.len().min(RELEASE_SCAN),
+        protocol_range_text(),
+        skipped.join(", ")
+    ))
 }
 
 // ---- layouts ---------------------------------------------------------------------------
@@ -552,12 +632,18 @@ fn download_base() -> String {
         .to_string()
 }
 
-fn latest_version(tmp: &Path) -> Result<String, String> {
-    let out = tmp.join("latest.json");
-    curl(&format!("https://api.github.com/repos/{}/releases/latest", release_repo()), &out)?;
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let tag = v.get("tag_name").and_then(|t| t.as_str()).ok_or("the latest release has no tag")?;
-    Ok(tag.trim_start_matches('v').to_string())
+/// The newest kit release inside ENGINE_PROTOCOL_RANGE: one GET of the release list, then
+/// the small `engine.json` of each candidate, newest first, until one fits.
+fn latest_version(tmp: &Path, base: &str) -> Result<String, String> {
+    let out = tmp.join("releases.json");
+    curl(&format!("https://api.github.com/repos/{}/releases?per_page=30", release_repo()), &out)?;
+    let versions = release_versions(&std::fs::read_to_string(&out).map_err(|e| e.to_string())?)?;
+    pick_in_range(&versions, |v| {
+        let f = tmp.join(format!("engine-{v}.json"));
+        curl(&format!("{base}/v{v}/engine.json"), &f).ok()?;
+        let m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&f).ok()?).ok()?;
+        m.get("driverProtocol")?.as_str().map(String::from)
+    })
 }
 
 #[derive(Serialize, Debug)]
@@ -595,6 +681,7 @@ pub fn install_engine(engines: &Path, base: &str, version: &str) -> Result<Insta
             return Err(format!("engine.json says {}, expected {version}", manifest.version));
         }
         check_range(&manifest)?;
+        check_install_range(&manifest)?;
         detect_layout(&unpacked)?;
         let target = engines.join(version);
         if target.exists() {
@@ -795,7 +882,7 @@ pub async fn engine_install(version: Option<String>) -> Result<InstallReport, St
                 std::fs::create_dir_all(&engines).map_err(|e| e.to_string())?;
                 let tmp = engines.join(format!(".tmp-{}", unique()));
                 std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-                let v = latest_version(&tmp);
+                let v = latest_version(&tmp, &download_base());
                 let _ = std::fs::remove_dir_all(&tmp);
                 v?
             }
@@ -1032,8 +1119,10 @@ mod tests {
     fn install_verify_switch_and_roll_back() {
         let root = scratch("install");
         let base = root.join("releases");
-        publish(&base, &manifest("6.3.0", "1.1.0", Some("1.6.0")));
-        publish(&base, &manifest("6.4.0", "1.1.0", Some("1.6.0")));
+        publish(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
+        publish(&base, &manifest("6.4.0", "1.2.1", Some("1.6.0")));
+        publish(&base, &manifest("6.5.0", "1.3.0", Some("1.6.0")));
+        publish(&base, &manifest("6.1.0", "1.1.0", Some("1.6.0")));
         publish(&base, &manifest("7.0.0", "2.0.0", Some("1.6.0")));
         let url = format!("file://{}", base.display());
         let engines = root.join("data/engine");
@@ -1048,6 +1137,12 @@ mod tests {
         // Out of range: refused before anything moves.
         assert!(install_engine(&engines, &url, "7.0.0").unwrap_err().contains("update Colony"));
         assert!(!engines.join("7.0.0").exists());
+        // Same major, outside the updater range: refused with what to do instead.
+        let e = install_engine(&engines, &url, "6.5.0").unwrap_err();
+        assert!(e.contains("driver protocol 1.3.0") && e.contains("1.2.x") && e.contains("update Colony first"), "{e}");
+        let e = install_engine(&engines, &url, "6.1.0").unwrap_err();
+        assert!(e.contains("install a newer engine version"), "{e}");
+        assert!(!engines.join("6.5.0").exists() && !engines.join("6.1.0").exists());
         // Tampered artifact: refused on the checksum.
         let tampered = base.join("v6.4.0/SHA256SUMS");
         fs::write(&tampered, format!("{}  agent-kit-engine-6.4.0.tar.gz\n", "0".repeat(64))).unwrap();
@@ -1104,11 +1199,39 @@ mod tests {
     }
 
     #[test]
+    fn updater_range_and_release_pick() {
+        assert_eq!(protocol_range_text(), "1.2.x");
+        assert!(protocol_installable("1.2.0") && protocol_installable("1.2.7"));
+        assert!(!protocol_installable("1.1.0") && !protocol_installable("1.3.0") && !protocol_installable("2.2.0") && !protocol_installable("x"));
+
+        let json = r#"[
+            {"tag_name":"v6.11.0-rc.1","draft":false,"prerelease":true},
+            {"tag_name":"v6.10.0","draft":false,"prerelease":false},
+            {"tag_name":"v6.12.0","draft":true,"prerelease":false},
+            {"tag_name":"v6.9.0","draft":false,"prerelease":false},
+            {"tag_name":"landing-2026","draft":false,"prerelease":false},
+            {"tag_name":"v6.8.0","draft":false,"prerelease":false}
+        ]"#;
+        let vs = release_versions(json).unwrap();
+        assert_eq!(vs.iter().map(|v| v.to_string()).collect::<Vec<_>>(), ["6.10.0", "6.9.0", "6.8.0"]);
+
+        // Newest inside the range wins; a newer release on 1.3 is skipped.
+        let proto = |v: &Version| Some(if v.minor >= 10 { "1.3.0" } else { "1.2.0" }.to_string());
+        assert_eq!(pick_in_range(&vs, proto).unwrap(), "6.9.0");
+        // No side engine.json (older kit releases): taken, the tarball manifest decides.
+        assert_eq!(pick_in_range(&vs, |_| None).unwrap(), "6.10.0");
+        // Nothing fits: a clear message naming what was skipped.
+        let e = pick_in_range(&vs, |_| Some("2.0.0".into())).unwrap_err();
+        assert!(e.contains("1.2.x") && e.contains("6.10.0 (driver protocol 2.0.0)") && e.contains("update Colony"), "{e}");
+        assert!(pick_in_range(&[], |_| None).is_err());
+    }
+
+    #[test]
     fn prune_keeps_current_and_previous() {
         let root = scratch("prune");
         let base = root.join("releases");
         for v in ["6.3.0", "6.4.0", "6.5.0"] {
-            publish(&base, &manifest(v, "1.1.0", Some("1.6.0")));
+            publish(&base, &manifest(v, "1.2.0", Some("1.6.0")));
         }
         let url = format!("file://{}", base.display());
         let engines = root.join("engine");
