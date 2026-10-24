@@ -199,6 +199,17 @@ export function empty(text: string): HTMLElement {
   return h("div", { class: "empty dim" }, text);
 }
 
+/** Check status chip (the Health card's ✓ / ✕ chips): one look for every check list. */
+export type CheckTone = "ok" | "todo" | "manual" | "fail";
+const CHECK_CHIP: Record<CheckTone, [string, string]> = { ok: ["✓", "chip-done"], todo: ["○", "chip-gate"], manual: ["✎", "chip-parked"], fail: ["✕", "chip-failed"] };
+export function checkChip(label: string, tone: CheckTone, title = ""): HTMLElement {
+  const [mark, cls] = CHECK_CHIP[tone];
+  const el = chip(`${mark} ${label}`, cls);
+  if (title) el.title = title;
+  el.dataset.tone = tone;
+  return el;
+}
+
 /** A byte count as B, KB (one decimal under 10 KB) or MB. */
 export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;

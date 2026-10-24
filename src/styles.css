@@ -385,7 +385,23 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
   /* The hero scrolls inside its cell; its actions stay on the cell's bottom edge. */
   .mission-fold > .hero > .now-actions { position: sticky; bottom: calc(-1 * var(--mc-card-padding)); z-index: 1; margin: 0 0 calc(-1 * var(--mc-card-padding)); padding: var(--mc-space-md) 0 var(--mc-card-padding); background: var(--bg-card); }
   .mission-fold-wait { grid-template-rows: minmax(0, 1fr); grid-template-areas: "now ."; }
+  .mission-fold-first-run { grid-template-areas: "now attention" "now flight"; }
 }
+/* First run (src/cockpit.ts firstRunCard): the kit's readiness checks as a mission list. */
+.first-run-screen { max-width: 760px; margin: 0 auto; width: 100%; }
+.first-run .fr-lead { margin: 0; color: var(--text-secondary); line-height: 1.5; font-size: var(--mc-chrome-subtitle-size); }
+.first-run .fr-facts { display: flex; flex-direction: column; gap: 2px; font-size: var(--mc-chrome-subtitle-size); color: var(--text-secondary); overflow-wrap: anywhere; }
+.first-run .fr-next { font-size: var(--mc-chrome-subtitle-size); color: var(--text-primary); overflow-wrap: anywhere; }
+.fr-missions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.fr-mission { display: flex; align-items: center; gap: var(--mc-space-md); min-width: 0; padding: 5px 6px; border-radius: var(--mc-radius-chrome); }
+.fr-mission.current { background: var(--blue-bg); }
+.fr-mission.done .now-step-marker { border-color: var(--green); background: var(--green-bg); color: var(--green); }
+.fr-mission.current .now-step-marker { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+.fr-mission-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.fr-mission-title { font-size: var(--mc-chrome-subtitle-size); color: var(--text-primary); }
+.fr-mission.done .fr-mission-title { color: var(--text-secondary); }
+.fr-mission-detail { font-size: var(--mc-chrome-meta-size); color: var(--text-muted); }
+.first-run-strip { flex: none; display: flex; align-items: center; gap: var(--mc-space-md); min-width: 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--yellow-bg); font-size: var(--mc-chrome-subtitle-size); }
 /* Run rows drop whole fields as their card narrows, never cut them (kit truncation
    contract): clock first, then the backend, then the kit-sees-it chip. */
 @container (max-width: 520px) { .run-row .run-clock { display: none; } }

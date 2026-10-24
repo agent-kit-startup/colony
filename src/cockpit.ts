@@ -11,10 +11,11 @@ import { pendingGates } from "./gates";
 import { icon, type IconKind } from "./icons";
 import { gateCard, triageChip } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
+import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "./readiness";
 import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { inlineMd, plainMd, prose } from "./transcript";
-import { ago, btn, bytes, card, cardHeader, chip, empty, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
+import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
 
 export interface CockpitHost {
   status(msg: string): void;
@@ -32,6 +33,8 @@ export interface CockpitHost {
   copy(text: string, what: string): void;
   /** The opened folder (launches in other folders do not move its Mission view). */
   workspaceRoot(): string;
+  /** `agent-kit install` in a bottom terminal tab, after a confirmation (it asks its own questions there). */
+  installKit(): Promise<unknown>;
 }
 
 /** Base: a scrollable center view that re-renders on snapshot or run changes while shown. */
@@ -303,6 +306,120 @@ function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string):
     : `Held by an out-of-queue run: HANDOFF is on ${planName(hold.plan)}, not on the queue cursor ${planName(cursorPlan)}.`;
 }
 
+// ---- First run -----------------------------------------------------------------------
+/** Readiness status -> check chip tone and label (readiness.json status vocabulary). */
+const CHECK_STATUS: Record<ReadinessCheck["status"], [CheckTone, string]> = {
+  ready: ["ok", "ready"],
+  auto_fix: ["todo", "safe fix"],
+  needs_choice: ["todo", "needs your choice"],
+  manual: ["manual", "manual"],
+  blocked: ["fail", "blocked"],
+};
+
+const ONBOARD = "/agent-kit-onboard";
+const ONBOARD_WHY = "/agent-kit-onboard runs agent-kit doctor, applies only safe local fixes and asks you before anything else (CI/CD, hooks, remotes and scaffold always wait for your answer).";
+const KIT_INSTALL = "npx @dadado/agent-kit-cli@latest install";
+
+/** First-run state of the opened folder: what the Mission view puts first. */
+type FirstRun = { kind: "no-kit" } | { kind: "no-report"; error: string } | { kind: "unresolved"; r: Readiness };
+
+function firstRunState(): FirstRun | null {
+  if (!readiness.loaded) return null;
+  if (!readiness.kit) return { kind: "no-kit" };
+  if (!readiness.report) return { kind: "no-report", error: readiness.error };
+  return readiness.report.unresolved.length ? { kind: "unresolved", r: readiness.report } : null;
+}
+
+/** One mission of the list: marker, title (and detail), status chip; `current` is the next action. */
+function missionRow(o: { title: string; detail?: string; tone: CheckTone; status: string; state: "done" | "current" | "pending"; tip?: string }): HTMLElement {
+  return h(
+    "li",
+    { class: `fr-mission ${o.state}`, title: o.tip ?? [o.title, o.detail].filter(Boolean).join("\n") },
+    h("span", { class: "now-step-marker", "aria-hidden": "true" }, o.state === "done" ? "✓" : o.state === "current" ? "▶" : "○"),
+    h("span", { class: "fr-mission-text" }, h("span", { class: "fr-mission-title ellipsis" }, o.title), ...(o.detail ? [h("span", { class: "fr-mission-detail ellipsis" }, o.detail)] : [])),
+    checkChip(o.status, o.tone),
+  );
+}
+
+const onboardBtn = (host: CockpitHost, cls = "primary") =>
+  iconBtn("play", `Ask agent: ${ONBOARD}`, () => void host.interactive(ONBOARD, ONBOARD_WHY), { class: cls, "data-act": "onboard", title: `Opens your agent interactively with ${ONBOARD}` });
+
+/**
+ * The welcome and readiness screen: the kit's onboarding as a mission list, in the order of
+ * /agent-kit-onboard's first message (Repository preparation: N of M essential checks
+ * ready / Detected / Fixed / Next: one action). Colony only reads readiness.json and opens
+ * the agent with /agent-kit-onboard; it applies nothing itself.
+ */
+function firstRunCard(fr: FirstRun, host: CockpitHost): HTMLElement {
+  const recheck = iconBtn("refresh", "Check again", () => void readiness.load(), { class: "link", "data-act": "readiness-recheck", title: `Read ${READINESS_FILE} again (also read on every Mission Control update)` });
+  const steps = (install: "done" | "current", onboard: "current" | "pending") => [
+    missionRow({ title: "Install Agent Kit", detail: install === "done" ? "" : KIT_INSTALL, tone: install === "done" ? "ok" : "todo", status: install === "done" ? "ready" : "next", state: install }),
+    missionRow({ title: "Prepare the repository", detail: `${ONBOARD}: readiness checks, purpose, profile`, tone: "todo", status: onboard === "current" ? "next" : "after install", state: onboard }),
+    missionRow({ title: "Start a first plan", detail: "/start-project", tone: "todo", status: "after onboarding", state: "pending" }),
+  ];
+  let body: Node[];
+  let aside: Node[] = [recheck];
+  if (fr.kind === "no-kit") {
+    body = [
+      h("h2", { class: "now-plan-name" }, "This folder has no Agent Kit yet"),
+      h("p", { class: "fr-lead" }, "Colony's missions come from the kit: plans, HANDOFF and the repository readiness checks. Three steps lead from here to a first plan."),
+      h("ol", { class: "fr-missions", "aria-label": "First-run missions" }, ...steps("current", "pending")),
+      h("div", { class: "fr-next" }, h("strong", {}, "Next: "), "install the kit in a terminal tab; the installer asks its own questions there."),
+      h(
+        "div",
+        { class: "actions now-actions" },
+        iconBtn("terminals", "Install in a terminal", () => void host.installKit(), { class: "primary", "data-act": "install-kit", title: `${KIT_INSTALL} in a terminal tab of this folder, after a confirmation` }),
+        btn("Copy command", () => host.copy(KIT_INSTALL, "the install command"), { class: "status-bar-btn" }),
+      ),
+    ];
+  } else if (fr.kind === "no-report") {
+    body = [
+      h("h2", { class: "now-plan-name" }, "Prepare the repository"),
+      h("p", { class: "fr-lead" }, fr.error ? `${READINESS_FILE} could not be used: ${fr.error}` : `No readiness report yet. ${ONBOARD} checks the folder (agent-kit doctor), writes ${READINESS_FILE} and walks the essential checks with you; they show here as missions.`),
+      h("ol", { class: "fr-missions", "aria-label": "First-run missions" }, ...steps("done", "current")),
+      h("div", { class: "fr-next" }, h("strong", {}, "Next: "), `run ${ONBOARD} in your agent.`),
+      h("div", { class: "actions now-actions" }, onboardBtn(host)),
+    ];
+  } else {
+    const { r } = fr;
+    const ready = r.essentials.length - r.unresolved.length;
+    const first = r.unresolved[0];
+    aside = [pill(`${ready} of ${r.essentials.length} ready`, "awaiting", "⏯"), recheck];
+    const rows = r.essentials.map((c) => {
+      const [tone, label] = CHECK_STATUS[c.status];
+      return missionRow({ title: c.title, detail: c.status === "ready" ? "" : c.next, tone, status: label, state: c.status === "ready" ? "done" : c === first ? "current" : "pending", tip: `${c.title} · ${c.id} (${c.pillar})${c.next ? `\n${c.next}` : ""}` });
+    });
+    body = [
+      h("h2", { class: "now-plan-name" }, `Repository preparation: ${ready} of ${r.essentials.length} essential checks ready.`),
+      stepbar(ready, r.essentials.length, true, false),
+      h("div", { class: "fr-facts" }, h("div", {}, h("strong", {}, "Detected: "), r.detected.length ? r.detected.join(" · ") : "nothing reported"), h("div", { title: r.fixed.join("\n") }, h("strong", {}, "Fixed: "), !r.fixed.length ? "none" : r.fixed.length <= 2 ? r.fixed.join(" · ") : `${r.fixed.length} safe local fixes applied`)),
+      h("ol", { class: "fr-missions", "aria-label": "Essential readiness checks" }, ...rows),
+      h("div", { class: "fr-next clamp-2", title: first.next || first.title }, h("strong", {}, "Next: "), `${first.title}${first.next ? ` — ${first.next}` : ""}`),
+      h(
+        "div",
+        { class: "actions now-actions" },
+        onboardBtn(host),
+        btn("Open readiness.json", () => host.openRepoFile(READINESS_FILE), { class: "status-bar-btn" }),
+        ...(r.optionalOpen ? [btn(`${r.optionalOpen} optional check${r.optionalOpen === 1 ? "" : "s"} in the Inbox`, () => host.showTab("inbox"), { class: "link", title: "Non-essential checks reach the Inbox as attention items" })] : []),
+      ),
+    ];
+  }
+  const c = h("section", { class: "hero card first-run" }, cardHeader({ title: "First run", icon: "checklist", aside }), ...body);
+  c.dataset.firstRun = fr.kind;
+  c.dataset.keepScroll = "first-run";
+  return c;
+}
+
+/** With an active plan the hero stays: the open essentials shrink to one line above it. */
+function firstRunStrip(fr: FirstRun, host: CockpitHost): HTMLElement {
+  const r = fr.kind === "unresolved" ? fr.r : null;
+  const first = r?.unresolved[0];
+  const text = r && first ? `Repository preparation: ${r.essentials.length - r.unresolved.length} of ${r.essentials.length} essential checks ready. Next: ${first.title}${first.next ? ` — ${first.next}` : ""}` : `No readiness report yet: ${ONBOARD} prepares the repository.`;
+  const s = h("section", { class: "first-run-strip", title: text }, pill("First run", "awaiting", "⏯"), h("span", { class: "grow ellipsis" }, text), onboardBtn(host, "status-bar-btn"));
+  s.dataset.firstRun = fr.kind;
+  return s;
+}
+
 // ---- Mission -------------------------------------------------------------------------
 /**
  * Mission home, one fold like the dashboard overview (dashboard.html, min-width 1024px):
@@ -317,16 +434,33 @@ export class MissionView extends View {
     launches.on(() => this.invalidate());
     // The engine shows in the hero meta row; the run dialog changes it.
     controls.backend.addEventListener("change", () => this.invalidate());
+    readiness.on(() => this.invalidate());
+    // /agent-kit-onboard rewrites readiness.json; the server's next snapshot is the cue.
+    snapshot.on((why) => why === "data" && void readiness.load(3000));
   }
 
   protected render(): Node[] {
     // Open gates are pinned above everything else: they block a run until answered.
     const out: Node[] = [...this.gateStrip()];
-    if (!snapshot.data) {
-      out.push(h("div", { class: "mission-fold mission-fold-wait" }, this.hero(), ...(this.noData() ?? [])));
+    // First run (no kit, no readiness report, or open essential checks): the readiness
+    // missions take the hero's place; without the kit they are the whole view. An active
+    // plan keeps its hero and the missions shrink to a strip above the fold.
+    const fr = firstRunState();
+    if (fr?.kind === "no-kit") {
+      out.push(h("div", { class: "first-run-screen" }, firstRunCard(fr, this.host)));
       return out;
     }
-    out.push(h("div", { class: "mission-fold" }, this.hero(), h("div", { class: "mission-stack" }, this.needsYou(), this.runsCard()), this.flightCard(), this.queueCard()));
+    const keepHero = !!fr && !!(snapshot.activePlanFile || launches.pending(this.host.workspaceRoot()));
+    if (fr && keepHero) out.push(firstRunStrip(fr, this.host));
+    const lead = fr && !keepHero ? firstRunCard(fr, this.host) : this.hero();
+    if (!snapshot.data) {
+      out.push(h("div", { class: "mission-fold mission-fold-wait" }, lead, ...(this.noData() ?? [])));
+      return out;
+    }
+    // First run without a plan: the missions take the whole left column; a fresh folder
+    // has no queue, so the Queue card waits until there is a plan.
+    if (fr && !keepHero) out.push(h("div", { class: "mission-fold mission-fold-first-run" }, lead, h("div", { class: "mission-stack" }, this.needsYou(), this.runsCard()), this.flightCard()));
+    else out.push(h("div", { class: "mission-fold" }, lead, h("div", { class: "mission-stack" }, this.needsYou(), this.runsCard()), this.flightCard(), this.queueCard()));
     return out;
   }
 
@@ -558,7 +692,7 @@ export class ActivityView extends View {
 
   private healthCard(): HTMLElement {
     const checks = Array.isArray(snapshot.health.checks) ? snapshot.health.checks : [];
-    return card("Health", ...(checks.length ? [h("div", { class: "chips" }, ...checks.map((c: J) => chip(`${c.ok ? "✓" : "✕"} ${str(c.label || c.id)}`, c.ok ? "chip-done" : "chip-failed")))] : [empty("No health checks in the snapshot.")]));
+    return card("Health", ...(checks.length ? [h("div", { class: "chips" }, ...checks.map((c: J) => checkChip(str(c.label || c.id), c.ok ? "ok" : "fail")))] : [empty("No health checks in the snapshot.")]));
   }
 }
 

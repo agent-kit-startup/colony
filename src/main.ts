@@ -23,6 +23,7 @@ import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
 import { CommandPalette } from "./palette";
+import { readiness } from "./readiness";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
@@ -552,6 +553,15 @@ const host: CockpitHost = {
     void copyText(text).then((ok) => status(ok ? `Copied ${what}` : `Could not copy ${what}`));
   },
   workspaceRoot: () => workspace?.root ?? "",
+  installKit: async () => {
+    if (!workspace) return status("Open a folder first");
+    const argv = ["npx", "@dadado/agent-kit-cli@latest", "install"];
+    const ok = await confirmAction(`Run ${argv.join(" ")} in ${workspace.name}? It writes the kit's files (.cursor/, AGENTS.md, ...) into this folder and asks its own questions in the terminal tab.`, "Install Agent Kit");
+    if (!ok) return status("Agent Kit install not started");
+    toggleTerminal(true);
+    await terminals.create(argv, "agent-kit install");
+    status("Agent Kit install runs in the terminal below; Mission lists the readiness checks once it is done");
+  },
 };
 
 
@@ -791,6 +801,8 @@ snapshot.on((why) => {
   if (why === "data") renderTabs();
 });
 setInterval(renderFeed, 5000);
+// Back from the agent or a terminal elsewhere: the readiness report may have changed.
+window.addEventListener("focus", () => void readiness.load(2000));
 
 // ---- quick open ------------------------------------------------------------------------
 let quickFiles: string[] = [];
@@ -921,6 +933,10 @@ async function openWorkspace(path: string) {
   resuming.clear();
   chats.reset();
   void chats.refresh();
+  // The first-run missions (no kit, readiness checks) render from the folder's own files,
+  // before and without the Mission Control server.
+  readiness.reset(workspace.root, workspace.hasKit);
+  void readiness.load();
   mcUrl = "";
   mcOrigin = "";
   mcFrame.removeAttribute("src");
@@ -936,7 +952,6 @@ async function openWorkspace(path: string) {
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
-  if (!workspace.hasKit) status("No Agent Kit in this folder: Mission Control shows git and repo data only (agent-kit install adds plans and HANDOFF)");
   $("st-mc").textContent = "Mission Control: starting…";
   try {
     const mc = await api.dashboardStart();
