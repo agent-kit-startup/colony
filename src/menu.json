@@ -1,0 +1,54 @@
+{
+  "$comment": "The native menu bar (src-tauri/src/menu.rs builds it) and the More menu run the same actions: each id here is a key of the action map in src/main.ts (runAction). No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "menus": [
+    {
+      "label": "File",
+      "items": [
+        { "id": "open-folder", "label": "Open folder…" },
+        { "id": "run-elsewhere", "label": "Run plan in another folder…" },
+        { "separator": true },
+        { "id": "open-in-editor", "label": "Open in editor" },
+        { "id": "settings", "label": "Settings (settings.json)" },
+        { "separator": true },
+        { "id": "close-window", "label": "Close window" }
+      ]
+    },
+    {
+      "label": "View",
+      "items": [
+        { "id": "view:mission", "label": "Mission" },
+        { "id": "view:inbox", "label": "Inbox" },
+        { "id": "view:review", "label": "Review" },
+        { "id": "view:git", "label": "Git" },
+        { "id": "view:pipelines", "label": "Pipelines" },
+        { "id": "view:plans", "label": "Plans" },
+        { "id": "view:flight", "label": "Flight Log" },
+        { "id": "view:activity", "label": "Activity" },
+        { "separator": true },
+        { "id": "terminal", "label": "Show or hide the terminal" },
+        { "id": "quick-open", "label": "Go to file…" },
+        { "id": "commands", "label": "Commands…" },
+        { "separator": true },
+        { "id": "web", "label": "Mission Control (web panel)" },
+        { "id": "refresh", "label": "Reload Mission Control data" }
+      ]
+    },
+    {
+      "label": "Run",
+      "items": [
+        { "id": "run-plan", "label": "Run plan…" },
+        { "id": "run-queue", "label": "Run queue…" },
+        { "id": "interactive", "label": "Interactive agent" },
+        { "separator": true },
+        { "id": "new-terminal", "label": "New shell terminal" },
+        { "id": "engine", "label": "Engine…" }
+      ]
+    },
+    {
+      "label": "Help",
+      "items": [
+        { "id": "about", "label": "About Colony…" }
+      ]
+    }
+  ]
+}

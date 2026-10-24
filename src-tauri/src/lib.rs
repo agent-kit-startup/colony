@@ -15,6 +15,7 @@ mod hostreq;
 mod instance;
 mod launch;
 mod mcdata;
+mod menu;
 mod omarchy;
 mod omarchy_shell;
 mod pty;
@@ -288,6 +289,12 @@ pub fn run() {
     let app = appupdate::register(builder)
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
         .manage(host_requests.clone())
+        // The native menu bar: a click hands the item id to the window (src/menu.json).
+        .on_menu_event(|app, event| {
+            if let Err(e) = menu::forward(app, event.id().as_ref()) {
+                eprintln!("colony: menu: {e}");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             instance_subscribe,
@@ -296,6 +303,8 @@ pub fn run() {
             appupdate::app_update_install,
             smoke_log,
             smoke_exit,
+            menu::menu_state,
+            menu::smoke_menu_click,
             workspace::open_workspace,
             workspace::list_dir,
             workspace::read_text_file,
@@ -382,6 +391,7 @@ pub fn run() {
             }
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Colony")
+                .menu(menu::build(app)?)
                 .inner_size(1500.0, 950.0)
                 .min_inner_size(900.0, 600.0)
                 .initialization_script_for_all_frames(&hook)

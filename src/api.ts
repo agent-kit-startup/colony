@@ -14,6 +14,8 @@ export interface StartupInfo {
   smoke: string | null;
   smokeShots: boolean;
 }
+/** One menu of the native menu bar, read back from the window (menu.rs menu_state). */
+export interface MenuState { label: string; items: { id: string; label: string; enabled: boolean }[] }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }
 export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string; engine: string }
@@ -98,6 +100,8 @@ export const api = {
   appUpdateInstall: () => invoke<string>("app_update_install"),
   smokeLog: (line: string) => invoke<void>("smoke_log", { line }),
   smokeExit: () => invoke<void>("smoke_exit"),
+  menuState: () => invoke<MenuState[]>("menu_state"),
+  smokeMenuClick: (id: string) => invoke<void>("smoke_menu_click", { id }),
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   listDir: (path: string) => invoke<Entry[]>("list_dir", { path }),
   listFiles: () => invoke<string[]>("list_files"),
