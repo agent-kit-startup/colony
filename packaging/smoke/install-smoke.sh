@@ -106,4 +106,11 @@ out="$(run sh "$work/install.sh" 2>&1)" && fail "overwrote a foreign launcher"
 [[ "$(cat "$home/.local/bin/colony")" == *mine* ]] || fail "foreign launcher changed"
 ok "does not overwrite a launcher it did not write"
 
+snip="$work/snip-home"
+mkdir -p "$snip"
+out="$(env -i HOME="$snip" PATH="$path" COLONY_DOWNLOAD_BASE="http://example.invalid" sh "$work/install.sh" --omarchy-snippet 2>&1)" || fail "omarchy snippet: $out"
+grep -q '^o.bind("SUPER + SHIFT + I", "Colony", { launch = "colony", focus = "^colony\$" })$' <<<"$out" || fail "omarchy snippet: no o.bind line: $out"
+[[ -z "$(ls -A "$snip")" ]] || fail "omarchy snippet wrote into HOME: $(ls -A "$snip")"
+ok "--omarchy-snippet prints the Omarchy 4 snippet, downloads and writes nothing"
+
 echo "install smoke: $pass checks passed"

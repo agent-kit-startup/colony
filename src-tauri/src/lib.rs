@@ -10,6 +10,8 @@ mod engine;
 mod forge;
 mod gitops;
 mod hostreq;
+#[cfg(unix)]
+mod instance;
 mod launch;
 mod mcdata;
 mod pty;
@@ -35,6 +37,8 @@ pub struct AppState {
     pub mc_feed: std::sync::Arc<mcdata::McFeed>,
     /// `<app config dir>/settings.json`, set once at startup.
     pub settings_path: Mutex<Option<PathBuf>>,
+    /// The single-instance socket this window serves (removed on exit).
+    instance_socket: Mutex<Option<PathBuf>>,
     startup: Mutex<StartupInfo>,
 }
 
@@ -225,6 +229,14 @@ pub fn run() {
     if std::env::args().nth(1).as_deref() == Some("request") {
         std::process::exit(hostreq::cli_main());
     }
+    // Single instance: a running window for this binary and engine takes the request
+    // (no folder, or the folder it has open) and this process ends here.
+    #[cfg(unix)]
+    let instance = match instance::socket_path().map(|p| instance::claim_at(&p, initial_workspace().as_deref())) {
+        Some(instance::Claim::Forwarded) => return,
+        Some(instance::Claim::Primary(listener, path)) => Some((listener, path)),
+        _ => None,
+    };
     // Environment first, before any thread exists.
     scrub_parent_session_env();
     let dmabuf = apply_webkit_env();
@@ -308,6 +320,23 @@ pub fn run() {
         ])
         .setup(move |app| {
             host_requests.start_watcher();
+            #[cfg(unix)]
+            if let Some((listener, path)) = instance {
+                let handle = app.handle().clone();
+                instance::serve(listener, move |folder| {
+                    let open = handle.state::<AppState>().workspace.lock().ok().and_then(|w| w.clone());
+                    let takes = instance::takes(folder.as_deref(), open.as_deref());
+                    if takes {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.unminimize();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    takes
+                });
+                *app.state::<AppState>().instance_socket.lock().expect("instance lock") = Some(path);
+            }
             if let Ok(dir) = app.path().app_config_dir() {
                 *app.state::<AppState>().settings_path.lock().expect("settings lock") = Some(dir.join("settings.json"));
             }
@@ -330,6 +359,9 @@ pub fn run() {
             state.ptys.kill_all();
             state.agents.kill_all();
             handle.state::<hostreq::Shared>().cleanup();
+            if let Some(p) = state.instance_socket.lock().ok().and_then(|mut p| p.take()) {
+                let _ = std::fs::remove_file(p);
+            }
         }
     });
 }
