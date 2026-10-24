@@ -287,7 +287,10 @@ fn response_path(spool: &Path, id: &str) -> PathBuf {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // Never through a planted symlink: drop whatever sits there, then create exclusively
+    // (O_CREAT|O_EXCL does not follow a link; security review 2026-10-24, finding 9).
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
     drop(f);
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
@@ -1362,6 +1365,20 @@ mod tests {
     fn mk(g: &dyn Fn(&[&str]) -> String, msg: &str) -> String {
         g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg]);
         g(&["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn write_atomic_does_not_follow_a_planted_symlink() {
+        let d = test_dir("symlink");
+        let victim = d.join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let target = d.join("x.response.json");
+        let tmp = target.with_extension(format!("tmp-{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+        write_atomic(&target, b"{}").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
