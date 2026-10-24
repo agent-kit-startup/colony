@@ -1,8 +1,11 @@
 # Release: a pushed tag v<version> builds Colony for Linux x86_64, assembles the
 # release files (packaging/make-release.sh), signs SHA256SUMS with the Colony
 # release key (Tauri signer, minisign format; public key in packaging/install.sh)
-# and creates the GitHub release with them. Publishing the files to the public
-# download base of install.sh is a separate, manual step (docs/release.md).
+# and creates the GitHub release with them. The GitHub Releases of this public
+# repository are the download base of install.sh: a plain v<x.y.z> tag becomes the
+# Latest release (what install.sh installs by default); a tag with a pre-release
+# suffix (v0.2.0-rc.1; the three version files must carry it too) stays a prerelease
+# and is only installed with --version.
 name: release
 
 on:
@@ -100,7 +103,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${{ steps.version.outputs.version }}"
+          case "$version" in
+            *-*) kind=--prerelease ;;
+            *) kind=--latest ;;
+          esac
           gh release create "$GITHUB_REF_NAME" release/* \
-            --title "Colony ${{ steps.version.outputs.version }}" \
-            --notes "Linux x86_64. Verify: SHA256SUMS.sig is a minisign signature (base64) by key 9A9BB4349C2248C6; install with packaging/install.sh." \
-            --prerelease
+            --title "Colony $version" \
+            --notes "Linux x86_64. Install: curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | sh (or sh -s -- --version $version). SHA256SUMS.sig is a minisign signature (base64) by key 9A9BB4349C2248C6; install.sh checks it and the sha256 before installing." \
+            "$kind"
