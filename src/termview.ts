@@ -118,6 +118,12 @@ export class TermView {
     }
   }
 
+  /** Columns and rows now, and what the pane fits (equal once fit() ran after a resize). */
+  size(): { cols: number; rows: number; fits: { cols: number; rows: number } | null } {
+    const d = this.fitAddon.proposeDimensions();
+    return { cols: this.term.cols, rows: this.term.rows, fits: d && Number.isFinite(d.cols) && Number.isFinite(d.rows) ? { cols: d.cols, rows: d.rows } : null };
+  }
+
   focus() {
     if (focusPolicy.enabled) this.term.focus();
   }

@@ -78,6 +78,11 @@ export class Terminals {
     return !!document.activeElement && this.host.contains(document.activeElement);
   }
 
+  /** The active terminal's size and what its pane fits (COLONY_SMOKE: fitted after a move). */
+  activeSize() {
+    return this.active?.view.size() ?? null;
+  }
+
   fitActive() {
     if (!this.active || this.host.clientHeight < 20) return;
     this.active.view.fit();

@@ -64,6 +64,7 @@ document.getElementById("app")!.innerHTML = `
     <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh"></button></div>
     <div id="tree"></div>
   </aside>
+  <div id="side-resizer" title="Drag to resize the Explorer"></div>
   <main id="center">
     <div id="tabs" class="tabbar"></div>
     <div id="views">
@@ -79,7 +80,7 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
@@ -390,30 +391,95 @@ function toggleTerminal(force?: boolean) {
   renderRail();
   if (show) {
     if (workspace && terminals.count === 0) void terminals.create();
-    requestAnimationFrame(() => {
-      terminals.fitActive();
-      terminals.focus();
-    });
+    requestAnimationFrame(() => terminals.focus());
   }
-  requestAnimationFrame(() => editors.layout());
+  relayout();
+  layoutChanged();
 }
 
-$("resizer").addEventListener("pointerdown", (down) => {
-  const startY = down.clientY;
-  const startH = $("bottom").getBoundingClientRect().height;
-  const move = (ev: PointerEvent) => {
-    const hgt = Math.max(80, Math.min(window.innerHeight - 200, startH + (startY - ev.clientY)));
-    shell.style.setProperty("--bottom-h", `${hgt}px`);
-  };
-  const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
+// ---- panels: the Explorer and the terminal dock ---------------------------------------
+type Dock = "bottom" | "top" | "side";
+const DOCK_LABEL: Record<Dock, string> = { bottom: "at the bottom", top: "at the top", side: "at the side" };
+const dock = (): Dock => (shell.dataset.dock === "top" || shell.dataset.dock === "side" ? shell.dataset.dock : "bottom");
+/** Set by the layout persistence: called after every panel change. */
+let layoutChanged = () => {};
+
+/** After a panel change: xterm and Monaco measure again (a moved terminal keeps its old
+ *  columns and rows until fit() runs). */
+function relayout() {
+  requestAnimationFrame(() => {
     terminals.fitActive();
-    for (const v of centerTerms.values()) v.fit();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
+    centerTerms.get(activeTab)?.fit();
+    editors.layout();
+  });
+}
+
+function renderDock() {
+  for (const b of $("term-tabs").querySelectorAll<HTMLElement>(".dock-group button")) {
+    const on = b.dataset.dock === dock();
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+}
+
+/** Put the terminal panel at the bottom, the top or the side (and show it). */
+function setDock(d: Dock) {
+  shell.dataset.dock = d;
+  renderDock();
+  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  else {
+    relayout();
+    layoutChanged();
+  }
+  status(`Terminal ${DOCK_LABEL[d]}`);
+}
+
+function toggleExplorer(force?: boolean) {
+  const show = force ?? shell.classList.contains("no-side");
+  shell.classList.toggle("no-side", !show);
+  relayout();
+  layoutChanged();
+}
+
+$("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
+  const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
+  if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
+
+/** A splitter drag: `size(dx, dy)` sets the panel size from the pointer offset. */
+function splitter(el: HTMLElement, size: (dx: number, dy: number) => void) {
+  el.addEventListener("pointerdown", (down) => {
+    const move = (ev: PointerEvent) => size(ev.clientX - down.clientX, ev.clientY - down.clientY);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      terminals.fitActive();
+      for (const v of centerTerms.values()) v.fit();
+      editors.layout();
+      layoutChanged();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+}
+const clamp = (lo: number, hi: number, v: number) => Math.round(Math.max(lo, Math.min(Math.max(lo, hi), v)));
+splitter($("resizer"), (() => {
+  let start = 0;
+  $("resizer").addEventListener("pointerdown", () => {
+    const r = $("bottom").getBoundingClientRect();
+    start = dock() === "side" ? r.width : r.height;
+  });
+  return (dx: number, dy: number) => {
+    const d = dock();
+    if (d === "side") shell.style.setProperty("--term-w", `${clamp(240, window.innerWidth - 420, start - dx)}px`);
+    else shell.style.setProperty("--bottom-h", `${clamp(80, window.innerHeight - 200, start + (d === "top" ? dy : -dy))}px`);
+  };
+})());
+splitter($("side-resizer"), (() => {
+  let start = 0;
+  $("side-resizer").addEventListener("pointerdown", () => (start = $("side").getBoundingClientRect().width));
+  return (dx: number) => shell.style.setProperty("--side-w", `${clamp(140, Math.min(640, window.innerWidth * 0.5), start + dx)}px`);
+})());
 
 // ---- center terminal tabs: interactive vendor CLI, queue runner ------------------------
 const centerTerms = new Map<string, TermView>();
@@ -819,6 +885,10 @@ const ACTIONS: Record<string, () => unknown> = {
   settings: () => openSettings(),
   "close-window": () => closeWindow(),
   terminal: () => toggleTerminal(),
+  "dock:bottom": () => setDock("bottom"),
+  "dock:top": () => setDock("top"),
+  "dock:side": () => setDock("side"),
+  explorer: () => toggleExplorer(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
   web: () => openWebPanel(),
@@ -1444,6 +1514,47 @@ async function runSmoke(root: string, info: StartupInfo) {
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
+    // Panels: the terminal docks at the top, the side and back at the bottom (the menu's
+    // path), refitting its xterm each time; the Explorer hides and comes back; both
+    // splitters resize their panel (DOM pointer events on the splitter, no OS input).
+    const box = (id: string) => $(id).getBoundingClientRect();
+    const fitted = () => {
+      const sz = terminals.activeSize();
+      return !!sz?.fits && sz.fits.cols === sz.cols && sz.fits.rows === sz.rows;
+    };
+    const docked: Record<string, { placed: boolean; fitted: boolean; button: boolean; size: unknown }> = {};
+    showTab("mission");
+    for (const d of ["top", "side", "bottom"] as const) {
+      await api.smokeMenuClick(`dock:${d}`);
+      await until(() => shell.dataset.dock === d, 2000);
+      await wait(500);
+      const b = box("bottom");
+      const c = box("center");
+      const placed = d === "top" ? b.bottom <= c.top && b.width > 300 : d === "side" ? b.left >= c.right && b.height > c.height - 60 : b.top >= c.bottom;
+      docked[d] = { placed, fitted: fitted(), button: !!$("term-tabs").querySelector(`.dock-group button[data-dock="${d}"]`)?.classList.contains("on"), size: terminals.activeSize() };
+      if (d !== "bottom") await shot(`dock-${d}`);
+    }
+    await api.smokeMenuClick("explorer");
+    const explorerHidden = await until(() => box("side").width === 0 && shell.classList.contains("no-side"), 2000);
+    await api.smokeMenuClick("explorer");
+    const explorerBack = await until(() => box("side").width > 100, 2000);
+    const dragSplitter = (el: HTMLElement, dx: number, dy: number) => {
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      el.dispatchEvent(new PointerEvent("pointerdown", { clientX: x, clientY: y, bubbles: true }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: x + dx, clientY: y + dy }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX: x + dx, clientY: y + dy }));
+    };
+    const sideW = box("side").width;
+    dragSplitter($("side-resizer"), 60, 0);
+    await wait(300);
+    const sideW2 = box("side").width;
+    const termH = box("bottom").height;
+    dragSplitter($("resizer"), 0, -50);
+    await wait(500);
+    const termH2 = box("bottom").height;
+    await log("dock-terminal", Object.values(docked).every((x) => x.placed && x.fitted && x.button) && explorerHidden && explorerBack && Math.abs(sideW2 - sideW - 60) <= 1 && Math.abs(termH2 - termH - 50) <= 1 && fitted(), { ...docked, explorerHidden, explorerBack, explorerWidth: `${sideW} -> ${sideW2}`, terminalHeight: `${termH} -> ${termH2}`, fittedAfterDrag: fitted() });
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
@@ -1838,6 +1949,8 @@ function showView(view: string) {
 
 // ---- boot ------------------------------------------------------------------------------
 shell.classList.add("no-folder");
+shell.dataset.dock = "bottom";
+renderDock();
 pinViews();
 void hostRequests.start().catch((e) => status(`Host requests: ${errText(e)}`));
 renderRecents();
