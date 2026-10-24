@@ -20,8 +20,8 @@ import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
 import { GitView } from "./git";
-import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
-import { hostSmoke } from "./hostsmoke";
+import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq";
+import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
@@ -734,7 +734,19 @@ const reviewView = new ReviewView(
   (p) => void openFile(p),
   status,
 );
-const gitView = new GitView(status, () => void tree.refresh(), host.copy);
+// Ship lane buttons only open approval cards (host allowlist kinds); Approve runs them.
+const gitView = new GitView(status, () => void tree.refresh(), host.copy, {
+  request: (a, what) =>
+    void hostApi.local(a.kind, a.args).then(
+      (id) => {
+        status(`${what}: approve it on its card under Requests`);
+        requests.reveal(id);
+      },
+      (e) => status(errText(e)),
+    ),
+  copy: host.copy,
+  openEngine: () => showEngine(),
+});
 // Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
 // An approved request ran gh (a denied one did not): reload the PR list and the working tree.
 const requests = new RequestsSection(status, (_r, d) => {
@@ -1288,6 +1300,17 @@ async function hostMcAction(record: McRecord): Promise<McReply> {
     });
     return { handled: true, message: "Confirm the run in Colony" };
   }
+  if (d.action === "rerun-run" && workspace) {
+    try {
+      const id = await hostApi.local("rerun-checks", { run: d.run });
+      showTab("git");
+      requests.reveal(id);
+      return { handled: true, message: `Approve the rerun of run ${d.run} on its card in Git` };
+    } catch (e) {
+      status(`Mission Control: ${errText(e)}`);
+      return { handled: false };
+    }
+  }
   const where = record.destination === "terminal" ? "paste it in a Colony terminal (Ctrl+Shift+V)" : `paste it in the ${record.destination || "target"}`;
   status(`Mission Control copied ${record.subject || "text"}: ${where}`);
   return { handled: false };
@@ -1672,6 +1695,13 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       [{ kind: "copy", text: "/git-prod", subject: "", destination: "chatInput" }, "copy"],
       [{ kind: "copy", text: "/run-plan x; rm -rf ~", subject: "", destination: "chatInput" }, "copy"],
       [{ kind: "copy", text: "git diff", subject: "", destination: "terminal" }, "copy"],
+      [{ kind: "copy", text: "gh run rerun 4300 --failed", subject: "", destination: "terminal" }, "rerun-run"],
+      [{ kind: "copy", text: "gh run rerun 4300 --failed", subject: "", destination: "chatInput" }, "copy"],
+      [{ kind: "copy", text: "gh run rerun 4300 --failed; rm -rf ~", subject: "", destination: "terminal" }, "copy"],
+      [{ kind: "copy", text: "gh run rerun 0 --failed", subject: "", destination: "terminal" }, "copy"],
+      [{ kind: "copy", text: "gh run rerun 4300", subject: "", destination: "terminal" }, "copy"],
+      [{ kind: "copy", text: "gh pr checks 9", subject: "", destination: "terminal" }, "copy"],
+      [{ kind: "copy", text: "/kit-prod", subject: "", destination: "chatInput" }, "copy"],
     ];
     const verdicts = cases.map(([r, want]) => ({ text: r.text, got: decide(r).action, want }));
     await log("mc-allowlist", verdicts.every((v) => v.got === v.want), verdicts);
@@ -1789,7 +1819,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
     await wait(1500);
-    await hostSmoke({ root, log, wait, until, shot, showTab, view, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab });
+    const smokeCtx = { root, log, wait, until, shot, showTab, view, term: (line: string) => terminals.sendToActive(line), activeTab: () => activeTab };
+    await hostSmoke(smokeCtx);
+    await gitCicdSmoke(smokeCtx);
     const seen = new Map<number, string[]>();
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
