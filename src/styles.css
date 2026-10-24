@@ -67,9 +67,9 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 /* Rail: the primary views (icon over label, never icon-only) and More at the bottom. */
 #rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
 #shell.no-folder #rail { visibility: hidden; }
-.rail-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 0; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
+.rail-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
 .rail-item:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: transparent; }
-.rail-item.active { color: var(--text-primary); background: var(--bg-card); box-shadow: inset 2px 0 0 var(--blue); }
+.rail-item.active { color: var(--text-primary); border-color: var(--border-active); }
 .rail-item.on { color: var(--text-primary); }
 .rail-item.on .rail-icon { color: var(--green); }
 #tabs.tabbar-empty { display: none; }
@@ -429,7 +429,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .plan-list > .plan-row, .plan-wrap, .q-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius); transition: border-color 0.2s; }
 .plan-list > .plan-row:hover, .plan-wrap:hover, .q-row:hover { border-color: var(--border-active); }
 .plan-row, .q-row { display: flex; align-items: flex-start; gap: 10px; padding: var(--mc-card-padding-dense); min-width: 0; cursor: pointer; }
-.plan-row.active, .plan-wrap:has(.plan-row.active) { box-shadow: inset 3px 0 0 var(--blue); }
+.plan-list > .plan-row.active, .plan-wrap:has(.plan-row.active) { border-color: var(--blue); }
 .plan-wrap .plan-row { box-shadow: none; }
 .plan-row .caret { width: 10px; color: var(--text-muted); font-size: 10px; flex: none; margin-top: 4px; }
 .plan-main, .q-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -458,7 +458,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 /* Passed by the cursor but not finished (deferred, blocked): muted, never the green check. */
 .q-row.past-open { opacity: 0.75; }
 .q-mini.past-open { color: var(--text-muted); }
-.q-row.current { background: var(--bg-secondary); border-color: var(--border-active); box-shadow: inset 3px 0 0 var(--blue); }
+.q-row.current { border-color: var(--blue); }
 .q-row.current .now-step-marker { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
 .q-idx { flex: none; }
 .q-row > .q-idx { margin-top: 1px; }
@@ -580,7 +580,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .launch-pending { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--green-bg); font-size: var(--mc-chrome-subtitle-size); cursor: pointer; }
 .queue-held { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--yellow-bg); color: var(--yellow); font-size: var(--mc-chrome-subtitle-size); }
 .row.held { color: var(--yellow); }
-.q-row.held { background: var(--yellow-bg); border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); box-shadow: inset 3px 0 0 var(--yellow); }
+.q-row.held { border-color: var(--yellow); }
 .q-row.held .now-step-marker { border-color: var(--yellow); background: var(--yellow-bg); color: var(--yellow); }
 .web-view #mc { width: 100%; height: 100%; border: 0; background: var(--bg-primary); }
 .menu { position: fixed; z-index: 60; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--mc-radius); box-shadow: var(--mc-shadow-popover); display: flex; flex-direction: column; padding: 4px; min-width: 240px; }
