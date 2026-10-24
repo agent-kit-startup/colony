@@ -72,7 +72,7 @@ struct StartupInfo {
 }
 
 /// The tiling window manager this session runs under, if any (from its own variables).
-fn tiling_wm() -> Option<String> {
+pub(crate) fn tiling_wm() -> Option<String> {
     let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if set("HYPRLAND_INSTANCE_SIGNATURE") {
         return Some("Hyprland".into());
@@ -379,6 +379,7 @@ pub fn run() {
             settings::settings_set_workspace,
             settings::settings_set_skin,
             settings::settings_set_title_bar,
+            settings::settings_title_bar,
             settings::settings_set_layout,
             launch::open_in_editor,
             omarchy::omarchy_subscribe,
@@ -418,8 +419,11 @@ pub fn run() {
             }
             // Title bar (settings.json `ui.titleBar`, read once here): native keeps the
             // system decorations and the GTK menu bar; custom drops both, and the window
-            // draws its own bar with the same menu and the window controls.
-            let custom = app.state::<AppState>().settings.path().is_ok_and(|p| settings::title_bar_mode(&p) == "custom");
+            // draws its own bar with the same menu and the window controls. Always native
+            // on a tiling window manager (`settings::effective_title_bar`).
+            let state = app.state::<AppState>();
+            let tiling = state.startup.lock().ok().is_some_and(|s| s.tiling_wm.is_some());
+            let custom = state.settings.path().is_ok_and(|p| settings::title_bar_mode(&p, tiling) == "custom");
             if let Ok(mut s) = app.state::<AppState>().startup.lock() {
                 s.title_bar = if custom { "custom" } else { "native" }.into();
             }

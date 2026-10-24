@@ -127,13 +127,22 @@ pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<
 pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
 pub const TITLE_BARS: &[&str] = &["native", "custom"];
 
-/// The title bar mode to open the window with: the saved one, else `native` (an unreadable
-/// file or an unknown value also gives `native`, the mode that always has window controls).
-pub fn title_bar_mode(path: &Path) -> &'static str {
-    match load(path).ok().and_then(|s| s.ui.title_bar) {
-        Some(m) if m == "custom" => "custom",
+/// The title bar a window opens with. On a tiling window manager (Hyprland, sway, niri, i3)
+/// always `native`: the manager places and sizes the window, so a saved `custom` is
+/// ignored there and the choice is not offered. Elsewhere the saved mode, else `native`
+/// (an unknown value also gives `native`, the mode that always has window controls).
+pub fn effective_title_bar(saved: Option<&str>, tiling: bool) -> &'static str {
+    match saved {
+        Some("custom") if !tiling => "custom",
         _ => "native",
     }
+}
+
+/// The title bar mode to open the window with, from the file (an unreadable one gives
+/// `native`); see `effective_title_bar`.
+pub fn title_bar_mode(path: &Path, tiling: bool) -> &'static str {
+    let saved = load(path).ok().and_then(|s| s.ui.title_bar);
+    effective_title_bar(saved.as_deref(), tiling)
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -349,6 +358,25 @@ pub fn settings_set_title_bar(state: State<'_, AppState>, mode: String) -> Resul
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleBarInfo {
+    /// `ui.titleBar` as saved (any value), or none.
+    saved: Option<String>,
+    /// What the window opens with on the next start (`effective_title_bar`).
+    next: &'static str,
+    /// The tiling window manager, if any: the choice is not offered there.
+    tiling_wm: Option<String>,
+}
+
+#[tauri::command]
+pub fn settings_title_bar(state: State<'_, AppState>) -> Result<TitleBarInfo, String> {
+    let saved = state.settings.load()?.ui.title_bar;
+    let tiling_wm = crate::tiling_wm();
+    let next = effective_title_bar(saved.as_deref(), tiling_wm.is_some());
+    Ok(TitleBarInfo { saved, next, tiling_wm })
+}
+
 /// Save the window layout (merge; see `merge_layout`). Called after every panel change.
 #[tauri::command]
 pub fn settings_set_layout(state: State<'_, AppState>, patch: serde_json::Value) -> Result<LayoutSettings, String> {
@@ -399,7 +427,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("colony-titlebar-{}", std::process::id()));
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(title_bar_mode(&path), "native"); // no file
+        assert_eq!(title_bar_mode(&path, false), "native"); // no file
         for (text, want) in [
             (r#"{"ui":{"titleBar":"custom","skin":"legacy"}}"#, "custom"),
             (r#"{"ui":{"titleBar":"native"}}"#, "native"),
@@ -408,7 +436,8 @@ mod tests {
             ("{not json", "native"),
         ] {
             std::fs::write(&path, text).unwrap();
-            assert_eq!(title_bar_mode(&path), want, "{text}");
+            assert_eq!(title_bar_mode(&path, false), want, "{text}");
+            assert_eq!(title_bar_mode(&path, true), "native", "tiling: {text}");
         }
         let s: Settings = serde_json::from_str(r#"{"ui":{"titleBar":"custom"}}"#).unwrap();
         assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["titleBar"], "custom");
@@ -441,6 +470,17 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260}}}"#).unwrap();
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260}));
+    }
+
+    #[test]
+    fn tiling_always_opens_native() {
+        assert_eq!(effective_title_bar(Some("custom"), true), "native");
+        assert_eq!(effective_title_bar(Some("native"), true), "native");
+        assert_eq!(effective_title_bar(None, true), "native");
+        assert_eq!(effective_title_bar(Some("custom"), false), "custom");
+        assert_eq!(effective_title_bar(Some("native"), false), "native");
+        assert_eq!(effective_title_bar(Some("frameless"), false), "native");
+        assert_eq!(effective_title_bar(None, false), "native");
     }
 
     fn scratch(name: &str) -> PathBuf {

@@ -104,10 +104,10 @@ document.getElementById("app")!.innerHTML = `
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
   <button data-more="skin" data-skin="legacy">Legacy</button>
   <button data-more="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
-  <div class="menu-sep"></div>
-  <div class="menu-label">Title bar (on the next start)</div>
-  <button data-more="title-bar" data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
-  <button data-more="title-bar" data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
+  <div class="menu-sep" data-title-bar-menu></div>
+  <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
+  <button data-more="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
+  <button data-more="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -858,15 +858,18 @@ menu.addEventListener("click", (ev) => {
 });
 
 // ---- title bar (settings.json ui.titleBar, applied when the window opens) --------------
-/** The mode this window opened with, and the saved one (they differ until a restart). */
+/** The mode this window opened with, and the saved one (they differ until a restart).
+ *  On a tiling window manager the window is always native (settings::effective_title_bar):
+ *  the choice is not offered and a saved `custom` is ignored. */
 const titleBar = { current: "native" as "native" | "custom", saved: "native" as "native" | "custom", tiling: null as string | null };
 
 function renderTitleBarMenu() {
+  for (const el of menu.querySelectorAll<HTMLElement>("[data-title-bar-menu]")) el.hidden = !!titleBar.tiling;
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="title-bar"]')) {
     const mode = b.dataset.mode;
     const on = mode === titleBar.saved;
     b.classList.toggle("on", on);
-    const label = mode === "custom" ? "Custom (Colony draws it)" : `Native${titleBar.tiling ? ` (${titleBar.tiling})` : ""}`;
+    const label = mode === "custom" ? "Custom (Colony draws it)" : "Native";
     b.textContent = `${on ? "✓ " : ""}${label}${on && mode !== titleBar.current ? ", after a restart" : ""}`;
   }
 }
@@ -879,8 +882,7 @@ async function setTitleBar(mode: "native" | "custom") {
   }
   titleBar.saved = mode;
   renderTitleBarMenu();
-  const tiling = mode === "custom" && titleBar.tiling ? ` ${titleBar.tiling} places and sizes windows itself, so native is the usual choice there.` : "";
-  status(mode === titleBar.current ? `Title bar: ${mode} (saved in settings.json)` : `Title bar: ${mode}, saved in settings.json; it applies when Colony starts again.${tiling}`);
+  status(mode === titleBar.current ? `Title bar: ${mode} (saved in settings.json)` : `Title bar: ${mode}, saved in settings.json; it applies when Colony starts again.`);
 }
 
 /** Custom mode: the top bar drags the window (double-click maximizes), the menus open as
@@ -1496,32 +1498,49 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
     await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
-    // and the More menu's choice is saved for the next start (then put back).
+    // and the More menu's choice is saved for the next start (then put back). On a tiling
+    // window manager: always native, the choice hidden, a saved custom ignored.
     const win = getCurrentWindow();
     const decorated = await win.isDecorated();
     const custom = info.titleBar === "custom";
     const controlsShown = !$("win-controls").hidden && $("win-controls").querySelectorAll("button").length === 3;
     const drag = $("top").getAttribute("data-tauri-drag-region");
     await log("title-bar-applied", decorated === !custom && controlsShown === custom && (custom ? drag === "deep" : drag === null) && document.documentElement.dataset.titleBar === info.titleBar, { titleBar: info.titleBar, decorated, controlsShown, drag, tiling: info.tilingWm });
-    const savedTitleBar = async () => ((await api.settingsGet()).settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar;
-    const startTb = titleBar.saved;
-    const flip = startTb === "custom" ? "native" : "custom";
-    const pickTb = (mode: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="title-bar"][data-mode="${mode}"]`)?.click();
-    pickTb(flip);
-    let flipped = false;
-    for (let i = 0; i < 15 && !flipped; i++) {
-      await wait(200);
-      flipped = (await savedTitleBar()) === flip;
+    if (info.tilingWm) {
+      // Tiling window manager: always native. The choice is hidden from the More menu, and
+      // a saved `custom` (written here, as a settings.json shared with a GNOME machine
+      // would have it) still opens native on the next start (settings_title_bar asks the
+      // same decision the startup uses). Then the saved value is put back.
+      const hidden = [...menu.querySelectorAll<HTMLElement>("[data-title-bar-menu]")];
+      const menuHidden = hidden.length === 4 && hidden.every((el) => el.hidden);
+      const before = await api.settingsTitleBar();
+      await api.settingsSetTitleBar("custom");
+      const withCustom = await api.settingsTitleBar();
+      await api.settingsSetTitleBar(before.saved === "custom" ? "custom" : "native");
+      const after = await api.settingsTitleBar();
+      const ok = menuHidden && info.titleBar === "native" && decorated && withCustom.saved === "custom" && withCustom.next === "native" && before.next === "native" && after.saved === (before.saved === "custom" ? "custom" : "native") && withCustom.tilingWm === info.tilingWm;
+      await log("title-bar-tiling", ok, { tiling: info.tilingWm, opened: info.titleBar, decorated, menuHidden, savedAtStart: before.saved, withCustom, after });
+    } else {
+      const savedTitleBar = async () => ((await api.settingsGet()).settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar;
+      const startTb = titleBar.saved;
+      const flip = startTb === "custom" ? "native" : "custom";
+      const pickTb = (mode: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="title-bar"][data-mode="${mode}"]`)?.click();
+      pickTb(flip);
+      let flipped = false;
+      for (let i = 0; i < 15 && !flipped; i++) {
+        await wait(200);
+        flipped = (await savedTitleBar()) === flip;
+      }
+      const restartNote = $("st-msg").textContent ?? "";
+      const marked = menu.querySelector<HTMLElement>(`button[data-more="title-bar"][data-mode="${flip}"]`)?.textContent ?? "";
+      pickTb(startTb);
+      let back = false;
+      for (let i = 0; i < 15 && !back; i++) {
+        await wait(200);
+        back = (await savedTitleBar()) === startTb;
+      }
+      await log("title-bar-setting", flipped && back && restartNote.includes("starts again") && marked.startsWith("✓") && marked.includes("after a restart") && (await win.isDecorated()) === decorated, { from: startTb, to: flip, restartNote, marked, back });
     }
-    const restartNote = $("st-msg").textContent ?? "";
-    const marked = menu.querySelector<HTMLElement>(`button[data-more="title-bar"][data-mode="${flip}"]`)?.textContent ?? "";
-    pickTb(startTb);
-    let back = false;
-    for (let i = 0; i < 15 && !back; i++) {
-      await wait(200);
-      back = (await savedTitleBar()) === startTb;
-    }
-    await log("title-bar-setting", flipped && back && restartNote.includes("starts again") && marked.startsWith("✓") && marked.includes("after a restart") && (await win.isDecorated()) === decorated, { from: startTb, to: flip, restartNote, marked, back });
     showTab("mission");
     await wait(200);
     await shot("menu");
