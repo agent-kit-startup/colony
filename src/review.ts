@@ -95,9 +95,9 @@ export class ReviewView {
     const sel = this.selected && this.selected.runId === t.runId && this.selected.tick === t.tick && this.selected.path === f.path;
     const row = h(
       "div",
-      { class: `rv-file ${sel ? "sel" : ""}`, title: `${STATUS_NAMES[f.status] ?? f.status}${f.oldPath ? ` from ${f.oldPath}` : ""}` },
+      { class: `rv-file ${sel ? "sel" : ""}`, title: `${f.path}\n${STATUS_NAMES[f.status] ?? f.status}${f.oldPath ? ` from ${f.oldPath}` : ""}` },
       h("code", { class: `st st-${f.status}` }, f.status),
-      h("span", {}, f.path),
+      h("span", { class: "ellipsis" }, f.path),
     );
     row.dataset.path = f.path;
     row.addEventListener("click", () => void this.show(t, f));

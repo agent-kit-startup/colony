@@ -50,7 +50,7 @@ document.getElementById("app")!.innerHTML = `
   </header>
   <nav id="rail" aria-label="Views"></nav>
   <aside id="side">
-    <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh">↻</button></div>
+    <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh"></button></div>
     <div id="tree"></div>
   </aside>
   <main id="center">

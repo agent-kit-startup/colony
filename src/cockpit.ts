@@ -621,7 +621,7 @@ export class PlansView extends View {
         h(
           "div",
           { class: "plan-title-line" },
-          h("strong", { class: "plan-title ellipsis" }, p.id),
+          h("strong", { class: "plan-title ellipsis", title: `${p.id}\n${p.file}` }, p.id),
           lifecycleChip(p.lifecycle),
           ...(active ? [h("span", { class: "role-pill role-active" }, "● HANDOFF")] : []),
           ...(p.queueRole !== "none" && !(p.queueRole === "executing" && p.lifecycle === "executing") ? [rolePill(p.queueRole)] : []),
@@ -684,10 +684,10 @@ export class QueueView extends View {
       h(
         "div",
         { class: "actions now-actions" },
-        btn("⇶ Run queue", () => void this.host.runQueue(), { class: "primary", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
+        iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: "primary", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
         btn("Open HANDOFF", () => this.host.openRepoFile(".cursor/HANDOFF.md"), { class: "status-bar-btn" }),
       ),
-      h("p", { class: "hint" }, "⇶ Run queue starts agent-kit run-plan-all. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
+      h("p", { class: "hint" }, "Run queue starts agent-kit run-plan-all. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
     );
     const rows = queue.map((file, i) => {
       const p = plans.get(file);
@@ -701,7 +701,7 @@ export class QueueView extends View {
         h(
           "div",
           { class: "grow q-main" },
-          h("div", { class: "plan-title-line" }, h("strong", { class: "ellipsis" }, p?.id || planName(file)), ...(p ? [lifecycleChip(p.lifecycle)] : []), ...(outcome ? [chip(outcome, outcome === "completed" ? "chip-done" : "chip-parked")] : []), ...(p ? [h("span", { class: "plan-count" }, p.progress.label || `${p.progress.completed} of ${p.progress.total} complete`)] : [])),
+          h("div", { class: "plan-title-line" }, h("strong", { class: "ellipsis", title: `${p?.id || planName(file)}\n${file}` }, p?.id || planName(file)), ...(p ? [lifecycleChip(p.lifecycle)] : []), ...(outcome ? [chip(outcome, outcome === "completed" ? "chip-done" : "chip-parked")] : []), ...(p ? [h("span", { class: "plan-count" }, p.progress.label || `${p.progress.completed} of ${p.progress.total} complete`)] : [])),
           ...(p && p.progress.total ? [stepbar(p.progress.completed, p.progress.total, p.todos.some((t) => t.status === "in_progress"), false)] : []),
           p ? metaRow([{ icon: "plans", text: file, mono: true }, p.currentTodo ? { icon: "mode", text: `Next: ${p.currentTodo.id}`, mono: true, title: p.currentTodo.content } : null]) : h("div", { class: "dim small" }, "plan file not in the snapshot"),
         ),

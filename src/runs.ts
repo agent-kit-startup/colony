@@ -218,7 +218,7 @@ class RunStore {
       run.reviews.push(m.review);
       this.item(run, { kind: "review", review: m.review });
       const n = m.review.files.length;
-      this.row(run, `◇ tick ${m.review.tick} review: ${n} file${n === 1 ? "" : "s"} changed${m.review.finished ? "" : " (tick did not finish)"}`, "ag-dim");
+      this.row(run, `tick ${m.review.tick} review: ${n} file${n === 1 ? "" : "s"} changed${m.review.finished ? "" : " (tick did not finish)"}`, "ag-dim");
       this.emit({ kind: "review", run, review: m.review });
       return;
     }
@@ -252,16 +252,16 @@ class RunStore {
         if (run.command === "run-plan-all") {
           run.queue = queueState(ev.queue) ?? run.queue;
           this.emit({ kind: "state", run });
-          return this.row(run, `▶ queue run-plan-all · ${ev.backend} · protocol ${ev.protocol}`, "ag-head");
+          return this.row(run, `queue run-plan-all · ${ev.backend} · protocol ${ev.protocol}`, "ag-head");
         }
         this.emit({ kind: "state", run });
-        return this.row(run, `▶ run ${ev.plan} · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol}`, "ag-head");
+        return this.row(run, `run ${ev.plan} · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol}`, "ag-head");
       case "queue_state": {
         const q = queueState(ev);
         if (!q) return this.row(run, line, "ag-dim");
         run.queue = q;
         this.emit({ kind: "state", run });
-        return this.row(run, `⇶ queue ${queuePosition(q)}${q.current ? ` · ${q.current}` : ""}${q.status ? ` · ${q.status}` : ""}`, "ag-head");
+        return this.row(run, `queue ${queuePosition(q)}${q.current ? ` · ${q.current}` : ""}${q.status ? ` · ${q.status}` : ""}`, "ag-head");
       }
       case "tick_start":
         run.lastText = "";
@@ -287,7 +287,7 @@ class RunStore {
           detection: String(ev.detection ?? ""),
           at: String(ev.ts ?? new Date().toISOString()),
         };
-        this.row(run, `⏸ gate ${gate.askId}: ${gate.line}`, "ag-warn");
+        this.row(run, `gate ${gate.askId}: ${gate.line}`, "ag-warn");
         return this.setGate(run, gate);
       }
       case "tick_end": {

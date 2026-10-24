@@ -7,6 +7,7 @@
 import { errText, h, type TickReview } from "./api";
 import { gateControls } from "./agent";
 import { ContextStrip } from "./contextstrip";
+import { icon } from "./icons";
 import { type Ev, type Run, type RunItem, runLabel, runs } from "./runs";
 
 const RESULT_MAX = 6000;
@@ -213,7 +214,7 @@ export class AgentTab {
         const n = item.review.files.length;
         const btn = h("button", { class: "link" }, `Review tick ${item.review.tick}`);
         btn.addEventListener("click", () => this.host.showReview(item.review));
-        return this.append(h("div", { class: "tr-line tr-review" }, `◇ ${n} file${n === 1 ? "" : "s"} changed${item.review.finished ? "" : " (tick did not finish)"} · `, btn), live);
+        return this.append(h("div", { class: "tr-line tr-review" }, icon("review", "btn-icon tr-icon"), ` ${n} file${n === 1 ? "" : "s"} changed${item.review.finished ? "" : " (tick did not finish)"} · `, btn), live);
       }
       case "reply": {
         const card = this.gates.get(item.askId);
@@ -232,7 +233,7 @@ export class AgentTab {
     switch (ev.type) {
       case "run_start":
         return this.append(
-          h("div", { class: "tr-card tr-start" }, h("strong", {}, `▶ ${ev.plan || "run"}`), h("span", { class: "dim" }, ` · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol} · HITL ${ev.hitl}`)),
+          h("div", { class: "tr-card tr-start" }, h("strong", { class: "tr-start-title" }, icon("play", "btn-icon tr-icon"), ` ${ev.plan || "run"}`), h("span", { class: "dim" }, ` · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol} · HITL ${ev.hitl}`)),
           live,
         );
       case "tick_start": {

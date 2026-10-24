@@ -1,4 +1,5 @@
 // Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
+import { icon } from "./icons";
 import { api, errText, h, type GitStatus } from "./api";
 import { obj, snapshot, str } from "./snapshot";
 import { btn, card, chip, empty, iconBtn } from "./ui";
@@ -180,7 +181,7 @@ export class GitView {
     this.repo.replaceChildren(
       card(
         "Repository",
-        h("div", { class: "row" }, h("strong", {}, `⎇ ${str(g.branch, "?")}`), chip(g.dirty ? `${g.dirtyCount ?? "?"} changed` : "clean", g.dirty ? "chip-gate" : "chip-done"), h("span", { class: "dim" }, `↑${g.ahead ?? 0} ↓${g.behind ?? 0} upstream`)),
+        h("div", { class: "row" }, h("strong", { class: "git-branch" }, icon("git", "btn-icon"), str(g.branch, "?")), chip(g.dirty ? `${g.dirtyCount ?? "?"} changed` : "clean", g.dirty ? "chip-gate" : "chip-done"), h("span", { class: "dim" }, `↑${g.ahead ?? 0} ↓${g.behind ?? 0} upstream`)),
         ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
         ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
         ...(graph.length ? [h("pre", { class: "git-graph" }, graph.slice(0, 40).join("\n"))] : []),
@@ -196,7 +197,7 @@ export class GitView {
         out.textContent = "Production promotion: type yes first. Colony shows the command; it never runs it.";
         return;
       }
-      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (⌘ Open interactive) and answer its gate there.");
+      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (Open interactive in Mission) and answer its gate there.");
       this.copy("/git-prod", "/git-prod");
       yes.value = "";
     });

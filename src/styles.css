@@ -36,7 +36,10 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 button.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 500; }
 button.primary:hover { background: var(--blue); border-color: var(--blue); color: #fff; filter: brightness(1.12); }
 /* Action chips (dashboard .now-actions .status-bar-btn). */
-button.status-bar-btn { font-size: var(--mc-chrome-meta-size); padding: 4px 14px; }
+/* One button scale: base, primary and action chips share the font size and height; only
+   the horizontal padding differs (links and rail items are their own kinds). */
+button.status-bar-btn { font-size: var(--mc-chrome-subtitle-size); padding: 3px 12px; }
+button.has-icon, button.status-bar-btn, button.primary { min-height: 26px; }
 button:disabled { opacity: 0.5; cursor: default; }
 input, select, textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); padding: 4px 8px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--blue); }
@@ -103,7 +106,8 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 #side { grid-area: side; background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .side-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); color: var(--text-secondary); }
 #tree { overflow: auto; flex: 1; padding-bottom: 12px; }
-.tree-row { display: flex; gap: 4px; align-items: center; padding: 2px 8px; cursor: pointer; white-space: nowrap; user-select: none; }
+.tree-row { display: flex; gap: 4px; align-items: center; padding: 2px 8px; cursor: pointer; white-space: nowrap; user-select: none; min-width: 0; }
+.tree-row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tree-row:hover { background: var(--bg-3); }
 .tree-row.active { background: var(--mc-blue-bg); }
 .tree-row .caret { width: 12px; color: var(--fg-dim); font-size: 10px; }
@@ -145,7 +149,8 @@ input.num { width: 64px; }
 .gate-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
 .gate-buttons button { text-align: left; }
 .git-files { max-height: 35%; overflow: auto; border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); background: var(--bg); }
-.git-file { display: flex; gap: 8px; padding: 2px 6px; cursor: pointer; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.git-file { display: flex; gap: 8px; padding: 2px 6px; cursor: pointer; font-family: var(--mono); font-size: 12px; white-space: nowrap; min-width: 0; }
+.git-file > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .git-file:hover { background: var(--bg-3); }
 .git-file .xy { color: var(--warn); }
 .git-out { flex: 1; overflow: auto; margin: 0; font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--mc-radius-chrome); padding: 6px; white-space: pre-wrap; min-height: 60px; }
@@ -194,9 +199,9 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--fg-dim)
 .rv-tick { display: flex; gap: 6px; align-items: center; padding: 6px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; }
 .rv-tick:hover { background: var(--bg-3); }
 .rv-tick .dim { overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.rv-count { color: var(--fg-dim); font-size: 11px; }
+.rv-count { color: var(--fg-dim); font-size: var(--mc-chrome-meta-size); }
 .rv-meta { padding: 0 10px 6px 26px; color: var(--fg-dim); font-size: 12px; word-break: break-word; }
-.rv-file { display: flex; gap: 8px; padding: 2px 8px 2px 26px; cursor: pointer; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.rv-file { display: flex; gap: 8px; padding: 2px 8px 2px 26px; cursor: pointer; font-family: var(--mono); font-size: 12px; white-space: nowrap; min-width: 0; }
 .rv-file:hover { background: var(--bg-3); }
 .rv-file.sel { background: var(--mc-blue-bg); }
 .rv-copy { margin: 6px 10px 8px 26px; font-size: 12px; }
@@ -493,6 +498,8 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-tick { display: flex; align-items: center; gap: 2px; margin-top: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--mc-blue); font-size: 12px; flex-wrap: wrap; }
 .tr-tick .link { font-family: var(--mono); font-weight: 400; }
 .tr-line { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.tr-icon { vertical-align: -2px; }
+.git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .tr-msg { padding: 2px 0; }
 .prose { font-size: 13.5px; line-height: 1.55; }
 .prose p { margin: 4px 0; }
