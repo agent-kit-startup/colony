@@ -46,11 +46,26 @@ pub struct WorkspaceSettings {
 pub struct UiSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skin: Option<String>,
+    /// Window title bar: `native` (default: the system or window manager draws it) or
+    /// `custom` (no system decorations; Colony draws the bar, its menu and the window
+    /// controls). Read when the window opens, so a change applies on the next start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_bar: Option<String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
+pub const TITLE_BARS: &[&str] = &["native", "custom"];
+
+/// The title bar mode to open the window with: the saved one, else `native` (an unreadable
+/// file or an unknown value also gives `native`, the mode that always has window controls).
+pub fn title_bar_mode(path: &Path) -> &'static str {
+    match load(path).ok().and_then(|s| s.ui.title_bar) {
+        Some(m) if m == "custom" => "custom",
+        _ => "native",
+    }
+}
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
@@ -64,11 +79,11 @@ pub struct Settings {
 }
 
 fn is_default_ui(u: &UiSettings) -> bool {
-    u.skin.is_none() && u.extra.is_empty()
+    u.skin.is_none() && u.title_bar.is_none() && u.extra.is_empty()
 }
 
 const TEMPLATE: &str = r#"{
-  "ui": { "skin": "bare-metal" },
+  "ui": { "skin": "bare-metal", "titleBar": "native" },
   "editor": {},
   "workspaces": {}
 }
@@ -176,6 +191,19 @@ pub fn settings_set_skin(state: State<'_, AppState>, skin: String) -> Result<Str
     Ok(skin)
 }
 
+/// Remember the title bar mode (`native` or `custom`); it applies when the window next opens.
+#[tauri::command]
+pub fn settings_set_title_bar(state: State<'_, AppState>, mode: String) -> Result<String, String> {
+    if !TITLE_BARS.contains(&mode.as_str()) {
+        return Err(format!("Unknown title bar: {mode} (native or custom)"));
+    }
+    let path = settings_path(&state)?;
+    let mut s = load(&path)?;
+    s.ui.title_bar = Some(mode.clone());
+    save(&path, &s)?;
+    Ok(mode)
+}
+
 #[tauri::command]
 pub fn settings_workspace(state: State<'_, AppState>) -> Result<WorkspaceSettings, String> {
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
@@ -209,6 +237,28 @@ mod tests {
         assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["x"], 1);
         let d = serde_json::to_value(Settings::default()).unwrap();
         assert!(d.get("ui").is_none());
+    }
+
+    #[test]
+    fn title_bar_defaults_to_native() {
+        let dir = std::env::temp_dir().join(format!("colony-titlebar-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(title_bar_mode(&path), "native"); // no file
+        for (text, want) in [
+            (r#"{"ui":{"titleBar":"custom","skin":"legacy"}}"#, "custom"),
+            (r#"{"ui":{"titleBar":"native"}}"#, "native"),
+            (r#"{"ui":{"titleBar":"frameless"}}"#, "native"),
+            (r#"{"ui":{"skin":"legacy"}}"#, "native"),
+            ("{not json", "native"),
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(title_bar_mode(&path), want, "{text}");
+        }
+        let s: Settings = serde_json::from_str(r#"{"ui":{"titleBar":"custom"}}"#).unwrap();
+        assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["titleBar"], "custom");
+        assert!(serde_json::from_str::<serde_json::Value>(TEMPLATE).unwrap()["ui"]["titleBar"] == "native");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

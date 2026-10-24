@@ -46,12 +46,18 @@ document.getElementById("app")!.innerHTML = `
 <div id="shell">
   <header id="top">
     <span class="brand"><img src="./colony-icon.svg" alt="" width="18" height="18" /> Colony</span>
+    <span id="top-menus" hidden></span>
     <button id="btn-open" title="Open folder (Ctrl+O)">Open folder</button>
     <span id="ws-name" class="dim">No folder open</span>
     <span class="spacer"></span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
     <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+    <span id="win-controls" hidden>
+      <button class="win-min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+      <button class="win-max" title="Maximize" aria-label="Maximize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button>
+      <button class="win-close" title="Close" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </span>
   </header>
   <nav id="rail" aria-label="Views"></nav>
   <aside id="side">
@@ -97,6 +103,10 @@ document.getElementById("app")!.innerHTML = `
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
   <button data-more="skin" data-skin="legacy">Legacy</button>
   <button data-more="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
+  <div class="menu-sep"></div>
+  <div class="menu-label">Title bar (on the next start)</div>
+  <button data-more="title-bar" data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
+  <button data-more="title-bar" data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -727,6 +737,7 @@ menu.addEventListener("click", (ev) => {
   const el = ev.target as HTMLElement;
   menu.hidden = true;
   if (el.dataset.cmd) runAction(el.dataset.cmd);
+  else if (el.dataset.more === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
   else if (el.dataset.more === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
@@ -735,6 +746,70 @@ menu.addEventListener("click", (ev) => {
     );
   }
 });
+
+// ---- title bar (settings.json ui.titleBar, applied when the window opens) --------------
+/** The mode this window opened with, and the saved one (they differ until a restart). */
+const titleBar = { current: "native" as "native" | "custom", saved: "native" as "native" | "custom", tiling: null as string | null };
+
+function renderTitleBarMenu() {
+  for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="title-bar"]')) {
+    const mode = b.dataset.mode;
+    const on = mode === titleBar.saved;
+    b.classList.toggle("on", on);
+    const label = mode === "custom" ? "Custom (Colony draws it)" : `Native${titleBar.tiling ? ` (${titleBar.tiling})` : ""}`;
+    b.textContent = `${on ? "✓ " : ""}${label}${on && mode !== titleBar.current ? ", after a restart" : ""}`;
+  }
+}
+
+async function setTitleBar(mode: "native" | "custom") {
+  try {
+    await api.settingsSetTitleBar(mode);
+  } catch (e) {
+    return status(`Title bar: ${errText(e)}`);
+  }
+  titleBar.saved = mode;
+  renderTitleBarMenu();
+  const tiling = mode === "custom" && titleBar.tiling ? ` ${titleBar.tiling} places and sizes windows itself, so native is the usual choice there.` : "";
+  status(mode === titleBar.current ? `Title bar: ${mode} (saved in settings.json)` : `Title bar: ${mode}, saved in settings.json; it applies when Colony starts again.${tiling}`);
+}
+
+/** Custom mode: the top bar drags the window (double-click maximizes), the menus open as
+ *  native popups under their buttons, and the window controls sit at the right. */
+function applyTitleBar(info: StartupInfo) {
+  titleBar.current = info.titleBar === "custom" ? "custom" : "native";
+  titleBar.tiling = info.tilingWm;
+  document.documentElement.dataset.titleBar = titleBar.current;
+  if (titleBar.current !== "custom") return;
+  const top = $("top");
+  top.setAttribute("data-tauri-drag-region", "deep");
+  const menus = $("top-menus");
+  menus.replaceChildren(
+    ...menuSpec.menus.map((m, i) => {
+      const b = h("button", { class: "top-menu", "aria-haspopup": "menu" }, m.label);
+      b.addEventListener("click", () => {
+        const r = b.getBoundingClientRect();
+        void api.menuPopup(i, r.left, r.bottom).catch((e) => status(`Menu: ${errText(e)}`));
+      });
+      return b;
+    }),
+  );
+  menus.hidden = false;
+  const controls = $("win-controls");
+  controls.hidden = false;
+  const win = getCurrentWindow();
+  const max = controls.querySelector<HTMLButtonElement>(".win-max")!;
+  const syncMax = async () => {
+    const on = await win.isMaximized().catch(() => false);
+    max.title = on ? "Restore" : "Maximize";
+    max.setAttribute("aria-label", max.title);
+    max.classList.toggle("on", on);
+  };
+  controls.querySelector(".win-min")!.addEventListener("click", () => void win.minimize().catch((e) => status(`Minimize: ${errText(e)}`)));
+  max.addEventListener("click", () => void win.toggleMaximize().catch((e) => status(`Maximize: ${errText(e)}`)));
+  controls.querySelector(".win-close")!.addEventListener("click", () => void closeWindow());
+  void win.onResized(() => void syncMax());
+  void syncMax();
+}
 
 // ---- actions: the native menu bar (src/menu.json) and the More menu run these ----------
 const ACTIONS: Record<string, () => unknown> = {
@@ -1248,9 +1323,16 @@ async function runSmoke(root: string, info: StartupInfo) {
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
     // click) runs the same action as the More menu.
+    // A custom title bar has no GTK menu bar: its own File / View / Run / Help buttons open
+    // the same menus as popups (menu_popup, by index; a popup needs a real click).
     const bar = await api.menuState();
     const barIds = bar.flatMap((m) => m.items.map((i) => i.id));
-    await log("menu-installed", JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === "File,View,Run,Help" && bar.every((m) => m.items.every((i) => i.enabled)) && !unbound.length, { menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), unbound });
+    const topMenus = [...$("top-menus").querySelectorAll("button")].map((b) => b.textContent).join();
+    const menuOk =
+      info.titleBar === "custom"
+        ? !bar.length && topMenus === "File,View,Run,Help" && !$("top-menus").hidden
+        : JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === "File,View,Run,Help" && bar.every((m) => m.items.every((i) => i.enabled)) && $("top-menus").hidden;
+    await log("menu-installed", menuOk && !unbound.length, { titleBar: info.titleBar, menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), topMenus, unbound });
     const fire = (id: string) => api.smokeMenuClick(id);
     const termOn = () => !shell.classList.contains("no-bottom");
     const moreClick = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-cmd="${id}"]`)?.click();
@@ -1290,9 +1372,37 @@ async function runSmoke(root: string, info: StartupInfo) {
     document.getElementById("run-dialog")?.remove();
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
     await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
+    // Title bar: the window opened in the saved mode (decorations, drag region, controls),
+    // and the More menu's choice is saved for the next start (then put back).
+    const win = getCurrentWindow();
+    const decorated = await win.isDecorated();
+    const custom = info.titleBar === "custom";
+    const controlsShown = !$("win-controls").hidden && $("win-controls").querySelectorAll("button").length === 3;
+    const drag = $("top").getAttribute("data-tauri-drag-region");
+    await log("title-bar-applied", decorated === !custom && controlsShown === custom && (custom ? drag === "deep" : drag === null) && document.documentElement.dataset.titleBar === info.titleBar, { titleBar: info.titleBar, decorated, controlsShown, drag, tiling: info.tilingWm });
+    const savedTitleBar = async () => ((await api.settingsGet()).settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar;
+    const startTb = titleBar.saved;
+    const flip = startTb === "custom" ? "native" : "custom";
+    const pickTb = (mode: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="title-bar"][data-mode="${mode}"]`)?.click();
+    pickTb(flip);
+    let flipped = false;
+    for (let i = 0; i < 15 && !flipped; i++) {
+      await wait(200);
+      flipped = (await savedTitleBar()) === flip;
+    }
+    const restartNote = $("st-msg").textContent ?? "";
+    const marked = menu.querySelector<HTMLElement>(`button[data-more="title-bar"][data-mode="${flip}"]`)?.textContent ?? "";
+    pickTb(startTb);
+    let back = false;
+    for (let i = 0; i < 15 && !back; i++) {
+      await wait(200);
+      back = (await savedTitleBar()) === startTb;
+    }
+    await log("title-bar-setting", flipped && back && restartNote.includes("starts again") && marked.startsWith("✓") && marked.includes("after a restart") && (await win.isDecorated()) === decorated, { from: startTb, to: flip, restartNote, marked, back });
     showTab("mission");
     await wait(200);
     await shot("menu");
+    await shot(`title-bar-${info.titleBar}`);
     showTab("plans");
     await wait(200);
     await shot("plans");
@@ -1744,6 +1854,9 @@ api
       // The smoke records its notifications instead of showing them on the desktop.
       alerts.dryRun = true;
     }
+    applyTitleBar(info);
+    titleBar.saved = ((await api.settingsGet().catch(() => null))?.settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar === "custom" ? "custom" : "native";
+    renderTitleBarMenu();
     await loadSkin();
     const start = info.initialWorkspace ?? recents()[0];
     if (start) await openWorkspace(start);

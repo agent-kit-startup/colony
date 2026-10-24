@@ -8,7 +8,7 @@
 //! keyboard handler keeps the shortcuts.
 
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuBuilder, MenuItemKind, SubmenuBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItemKind, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::AppState;
@@ -86,18 +86,36 @@ pub fn ids() -> Vec<String> {
     parse().map(|s| s.menus.into_iter().flat_map(|m| m.items).filter(|i| !i.separator).map(|i| i.id).collect()).unwrap_or_default()
 }
 
-/// The menu bar for the main window.
+fn spec() -> tauri::Result<Spec> {
+    parse().map_err(|e| tauri::Error::Io(std::io::Error::other(e)))
+}
+
+fn submenu<R: Runtime, M: Manager<R>>(manager: &M, m: &SpecMenu) -> tauri::Result<Submenu<R>> {
+    let mut sub = SubmenuBuilder::new(manager, &m.label);
+    for i in &m.items {
+        sub = if i.separator { sub.separator() } else { sub.text(i.id.as_str(), &i.label) };
+    }
+    sub.build()
+}
+
+/// The menu bar for the main window (native title bar).
 pub fn build<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
-    let spec = parse().map_err(|e| tauri::Error::Io(std::io::Error::other(e)))?;
     let mut bar = MenuBuilder::new(manager);
-    for m in &spec.menus {
-        let mut sub = SubmenuBuilder::new(manager, &m.label);
-        for i in &m.items {
-            sub = if i.separator { sub.separator() } else { sub.text(i.id.as_str(), &i.label) };
-        }
-        bar = bar.item(&sub.build()?);
+    for m in &spec()?.menus {
+        bar = bar.item(&submenu(manager, m)?);
     }
     bar.build()
+}
+
+/// Custom title bar: no GTK menu bar above the webview (it would sit over Colony's own
+/// title bar); the title bar's File / View / Run / Help buttons open the same menu, by
+/// index, as a native popup under the button (logical coordinates in the window).
+#[tauri::command]
+pub fn menu_popup(window: tauri::WebviewWindow, index: usize, x: f64, y: f64) -> Result<(), String> {
+    let spec = spec().map_err(|e| e.to_string())?;
+    let m = spec.menus.get(index).ok_or_else(|| format!("No menu {index}"))?;
+    let sub = submenu(&window, m).map_err(|e| e.to_string())?;
+    window.popup_menu_at(&sub, tauri::LogicalPosition::new(x, y)).map_err(|e| e.to_string())
 }
 
 /// A menu click (or the smoke's): hand a known id to the main window.
