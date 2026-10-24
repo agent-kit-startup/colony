@@ -23,6 +23,8 @@ export class RunControls {
   readonly note: HTMLElement;
   readonly el: HTMLElement;
   private choices: BackendChoice[] = [];
+  /** The engine was picked in Colony (picker change or remembered for the folder). */
+  private explicit = false;
 
   constructor(private status: (msg: string) => void) {
     this.backend = h("select", { title: "Engine for this run (agent-kit run-plan --backend; also picks the vendor CLI for Open interactive), remembered for this folder" });
@@ -40,6 +42,7 @@ export class RunControls {
     );
     this.setChoices([]);
     this.backend.addEventListener("change", () => {
+      this.explicit = true;
       this.renderNote();
       this.remember({ backend: this.backend.value });
     });
@@ -56,7 +59,9 @@ export class RunControls {
 
   private setChoices(choices: BackendChoice[]) {
     this.choices = choices;
-    const keep = this.backend.value || "claude";
+    // Without a choice made in Colony, the desktop's default agent (Omarchy) wins over claude.
+    const system = this.explicit ? undefined : choices.find((c) => c.systemDefault)?.id;
+    const keep = system ?? (this.backend.value || "claude");
     const keepLimit = this.onLimit.value;
     const ids = choices.length ? choices.map((c) => c.id) : ["claude", "codex", "cursor-acp", "cursor-agent", "openrouter", "auto"];
     const label = (id: string) => {
@@ -78,7 +83,8 @@ export class RunControls {
     const c = this.choices.find((x) => x.id === this.backend.value);
     const missing = c && !c.available ? ` · ${c.bin || "no agent CLI"} not found on PATH` : "";
     const old = c?.needsEngine ? ` · needs engine ${c.needsEngine} or newer: update it in More → Engine` : "";
-    this.note.textContent = c ? `${c.note}${missing}${old}` : "";
+    const system = c?.systemDefault ? " · Omarchy default agent" : "";
+    this.note.textContent = c ? `${c.note}${system}${missing}${old}` : "";
     this.note.classList.toggle("warn", this.backend.value === "cursor-agent" || !!(c && (!c.available || c.needsEngine)));
   }
 
@@ -90,7 +96,15 @@ export class RunControls {
   async loadWorkspace() {
     try {
       const ws = await api.settingsWorkspace();
-      if (ws.backend && [...this.backend.options].some((o) => o.value === ws.backend)) this.backend.value = ws.backend;
+      if (ws.backend && [...this.backend.options].some((o) => o.value === ws.backend)) {
+        this.backend.value = ws.backend;
+        this.explicit = true;
+      } else {
+        // A folder with no remembered engine starts again from the desktop default.
+        this.explicit = false;
+        const system = this.choices.find((c) => c.systemDefault)?.id;
+        if (system) this.backend.value = system;
+      }
       this.onLimit.value = ws.onLimit ?? "";
       this.model.value = ws.model ?? "";
       if (ws.maxTicks) this.ticks.value = String(ws.maxTicks);
