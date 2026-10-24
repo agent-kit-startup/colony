@@ -379,6 +379,7 @@ pub fn run() {
             settings::settings_set_workspace,
             settings::settings_set_skin,
             settings::settings_set_title_bar,
+            settings::settings_set_layout,
             launch::open_in_editor,
             omarchy::omarchy_subscribe,
             omarchy_shell::omarchy_integration_plan,
