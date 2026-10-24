@@ -23,6 +23,7 @@ import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
 import { CommandPalette } from "./palette";
+import { readiness } from "./readiness";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { kitSkinValue, loadSkin, onSkin, setSkin, type Skin, SKINS, skin } from "./skin";
@@ -106,6 +107,8 @@ const status = (msg: string) => {
 let workspace: WorkspaceInfo | null = null;
 let mcUrl = "";
 let mcOrigin = "";
+/** The folder's Mission Control server log (~/.cache/colony/dashboard-<port>.log), once known. */
+let mcLog = "";
 
 // ---- tabs and rail --------------------------------------------------------------------
 interface Tab {
@@ -552,6 +555,22 @@ const host: CockpitHost = {
     void copyText(text).then((ok) => status(ok ? `Copied ${what}` : `Could not copy ${what}`));
   },
   workspaceRoot: () => workspace?.root ?? "",
+  installKit: async () => {
+    if (!workspace) return status("Open a folder first");
+    const argv = ["npx", "@dadado/agent-kit-cli@latest", "install"];
+    const ok = await confirmAction(`Run ${argv.join(" ")} in ${workspace.name}? It writes the kit's files (.cursor/, AGENTS.md, ...) into this folder and asks its own questions in the terminal tab.`, "Install Agent Kit");
+    if (!ok) return status("Agent Kit install not started");
+    toggleTerminal(true);
+    await terminals.create(argv, "agent-kit install");
+    status("Agent Kit install runs in the terminal below; Mission lists the readiness checks once it is done");
+  },
+  retryMc: () => void startMc(),
+  mcLogPath: () => mcLog,
+  showMcLog: () => {
+    if (!workspace || !mcLog) return status("No Mission Control server log yet");
+    toggleTerminal(true);
+    void terminals.create(["tail", "-n", "200", "-F", mcLog], "Mission Control log");
+  },
 };
 
 
@@ -791,6 +810,8 @@ snapshot.on((why) => {
   if (why === "data") renderTabs();
 });
 setInterval(renderFeed, 5000);
+// Back from the agent or a terminal elsewhere: the readiness report may have changed.
+window.addEventListener("focus", () => void readiness.load(2000));
 
 // ---- quick open ------------------------------------------------------------------------
 let quickFiles: string[] = [];
@@ -921,8 +942,13 @@ async function openWorkspace(path: string) {
   resuming.clear();
   chats.reset();
   void chats.refresh();
+  // The first-run missions (no kit, readiness checks) render from the folder's own files,
+  // before and without the Mission Control server.
+  readiness.reset(workspace.root, workspace.hasKit);
+  void readiness.load();
   mcUrl = "";
   mcOrigin = "";
+  mcLog = "";
   mcFrame.removeAttribute("src");
   alerts.setBase(`${workspace.name} · Colony`);
   // The folder name never truncates; its parent path ellipsizes (full path in the title).
@@ -936,19 +962,36 @@ async function openWorkspace(path: string) {
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
-  if (!workspace.hasKit) status("No Agent Kit in this folder: Mission Control shows git and repo data only (agent-kit install adds plans and HANDOFF)");
+  await startMc();
+}
+
+/**
+ * Start the folder's Mission Control server (or reach the running one) and connect the
+ * snapshot feed. Also the Retry of the "Waiting for the Mission Control server" state.
+ */
+async function startMc() {
+  if (!workspace) return;
+  const root = workspace.root;
   $("st-mc").textContent = "Mission Control: starting…";
+  snapshot.feed.error = null;
+  snapshot.feed.detail = "starting";
+  for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
   try {
     const mc = await api.dashboardStart();
+    if (workspace?.root !== root) return;
     mcUrl = mc.url;
     mcOrigin = new URL(mc.url).origin;
+    mcLog = mc.logPath;
     $("st-mc").title = `${mc.servePath}\nengine: ${mc.engine}\nlog: ${mc.logPath}`;
     void refreshEngineBadge($("st-engine"));
     await snapshot.connect();
   } catch (e) {
+    if (workspace?.root !== root) return;
+    // A server that never listened names its log in the error.
+    mcLog = /log: (\S+\.log)/.exec(errText(e))?.[1] ?? mcLog;
     snapshot.feed.error = errText(e);
     renderFeed();
-    mission.invalidate();
+    for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
     status(`Mission Control: ${errText(e)}`);
   }
 }
@@ -1110,8 +1153,13 @@ async function runSmoke(root: string, info: StartupInfo) {
     closeEnginePanel();
     showTab("mission");
     await wait(300);
-    const hero = view("mission").querySelector(".hero")?.textContent ?? "";
-    await log("view-mission", activeTab === "mission" && !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]'), { hero: hero.slice(0, 160), cards: view("mission").querySelectorAll(".card").length });
+    const hero = view("mission").querySelector(".hero:not(.first-run)")?.textContent ?? "";
+    // A folder without the kit, without a readiness report or with open essential checks
+    // (and no active plan) opens on the First run card instead of the hero.
+    const firstRun = view("mission").querySelector<HTMLElement>(".first-run");
+    const firstRunOk = !!firstRun && !!firstRun.querySelector('[data-act="onboard"], [data-act="install-kit"]');
+    const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]');
+    await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
     showTab("plans");
     view("plans").querySelector<HTMLButtonElement>('button[data-filter="all"]')?.click();
     await wait(200);

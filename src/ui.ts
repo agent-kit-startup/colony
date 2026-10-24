@@ -199,6 +199,52 @@ export function empty(text: string): HTMLElement {
   return h("div", { class: "empty dim" }, text);
 }
 
+export interface EmptyCta {
+  /** Kit SVG icon over the headline (the dashboard's empty-state-icon). */
+  icon?: IconKind;
+  headline: string;
+  support?: string;
+  /** Actions, the first one leading; each runs something real (no copy-only labels). */
+  actions?: { label: string; onClick: () => void; title?: string; act?: string }[];
+  compact?: boolean;
+}
+
+/**
+ * Empty state with a next step, the kit's pattern (dashboard.html renderEmptyStateCta,
+ * .empty-state-cta): icon, headline, one line of support and the action buttons. Colony
+ * runs its actions instead of copying, so the labels name what happens.
+ */
+export function emptyCta(o: EmptyCta): HTMLElement {
+  const acts = o.actions ?? [];
+  return h(
+    "div",
+    { class: `empty-state-cta${o.compact ? " compact" : ""}${acts.length ? " has-cta" : ""}` },
+    ...(o.icon ? [h("div", { class: "empty-state-icon" }, icon(o.icon))] : []),
+    h("div", { class: "empty-state-headline" }, o.headline),
+    ...(o.support ? [h("p", { class: "empty-state-support" }, o.support)] : []),
+    ...(acts.length
+      ? [
+          h(
+            "div",
+            { class: "empty-state-actions" },
+            ...acts.map((a) => btn(`→ ${a.label}`, a.onClick, { class: "empty-state-btn", ...(a.title ? { title: a.title } : {}), ...(a.act ? { "data-act": a.act } : {}) })),
+          ),
+        ]
+      : []),
+  );
+}
+
+/** Check status chip (the Health card's ✓ / ✕ chips): one look for every check list. */
+export type CheckTone = "ok" | "todo" | "manual" | "fail";
+const CHECK_CHIP: Record<CheckTone, [string, string]> = { ok: ["✓", "chip-done"], todo: ["○", "chip-gate"], manual: ["✎", "chip-parked"], fail: ["✕", "chip-failed"] };
+export function checkChip(label: string, tone: CheckTone, title = ""): HTMLElement {
+  const [mark, cls] = CHECK_CHIP[tone];
+  const el = chip(`${mark} ${label}`, cls);
+  if (title) el.title = title;
+  el.dataset.tone = tone;
+  return el;
+}
+
 /** A byte count as B, KB (one decimal under 10 KB) or MB. */
 export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
