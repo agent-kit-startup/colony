@@ -333,7 +333,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .now-actions { margin-top: var(--mc-space-xs); }
 .run-meta { display: inline-flex; gap: var(--mc-space-md); flex: none; font-size: var(--mc-chrome-meta-size); color: var(--text-muted); white-space: nowrap; }
 
-button.link { background: transparent; border-color: transparent; color: var(--blue); padding: 1px 4px; font-size: var(--mc-chrome-subtitle-size); align-self: flex-start; }
+button.link { background: transparent; border-color: transparent; color: var(--blue); padding: 1px 4px; font-size: var(--mc-chrome-subtitle-size); align-self: flex-start; min-height: 0; }
 button.link:hover { text-decoration: underline; border-color: transparent; background: transparent; color: var(--blue); }
 button.filter { padding: 3px 10px; font-size: var(--mc-chrome-subtitle-size); border-radius: var(--mc-radius-chrome); }
 button.filter.on { background: var(--blue-bg); border-color: var(--blue); color: var(--text-primary); }
