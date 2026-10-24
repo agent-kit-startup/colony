@@ -1243,13 +1243,13 @@ async function runSmoke(root: string, info: StartupInfo) {
     // Skins: Legacy from the More menu (same handler as the operator's click), saved in
     // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
     const pickSkin = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="skin"][data-skin="${id}"]`)?.click();
-    const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const frameLoad = () => new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     let reloaded = frameLoad();
     pickSkin("legacy");
     await Promise.race([reloaded, wait(8000)]);
     await wait(800);
-    const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--mc-bg-primary").trim();
+    const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const savedSkin = ((await api.settingsGet()).settings as { ui?: { skin?: string } } | null)?.ui?.skin;
     const frameSkin = await frameSkinNow();
     showTab("mission");

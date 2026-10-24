@@ -8,8 +8,8 @@ import { onSkin, token } from "./skin";
 
 // The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
 const termTheme = () => ({
-  background: token("--mc-bg-primary"),
-  foreground: token("--mc-text-primary"),
+  background: token("--bg-primary"),
+  foreground: token("--text-primary"),
   cursor: token("--text-primary"),
   cursorAccent: token("--bg-primary"),
   selectionBackground: token("--mc-selection"),
@@ -38,7 +38,7 @@ export class TermView {
   constructor(readonly pane: HTMLElement) {
     this.term = new Terminal({
       // Prompt themes need Nerd Font glyphs; then the shared monospace stack.
-      fontFamily: `"JetBrainsMono Nerd Font", "JetBrains Mono", ${getComputedStyle(document.documentElement).getPropertyValue("--mono")}`,
+      fontFamily: `"JetBrainsMono Nerd Font", "JetBrains Mono", ${getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono")}`,
       fontSize: 13,
       cursorBlink: true,
       scrollback: 10000,

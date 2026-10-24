@@ -7,8 +7,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/gen-tokens.mjs --check && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "tokens": "node scripts/gen-tokens.mjs",
+    "tokens:check": "node scripts/gen-tokens.mjs --check",
     "tauri": "tauri"
   },
   "packageManager": "pnpm@10.0.0",

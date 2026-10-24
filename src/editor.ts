@@ -40,7 +40,7 @@ export class Editors {
       model: null,
       theme: "colony-dark",
       automaticLayout: true,
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono"),
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono"),
       fontSize: 13,
       minimap: { enabled: true },
       smoothScrolling: true,

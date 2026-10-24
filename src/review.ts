@@ -127,7 +127,7 @@ export class ReviewView {
         originalEditable: false,
         renderSideBySide: true,
         fontSize: 13,
-        fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono"),
+        fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mc-font-mono"),
       });
     }
     const old = this.diff.getModel();

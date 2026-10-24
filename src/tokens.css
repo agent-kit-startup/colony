@@ -1,22 +1,12 @@
-/* Mission Control design tokens, shared with the kit's web Mission Control.
+/* Mission Control design tokens, generated from the kit's skin token contract
+ * version 1.0.0, https://github.com/agent-kit-startup/agent-kit/blob/main/docs/contracts/mission-control-skins.json
+ * by scripts/gen-tokens.mjs. Do not edit by hand: update
+ * src/contracts/mission-control-skins.json and run `pnpm tokens`.
  *
- * Source snapshot: agent-kit dashboard/dashboard.html, the `:root` /
- * `html[data-dashboard-skin=...]` blocks at lines 42-126 (kit commit 485f599a on staging,
- * file last changed in 7d0b7e0c; byte-identical to the published @dadado/agent-kit-cli
- * 6.2.0 dashboard), plus --text-muted in both skins from agent-kit-dev PR #1237
- * (WCAG AA, >= 4.5:1 on every bg-* surface incl. hover: Bare Metal #8b8b8b, Legacy
- * #7f93a8). Values are copied, never parsed from the dashboard at runtime.
- *
- * Names are the dashboard's own (--bg-primary, --border, --text-muted, --green-bg,
- * --mc-radius-chrome, --mc-space-lg ...) so the kit's planned skin token contract
- * (docs/contracts/, plan mission-control-skins-bare-metal S2: shared :root tokens plus
- * nine surface overrides per skin) maps 1:1. When that contract ships, regenerate this
- * file from it instead of hand-copying.
- *
- * Skins (src/skin.ts): Bare Metal = the dashboard's `cursor` skin (Colony's default, so it
- * is also the :root value here); Legacy = the dashboard's `legacy` skin (the dashboard's
- * own default). A skin overrides only the nine surface variables.
- */
+ * Names are the dashboard's own; Colony has no second color name set. The default skin
+ * (bare-metal) is also the :root value; a skin overrides only the 9 surface tokens
+ * (src/skin.ts sets html[data-skin]). */
+
 :root,
 html[data-skin="bare-metal"] {
   --bg-primary: #141414;
@@ -29,6 +19,7 @@ html[data-skin="bare-metal"] {
   --text-secondary: #a0a0a0;
   --text-muted: #8b8b8b;
 }
+
 html[data-skin="legacy"] {
   --bg-primary: #0b0e14;
   --bg-secondary: #111620;
@@ -40,23 +31,22 @@ html[data-skin="legacy"] {
   --text-secondary: #8899aa;
   --text-muted: #7f93a8;
 }
+
 :root {
-  /* Semantic colors (shared by both skins). */
   --green: #22c55e;
-  --green-bg: rgba(34, 197, 94, 0.12);
+  --green-bg: rgba(34,197,94,0.12);
   --yellow: #eab308;
-  --yellow-bg: rgba(234, 179, 8, 0.12);
+  --yellow-bg: rgba(234,179,8,0.12);
   --red: #ef4444;
-  --red-bg: rgba(239, 68, 68, 0.12);
+  --red-bg: rgba(239,68,68,0.12);
   --blue: #3b82f6;
-  --blue-bg: rgba(59, 130, 246, 0.12);
+  --blue-bg: rgba(59,130,246,0.12);
   --purple: #a855f7;
-  --purple-bg: rgba(168, 85, 247, 0.12);
+  --purple-bg: rgba(168,85,247,0.12);
   --cyan: #06b6d4;
-  --cyan-bg: rgba(6, 182, 212, 0.12);
+  --cyan-bg: rgba(6,182,212,0.12);
   --orange: #f97316;
-  --orange-bg: rgba(249, 115, 22, 0.12);
-  /* Structure tokens. */
+  --orange-bg: rgba(249,115,22,0.12);
   --mc-header-height: 32px;
   --mc-header-control-size: 24px;
   --mc-top-tabs-height: 40px;
@@ -73,9 +63,14 @@ html[data-skin="legacy"] {
   --mc-space-2xl: 24px;
   --mc-card-padding: 16px;
   --mc-card-padding-dense: 10px 12px;
+  --mc-header-pad-x: 24px;
+  --mc-header-pad-x-end: 8px;
   --mc-content-pad: 24px;
   --mc-scroll-gutter: 8px;
-  /* Type. */
+  --header-height: var(--mc-header-height);
+  --top-tabs-height: var(--mc-top-tabs-height);
+  --radius: var(--mc-radius);
+  --radius-lg: var(--mc-radius-lg);
   --mc-font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mc-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --mc-ui-font-size: 13px;
@@ -88,39 +83,16 @@ html[data-skin="legacy"] {
   --mc-chrome-meta-size: 11px;
   --mc-chrome-meta-weight: 400;
   --mc-status-dot-size: 7px;
+}
 
-  /* ---- Colony-local (not in the dashboard's token block) ----------------------------
-   * Values the dashboard writes inline in its rules; named here so a future kit contract
-   * can adopt them. */
+
+/* Colony-local: values the dashboard writes inline in its rules, named here until the
+ * contract adopts them. */
+
+:root {
   --mc-selection: rgba(59, 130, 246, 0.3); /* dashboard ::selection */
   --mc-shadow-card-hover: 0 0 0 1px var(--border-active), 0 4px 12px rgba(0, 0, 0, 0.2); /* .card:hover */
   --mc-shadow-popover: 0 12px 40px rgba(0, 0, 0, 0.5);
   --mc-stepbar-height: 6px; /* .now-stepbar-seg */
   --mc-step-marker-size: 20px; /* .now-step-marker */
-}
-
-/* Colony's earlier --mc-* color names (skin.ts, termview.ts, the COLONY_SMOKE skin check
-   and older rules read them): aliases of the dashboard names above. */
-:root {
-  --mc-bg-primary: var(--bg-primary);
-  --mc-bg-secondary: var(--bg-secondary);
-  --mc-bg-card: var(--bg-card);
-  --mc-bg-card-hover: var(--bg-card-hover);
-  --mc-border: var(--border);
-  --mc-border-active: var(--border-active);
-  --mc-text-primary: var(--text-primary);
-  --mc-text-secondary: var(--text-secondary);
-  --mc-text-muted: var(--text-muted);
-  --mc-green: var(--green);
-  --mc-green-bg: var(--green-bg);
-  --mc-yellow: var(--yellow);
-  --mc-yellow-bg: var(--yellow-bg);
-  --mc-red: var(--red);
-  --mc-red-bg: var(--red-bg);
-  --mc-blue: var(--blue);
-  --mc-blue-bg: var(--blue-bg);
-  --mc-purple: var(--purple);
-  --mc-purple-bg: var(--purple-bg);
-  --mc-cyan: var(--cyan);
-  --mc-orange: var(--orange);
 }
