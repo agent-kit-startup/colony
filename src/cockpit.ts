@@ -306,6 +306,20 @@ function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string):
     : `Held by an out-of-queue run: HANDOFF is on ${planName(hold.plan)}, not on the queue cursor ${planName(cursorPlan)}.`;
 }
 
+// ---- Plan actions --------------------------------------------------------------------
+// The kit plans through slash commands only (/start-project, /backlog-add, /backlog-edit):
+// these open the agent interactively with one of them, after a confirmation.
+const NEW_PLAN_WHY = "/start-project turns what you tell it into a plan with to-dos, with two confirmations before it writes the plan and makes it active.";
+const BACKLOG_ADD_WHY = "/backlog-add writes a new plan with to-dos and lists it under the HANDOFF backlog, without activating it.";
+
+function newPlanBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
+  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: "/start-project in your agent, interactively: a new active plan" });
+}
+
+function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
+  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" });
+}
+
 // ---- First run -----------------------------------------------------------------------
 /** Readiness status -> check chip tone and label (readiness.json status vocabulary). */
 const CHECK_STATUS: Record<ReadinessCheck["status"], [CheckTone, string]> = {
@@ -487,6 +501,8 @@ export class MissionView extends View {
       "div",
       { class: "actions now-actions" },
       run,
+      // No active plan (or it is done): the next mission is a new plan.
+      ...(!pend && (!plan || planDone) ? [newPlanBtn(this.host, plan ? "status-bar-btn" : "primary"), backlogAddBtn(this.host)] : []),
       iconBtn("terminals", "Open interactive", () => void this.host.interactive(), { class: "status-bar-btn", "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
       ...(pend
         ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`), { class: "status-bar-btn" })]
@@ -753,7 +769,7 @@ export class PlansView extends View {
       .filter((p) => !this.query || `${p.id} ${p.file} ${p.overview}`.toLowerCase().includes(this.query))
       .sort((a, b) => order(a) - order(b) || a.id.localeCompare(b.id));
     return [
-      h("div", { class: "toolbar" }, h("div", { class: "chips" }, ...chips), this.search),
+      h("div", { class: "toolbar" }, h("div", { class: "chips" }, ...chips), h("div", { class: "actions" }, this.search, newPlanBtn(this.host), backlogAddBtn(this.host))),
       h("div", { class: "plan-list" }, ...(shown.length ? shown.map((p) => this.row(p, p.file === active)) : [empty("No plans match.")])),
     ];
   }
@@ -771,7 +787,16 @@ export class PlansView extends View {
         }),
       );
     }
-    if (p.lifecycle === "backlog") acts.push(btn("Edit…", () => void this.host.interactive(`/backlog-edit ${p.file}`), { class: "status-bar-btn", title: "/backlog-edit in your agent, interactively" }));
+    // /backlog-edit edits any plan file without activating it (a plan off the backlog list
+    // gets the kit's own warning and question first); a completed plan stays as it is.
+    if (p.lifecycle !== "completed")
+      acts.push(
+        btn("Edit…", () => void this.host.interactive(`/backlog-edit ${p.file}`, p.lifecycle === "backlog" ? "" : `${p.file} is not a backlog plan: /backlog-edit warns once and asks before it edits it.`), {
+          class: "status-bar-btn",
+          "data-act": "backlog-edit",
+          title: "/backlog-edit in your agent, interactively: change to-dos, overview or phases without activating the plan",
+        }),
+      );
     if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => void this.host.interactive(`/continue-plan ${p.file}`), { class: "status-bar-btn", title: "/continue-plan in your agent, interactively" }));
     const inProgress = p.todos.filter((t) => t.status === "in_progress").length;
     const pct = p.progress.total ? Math.round((100 * p.progress.completed) / p.progress.total) : 0;
