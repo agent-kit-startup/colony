@@ -46,8 +46,11 @@ const RELEASE_SCAN: usize = 10;
 pub const DASHBOARD_DATA_MAJOR: u64 = 1;
 /// Where kit releases (and their engine artifacts) are published.
 pub const DEFAULT_RELEASE_REPO: &str = "agent-kit-startup/agent-kit";
-/// Public key for engine signatures. None until the operator creates the signing identity
-/// (ADR Consequence 4); until then only SHA256SUMS is checked and the install says so.
+/// Public key for engine signatures: the base64 line of the kit's minisign public key
+/// (`RW...`, the second line of `minisign.pub`). None until the operator creates the engine
+/// signing key (kit secret ENGINE_SIGNING_KEY, ADR Consequence 4); until then only
+/// SHA256SUMS is checked and the install says so. Once set, every install needs
+/// `SHA256SUMS.minisig` on the release and a valid signature over SHA256SUMS by this key.
 const ENGINE_SIGNING_PUBKEY: Option<&str> = None;
 
 /// Pinned official Node build (nodejs.org, LTS), with the sha256 values of its
@@ -582,16 +585,33 @@ pub fn verify_sha256(path: &Path, sums: &str, name: &str) -> Result<String, Stri
     Ok(got)
 }
 
-/// Signature hook. No public key is configured yet, so this checks nothing and says so;
-/// once a key exists, an unimplemented check fails closed instead of passing silently.
-fn verify_signature(name: &str) -> Result<String, String> {
-    match ENGINE_SIGNING_PUBKEY {
+/// Check `sig` (a minisign signature file, prehashed Ed25519, as `minisign -S` writes it)
+/// over the exact bytes of SHA256SUMS against `pubkey` (the `RW...` base64 line). The
+/// global signature over the trusted comment is checked too. Returns the trusted comment.
+pub fn verify_sums_signature(sums: &[u8], sig: &str, pubkey: &str) -> Result<String, String> {
+    let pk = minisign_verify::PublicKey::from_base64(pubkey.trim()).map_err(|e| format!("engine signing public key is invalid: {e}"))?;
+    let sig = minisign_verify::Signature::decode(sig).map_err(|e| format!("SHA256SUMS.minisig is not a minisign signature: {e}"))?;
+    pk.verify(sums, &sig, false).map_err(|e| format!("signature check of SHA256SUMS failed: {e}"))?;
+    Ok(sig.trusted_comment().to_string())
+}
+
+/// The signature step of an install. With no key configured it checks nothing and says so;
+/// with a key it downloads `<rel>/SHA256SUMS.minisig` and fails closed when that file is
+/// missing or does not verify. Runs before the tarball's sha256 is trusted.
+fn verify_signature(pubkey: Option<&str>, rel: &str, sums: &[u8], tmp: &Path, name: &str) -> Result<String, String> {
+    match pubkey {
         None => {
             let note = format!("signature not verified for {name}: no engine signing key is configured yet (SHA256SUMS checked)");
             eprintln!("colony engine: {note}");
             Ok(note)
         }
-        Some(_) => Err("an engine signing key is configured but signature verification is not implemented".into()),
+        Some(pk) => {
+            let sig_path = tmp.join("SHA256SUMS.minisig");
+            curl(&format!("{rel}/SHA256SUMS.minisig"), &sig_path).map_err(|e| format!("this release has no engine signature (SHA256SUMS.minisig), refusing to install: {e}"))?;
+            let sig = std::fs::read_to_string(&sig_path).map_err(|e| e.to_string())?;
+            let comment = verify_sums_signature(sums, &sig, pk)?;
+            Ok(format!("signature ok ({comment})"))
+        }
     }
 }
 
@@ -660,6 +680,10 @@ pub struct InstallReport {
 /// (`<data dir>/colony/engine`). The previous current engine stays for `rollback`;
 /// older ones are removed.
 pub fn install_engine(engines: &Path, base: &str, version: &str) -> Result<InstallReport, String> {
+    install_engine_with(engines, base, version, ENGINE_SIGNING_PUBKEY)
+}
+
+fn install_engine_with(engines: &Path, base: &str, version: &str, pubkey: Option<&str>) -> Result<InstallReport, String> {
     let version = version.trim().trim_start_matches('v');
     Version::parse(version).map_err(|e| format!("not a version: {version} ({e})"))?;
     std::fs::create_dir_all(engines).map_err(|e| e.to_string())?;
@@ -671,9 +695,10 @@ pub fn install_engine(engines: &Path, base: &str, version: &str) -> Result<Insta
         let sums_path = tmp.join("SHA256SUMS");
         curl(&format!("{base}/v{version}/{name}"), &tarball)?;
         curl(&format!("{base}/v{version}/SHA256SUMS"), &sums_path)?;
-        let sums = std::fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
+        let sums_bytes = std::fs::read(&sums_path).map_err(|e| e.to_string())?;
+        let signature = verify_signature(pubkey, &format!("{base}/v{version}"), &sums_bytes, &tmp, &name)?;
+        let sums = String::from_utf8(sums_bytes).map_err(|_| "SHA256SUMS is not UTF-8".to_string())?;
         let sha = verify_sha256(&tarball, &sums, &name)?;
-        let signature = verify_signature(&name)?;
         let unpacked = tmp.join("engine");
         untar(&tarball, &unpacked)?;
         let manifest = read_manifest(&unpacked).ok_or("the engine artifact has no engine.json")??;
@@ -1195,6 +1220,47 @@ mod tests {
         assert_eq!(node_version(&bin).unwrap().to_string(), NODE_VERSION);
         assert_eq!(managed_nodes(&root), vec![bin]);
         assert!(install_node(&root, "https://nodejs.org/dist").unwrap().contains("already installed"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A minisign signature over a SHA256SUMS line, made with a throwaway key
+    /// (`tauri signer`, the same minisign format `minisign -S` writes).
+    const FIX_PUB: &str = "RWQgIS4uZPcTTSdNhXPrN661GKyz5VZXqqHGG34o7F4lNTENh6g9kxRL";
+    const FIX_OTHER_PUB: &str = "RWSZ9YpILrjjXAp6NpED7dwKXw5xjxzz9C3ATKsXtagiPrNgcAwgvAjN";
+    const FIX_SUMS: &str = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881  agent-kit-engine-6.3.0.tar.gz\n";
+    const FIX_SIG: &str = "untrusted comment: signature from tauri secret key\nRUQgIS4uZPcTTT5Xa+XlEz7lWVJ34KNoIR8MJCcwxKzvyNrBf3DfE4hkFS75yZXKRPnu5876xUkgw8Ay8lUyW9ihslEbqhMpvA8=\ntrusted comment: timestamp:1792819882\tfile:SHA256SUMS\nlUpHX2U9fEVdVddpKSQ1OjXLrK4MD23tJzNIwEIPdUrlToc0Q5oveOXjidt6bEmxmFRNqUg88P7jOsr2lMK7Bw==\n";
+
+    #[test]
+    fn engine_signature_over_sha256sums() {
+        assert!(verify_sums_signature(FIX_SUMS.as_bytes(), FIX_SIG, FIX_PUB).unwrap().contains("file:SHA256SUMS"));
+        // A changed SHA256SUMS, another key, a changed trusted comment, garbage: refused.
+        let tampered = FIX_SUMS.replace("6.3.0", "6.3.1");
+        assert!(verify_sums_signature(tampered.as_bytes(), FIX_SIG, FIX_PUB).unwrap_err().contains("failed"));
+        assert!(verify_sums_signature(FIX_SUMS.as_bytes(), FIX_SIG, FIX_OTHER_PUB).is_err());
+        let comment = FIX_SIG.replace("timestamp:1792819882", "timestamp:1792819883");
+        assert!(verify_sums_signature(FIX_SUMS.as_bytes(), &comment, FIX_PUB).is_err());
+        assert!(verify_sums_signature(FIX_SUMS.as_bytes(), "not a signature", FIX_PUB).is_err());
+        assert!(verify_sums_signature(FIX_SUMS.as_bytes(), FIX_SIG, "RWnotakey").is_err());
+    }
+
+    #[test]
+    fn a_configured_key_needs_a_valid_signature_on_the_release() {
+        let root = scratch("signed");
+        let base = root.join("releases");
+        publish(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
+        let url = format!("file://{}", base.display());
+        let engines = root.join("engine");
+        // No SHA256SUMS.minisig on the release: refused before anything is unpacked.
+        let e = install_engine_with(&engines, &url, "6.3.0", Some(FIX_PUB)).unwrap_err();
+        assert!(e.contains("no engine signature"), "{e}");
+        // A signature that does not match this SHA256SUMS: refused.
+        fs::write(base.join("v6.3.0/SHA256SUMS.minisig"), FIX_SIG).unwrap();
+        let e = install_engine_with(&engines, &url, "6.3.0", Some(FIX_PUB)).unwrap_err();
+        assert!(e.contains("signature check of SHA256SUMS failed"), "{e}");
+        assert!(!engines.join("6.3.0").exists());
+        // No key configured: installs on the checksum and says the signature was not checked.
+        let r = install_engine_with(&engines, &url, "6.3.0", None).unwrap();
+        assert!(r.signature.contains("not verified"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -492,6 +492,7 @@ name = "colony"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "minisign-verify",
  "portable-pty",
  "semver",
  "serde",

@@ -94,4 +94,4 @@ Environment: `COLONY_DOWNLOAD_BASE` (`https://` or `file://`; default `https://g
 
 - `install.sh` installing the AppImage (so the curl install updates itself too): the AppImage needs FUSE (`fuse2`) on the host, which Omarchy and Arch do not install by default.
 - macOS and Windows builds, arm64.
-- The managed engine's own signature check (`ENGINE_SIGNING_PUBKEY` in `src-tauri/src/engine.rs`) waits for the kit's engine signing key.
+- The managed engine's signature check is implemented (`verify_sums_signature` in `src-tauri/src/engine.rs`: minisign over `SHA256SUMS`, fails closed without `SHA256SUMS.minisig`) but off: `ENGINE_SIGNING_PUBKEY` stays `None` until the kit's engine signing key exists; then its `RW...` public key line goes there.
