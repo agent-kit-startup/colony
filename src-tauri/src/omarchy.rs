@@ -45,6 +45,11 @@ pub fn detected_at(root: &Path) -> bool {
     root.join("version").is_file()
 }
 
+/// Whether this machine runs Omarchy.
+pub fn detected() -> bool {
+    detected_at(Path::new(OMARCHY_ROOT))
+}
+
 fn state_dir(home: &Path) -> PathBuf {
     home.join(".local/state/omarchy/current")
 }
@@ -180,7 +185,7 @@ fn home() -> Option<PathBuf> {
 
 /// The live theme and font, or `None` off Omarchy.
 pub fn current() -> Option<Theme> {
-    if !detected_at(Path::new(OMARCHY_ROOT)) {
+    if !detected() {
         return None;
     }
     let mut t = read_at(&home()?)?;

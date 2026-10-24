@@ -16,6 +16,7 @@ import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine"
 import { FileTree } from "./filetree";
 import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
+import { openOmarchyPanel, publishShellStatus } from "./omarchy";
 import { GitView } from "./git";
 import { hostRequests, inboxRequests, RequestsSection } from "./hostreq";
 import { hostSmoke } from "./hostsmoke";
@@ -87,6 +88,7 @@ document.getElementById("app")!.innerHTML = `
   <button data-more="terminal">New shell terminal</button>
   <button data-more="engine">Engine…</button>
   <button data-more="about">About Colony…</button>
+  <button data-more="omarchy" hidden title="Bar widget and menu entries for omarchy-shell (opt-in, removable)">Omarchy integration…</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
@@ -594,6 +596,8 @@ const alerts = new GateAlerts((key) => {
   inbox.reveal(key);
 });
 alerts.showing = (g) => activeTab === g.tabId || activeTab === "inbox";
+// The omarchy-shell bar widget reads this window's folder, open gates and live runs.
+const pushShellStatus = publishShellStatus(() => workspace?.root ?? null);
 // Terminal tabs carry a gate marker while their output shows an open HITL_GATE line.
 launches.on(() => renderTabs());
 let reviewCount = 0;
@@ -732,6 +736,7 @@ menu.addEventListener("click", (ev) => {
   }
   else if (what === "engine") showEngine();
   else if (what === "about") void openAboutPanel(status);
+  else if (what === "omarchy") void openOmarchyPanel(status);
   else if (what === "commands") void palette.show();
   else if (what === "terminal") {
     toggleTerminal(true);
@@ -768,8 +773,10 @@ const palette = new CommandPalette({
 document.body.append(palette.el);
 
 function renderSkinMenu() {
+  // The Omarchy skin and integration exist only where Omarchy is installed.
+  const integration = menu.querySelector<HTMLElement>('button[data-more="omarchy"]');
+  if (integration) integration.hidden = !omarchyDetected();
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
-    // The Omarchy skin exists only where Omarchy is installed.
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
     b.classList.toggle("on", on);
@@ -969,6 +976,7 @@ async function openWorkspace(path: string) {
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
+  pushShellStatus();
   await startMc();
 }
 
@@ -1343,6 +1351,14 @@ async function runSmoke(root: string, info: StartupInfo) {
     }
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === kitSkinValue("bare-metal") && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     if (startSkin !== "bare-metal") pickSkin(startSkin);
+    // Omarchy integration: the plan only (read-only); the smoke never installs anything.
+    if (omarchyDetected()) {
+      const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
+      const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
+      await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
+    } else {
+      await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-more="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
+    }
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
     await terminals.create(); // a fresh shell tab: the editor step may have closed the active one
@@ -1597,6 +1613,14 @@ async function runSmoke(root: string, info: StartupInfo) {
   await api.smokeExit();
 }
 
+/** `colony --inbox` / `colony --open-folder` (menu entries, bar widget): show that view. */
+function showView(view: string) {
+  if (view === "inbox") {
+    if (workspace) showTab("inbox");
+    else status("Open a folder first: the Inbox belongs to a folder");
+  } else if (view === "open-folder") void pickFolder();
+}
+
 // ---- boot ------------------------------------------------------------------------------
 shell.classList.add("no-folder");
 pinViews();
@@ -1622,11 +1646,14 @@ api
     // runs raises it (Rust side) and opens that folder here, after the startup folder.
     const forwarded = new Channel<InstanceEvent>();
     forwarded.onmessage = (m) => {
+      if (m.kind === "show") return showView(m.view);
       if (m.kind !== "open" || m.folder === workspace?.root) return;
       status(`Opening ${m.folder} (from another colony launch)`);
       void openWorkspace(m.folder);
     };
     void api.instanceSubscribe(forwarded).catch((e) => status(`Single instance: ${errText(e)}`));
+    if (info.initialView) showView(info.initialView);
+    pushShellStatus();
     if (info.smoke && workspace) await runSmoke(workspace.root, info);
   })
   .catch((e) => status(errText(e)));
