@@ -3,6 +3,8 @@
 // tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
 // (a fallback under More). Explorer next to the rail, shell terminals at the bottom.
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
@@ -35,6 +37,7 @@ import { Terminals } from "./terminal";
 import { TermView } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
+import menuSpec from "./menu.json";
 import { ago, copyText } from "./ui";
 
 const RECENTS_KEY = "colony.recentWorkspaces";
@@ -77,18 +80,18 @@ document.getElementById("app")!.innerHTML = `
 </div>
 <div id="more-menu" class="menu" hidden>
   <div class="menu-label">Views</div>
-  <button data-more="view" data-view="plans" title="Ctrl+7">Plans</button>
-  <button data-more="view" data-view="flight" title="Ctrl+8">Flight Log</button>
-  <button data-more="view" data-view="activity" title="Ctrl+9">Activity</button>
+  <button data-cmd="view:plans" title="Ctrl+7">Plans</button>
+  <button data-cmd="view:flight" title="Ctrl+8">Flight Log</button>
+  <button data-cmd="view:activity" title="Ctrl+9">Activity</button>
   <div class="menu-sep"></div>
-  <button data-more="commands" title="Ctrl+Shift+P">Commands…</button>
-  <button data-more="web">Mission Control (web panel)</button>
-  <button data-more="run-elsewhere">Run plan in another folder…</button>
-  <button data-more="refresh">Reload Mission Control data</button>
-  <button data-more="terminal">New shell terminal</button>
-  <button data-more="engine">Engine…</button>
-  <button data-more="about">About Colony…</button>
-  <button data-more="omarchy" hidden title="Bar widget and menu entries for omarchy-shell (opt-in, removable)">Omarchy integration…</button>
+  <button data-cmd="commands" title="Ctrl+Shift+P">Commands…</button>
+  <button data-cmd="web">Mission Control (web panel)</button>
+  <button data-cmd="run-elsewhere">Run plan in another folder…</button>
+  <button data-cmd="refresh">Reload Mission Control data</button>
+  <button data-cmd="new-terminal">New shell terminal</button>
+  <button data-cmd="engine">Engine…</button>
+  <button data-cmd="about">About Colony…</button>
+  <button data-cmd="omarchy" hidden title="Bar widget and menu entries for omarchy-shell (opt-in, removable)">Omarchy integration…</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
@@ -357,14 +360,15 @@ async function openInEditor(path?: string) {
   }
 }
 $("btn-editor").addEventListener("click", () => void openInEditor());
-$("btn-settings").addEventListener("click", async () => {
+async function openSettings() {
   try {
     await openFile(await api.settingsEnsure());
     status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the engine picker");
   } catch (e) {
     status(`Settings: ${errText(e)}`);
   }
-});
+}
+$("btn-settings").addEventListener("click", () => void openSettings());
 
 // ---- terminals (bottom) ----------------------------------------------------------------
 const terminals = new Terminals($("term-tabs"), $("terms"), status);
@@ -721,28 +725,83 @@ function toggleMore(anchor: HTMLElement) {
 window.addEventListener("click", () => (menu.hidden = true));
 menu.addEventListener("click", (ev) => {
   const el = ev.target as HTMLElement;
-  const what = el.dataset.more;
   menu.hidden = true;
-  if (what === "view" && el.dataset.view) showTab(el.dataset.view);
-  else if (what === "web") openWebPanel();
-  else if (what === "run-elsewhere") void controls.startElsewhere();
-  else if (what === "refresh") void snapshot.refresh();
-  else if (what === "skin") {
+  if (el.dataset.cmd) runAction(el.dataset.cmd);
+  else if (el.dataset.more === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
       () => status(`Skin: ${SKINS.find((x) => x.id === next)?.label} (saved in settings.json)`),
       (e) => status(`Skin: ${errText(e)}`),
     );
   }
-  else if (what === "engine") showEngine();
-  else if (what === "about") void openAboutPanel(status);
-  else if (what === "omarchy") void openOmarchyPanel(status);
-  else if (what === "commands") void palette.show();
-  else if (what === "terminal") {
-    toggleTerminal(true);
-    void terminals.create();
-  }
 });
+
+// ---- actions: the native menu bar (src/menu.json) and the More menu run these ----------
+const ACTIONS: Record<string, () => unknown> = {
+  "open-folder": () => pickFolder(),
+  "run-elsewhere": () => controls.startElsewhere(),
+  "open-in-editor": () => openInEditor(),
+  settings: () => openSettings(),
+  "close-window": () => closeWindow(),
+  terminal: () => toggleTerminal(),
+  "quick-open": () => showQuick(),
+  commands: () => palette.show(),
+  web: () => openWebPanel(),
+  refresh: () => snapshot.refresh(),
+  "run-plan": () => host.runPlan(),
+  "run-queue": () => host.runQueue(),
+  interactive: () => host.interactive(),
+  "new-terminal": () => {
+    toggleTerminal(true);
+    return terminals.create();
+  },
+  engine: () => showEngine(),
+  about: () => openAboutPanel(status),
+  omarchy: () => openOmarchyPanel(status),
+};
+
+/** `view:<rail item or More view>`: the rail item's own behaviour (a group opens its last view). */
+function viewAction(id: string): (() => unknown) | null {
+  const v = id.slice("view:".length);
+  const r = RAIL.find((x) => x.id === v && x.views.length);
+  if (r) return () => (workspace ? openRail(r) : status("Open a folder first"));
+  if (MORE_VIEWS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
+  return null;
+}
+
+function actionFor(id: string): (() => unknown) | null {
+  return id.startsWith("view:") ? viewAction(id) : (ACTIONS[id] ?? null);
+}
+
+function runAction(id: string): boolean {
+  const run = actionFor(id);
+  if (!run) {
+    status(`Unknown action: ${id}`);
+    return false;
+  }
+  try {
+    void Promise.resolve(run()).catch((e) => status(`${id}: ${errText(e)}`));
+  } catch (e) {
+    status(`${id}: ${errText(e)}`);
+  }
+  return true;
+}
+
+/** File → Close window: the same unsaved-files question as a folder switch. */
+async function closeWindow() {
+  const dirty = editors.paths().filter((p) => editors.isDirty(p));
+  if (dirty.length && !(await ask(`${dirty.length} file(s) have unsaved changes. Close Colony anyway?`, { title: "Colony", kind: "warning" }))) return;
+  await getCurrentWindow().close();
+}
+
+/** Every item id of the native menu bar, in menu order. */
+const menuIds = () => menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [i.id] : [])));
+const unbound = menuIds().filter((id) => !actionFor(id));
+if (unbound.length) console.error(`colony: menu items without an action: ${unbound.join(", ")}`);
+void listen<string>("colony-menu", (ev) => {
+  menu.hidden = true;
+  runAction(ev.payload);
+}).catch((e) => status(`Menu bar: ${errText(e)}`));
 
 function showEngine() {
   void openEnginePanel((m) => {
@@ -774,7 +833,7 @@ document.body.append(palette.el);
 
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
-  const integration = menu.querySelector<HTMLElement>('button[data-more="omarchy"]');
+  const integration = menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]');
   if (integration) integration.hidden = !omarchyDetected();
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
@@ -1094,15 +1153,13 @@ window.addEventListener(
     let handled = true;
     if (ev.code === "Backquote") toggleTerminal(!terminals.hasFocus());
     else if (key === "s" && !ev.shiftKey) void saveActive();
-    else if (key === "o" && !ev.shiftKey && !inTerm) void pickFolder();
-    else if (key === "p" && !ev.shiftKey && !inTerm) void showQuick();
-    else if (key === "p" && ev.shiftKey) void palette.show();
+    else if (key === "o" && !ev.shiftKey && !inTerm) runAction("open-folder");
+    else if (key === "p" && !ev.shiftKey && !inTerm) runAction("quick-open");
+    else if (key === "p" && ev.shiftKey) runAction("commands");
     else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
-    else if (key === "e" && ev.shiftKey) void openInEditor();
-    else if (key === "t" && ev.shiftKey) {
-      toggleTerminal(true);
-      void terminals.create();
-    } else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
+    else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
+    else if (key === "t" && ev.shiftKey) runAction("new-terminal");
+    else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
       // Ctrl+1..6: the rail (5 toggles the terminal); Ctrl+7..9: Plans, Flight Log, Activity.
       const n = Number(key) - 1;
       if (n < RAIL.length) openRail(RAIL[n]);
@@ -1188,6 +1245,54 @@ async function runSmoke(root: string, info: StartupInfo) {
     }
     const gitText = view("git").querySelector(".git-repo")?.textContent ?? "";
     await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
+    // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
+    // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
+    // click) runs the same action as the More menu.
+    const bar = await api.menuState();
+    const barIds = bar.flatMap((m) => m.items.map((i) => i.id));
+    await log("menu-installed", JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === "File,View,Run,Help" && bar.every((m) => m.items.every((i) => i.enabled)) && !unbound.length, { menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), unbound });
+    const fire = (id: string) => api.smokeMenuClick(id);
+    const termOn = () => !shell.classList.contains("no-bottom");
+    const moreClick = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-cmd="${id}"]`)?.click();
+    const m: Record<string, unknown> = {};
+    showTab("mission");
+    await fire("view:plans");
+    m.plans = await until(() => activeTab === "plans", 2000);
+    showTab("mission");
+    moreClick("view:plans");
+    m.morePlans = activeTab === "plans";
+    await fire("view:inbox");
+    m.inbox = await until(() => activeTab === "inbox", 2000);
+    await fire("view:pipelines");
+    m.pipelines = await until(() => activeTab === "queue" || activeTab === "cicd", 2000);
+    const termWas = termOn();
+    await fire("terminal");
+    m.terminalToggled = await until(() => termOn() !== termWas, 2000);
+    await fire("terminal");
+    m.terminalBack = await until(() => termOn() === termWas, 2000);
+    await fire("commands");
+    m.commands = await until(() => palette.open, 5000);
+    palette.hide();
+    await fire("quick-open");
+    m.quickOpen = await until(() => !$("quick").hidden, 2000);
+    hideQuick();
+    await fire("about");
+    m.about = await until(() => !!document.getElementById("about-panel"), 2000);
+    document.getElementById("about-panel")?.click();
+    await fire("engine");
+    m.engine = await until(() => !!document.getElementById("engine-panel"), 2000);
+    closeEnginePanel();
+    moreClick("engine");
+    m.moreEngine = await until(() => !!document.getElementById("engine-panel"), 2000);
+    closeEnginePanel();
+    await fire("run-plan");
+    m.runPlan = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
+    document.getElementById("run-dialog")?.remove();
+    m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
+    await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
+    showTab("mission");
+    await wait(200);
+    await shot("menu");
     showTab("plans");
     await wait(200);
     await shot("plans");
@@ -1357,7 +1462,7 @@ async function runSmoke(root: string, info: StartupInfo) {
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
     } else {
-      await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-more="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
+      await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });
