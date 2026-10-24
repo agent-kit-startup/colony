@@ -167,6 +167,8 @@ export const api = {
   settingsEnsure: () => invoke<string>("settings_ensure"),
   settingsSetSkin: (skin: string) => invoke<string>("settings_set_skin", { skin }),
   settingsSetTitleBar: (mode: string) => invoke<string>("settings_set_title_bar", { mode }),
+  /** The saved `ui.titleBar`, what the next start opens with (always native on a tiling WM), and that WM. */
+  settingsTitleBar: () => invoke<{ saved: string | null; next: "native" | "custom"; tilingWm: string | null }>("settings_title_bar"),
   settingsSetLayout: (patch: Partial<Record<keyof LayoutSettings, unknown>>) => invoke<LayoutSettings>("settings_set_layout", { patch }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),

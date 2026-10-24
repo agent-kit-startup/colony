@@ -320,12 +320,40 @@ mod tests {
         assert_eq!(serde_json::from_str::<Reply>(r.trim()).unwrap(), Reply { handled: false });
     }
 
+    /// A socket file with nobody listening, as a crashed window leaves it. Bound but never
+    /// `listen()`ed: binding and dropping a `UnixListener` is not enough under the parallel
+    /// test runner, because a test that spawns a process forks while the listener is open,
+    /// and the child keeps a live copy of the listening fd until it execs. A connect in
+    /// that window succeeds and then gets ECONNRESET, so the claim fails open instead of
+    /// replacing the socket. A socket that never listens refuses every connect, copied or not.
+    fn stale_socket(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        // SAFETY: plain socket(2) / bind(2) / close(2) on a zeroed sockaddr_un whose
+        // sun_path is filled from `bytes` (checked shorter than the field).
+        unsafe {
+            let mut addr: libc::sockaddr_un = std::mem::zeroed();
+            assert!(bytes.len() < addr.sun_path.len(), "socket path too long");
+            addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+            for (d, s) in addr.sun_path.iter_mut().zip(bytes) {
+                *d = *s as libc::c_char;
+            }
+            let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            assert!(fd >= 0, "socket: {}", std::io::Error::last_os_error());
+            let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+            let rc = libc::bind(fd, &addr as *const libc::sockaddr_un as *const libc::sockaddr, len);
+            let err = std::io::Error::last_os_error();
+            libc::close(fd);
+            assert_eq!(rc, 0, "bind: {err}");
+        }
+    }
+
     #[test]
     fn stale_socket_is_replaced() {
         let path = sock("stale");
-        // A window that crashed leaves its socket file with nobody listening.
-        drop(UnixListener::bind(&path).unwrap());
+        stale_socket(&path);
         assert!(path.exists());
+        assert_eq!(UnixStream::connect(&path).unwrap_err().kind(), std::io::ErrorKind::ConnectionRefused);
         assert!(matches!(claim_at(&path, None, None), Claim::Primary(..)));
     }
 
