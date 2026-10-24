@@ -40,6 +40,9 @@ pub struct AppState {
     pub settings_path: Mutex<Option<PathBuf>>,
     /// The single-instance socket this window serves (removed on exit).
     instance_socket: Mutex<Option<PathBuf>>,
+    /// Folders a later `colony <folder>` forwarded to this window.
+    #[cfg(unix)]
+    instance_inbox: instance::Inbox,
     startup: Mutex<StartupInfo>,
 }
 
@@ -138,6 +141,19 @@ fn smoke_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), S
     Ok(())
 }
 
+/// Folders a later `colony <folder>` launch hands to this window (single instance).
+#[cfg(unix)]
+#[tauri::command]
+fn instance_subscribe(state: State<'_, AppState>, on_event: tauri::ipc::Channel<instance::InstanceEvent>) -> Result<(), String> {
+    state.instance_inbox.subscribe(on_event)
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+fn instance_subscribe(_on_event: tauri::ipc::Channel<serde_json::Value>) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> StartupInfo {
     state.startup.lock().map(|s| s.clone()).unwrap_or_default()
@@ -231,7 +247,7 @@ pub fn run() {
         std::process::exit(hostreq::cli_main());
     }
     // Single instance: a running window for this binary and engine takes the request
-    // (no folder, or the folder it has open) and this process ends here.
+    // (it raises itself and opens the folder, if any) and this process ends here.
     #[cfg(unix)]
     let instance = match instance::socket_path().map(|p| instance::claim_at(&p, initial_workspace().as_deref())) {
         Some(instance::Claim::Forwarded) => return,
@@ -264,6 +280,7 @@ pub fn run() {
         .manage(host_requests.clone())
         .invoke_handler(tauri::generate_handler![
             app_info,
+            instance_subscribe,
             appupdate::app_update_status,
             appupdate::app_update_check,
             appupdate::app_update_install,
@@ -329,16 +346,17 @@ pub fn run() {
             if let Some((listener, path)) = instance {
                 let handle = app.handle().clone();
                 instance::serve(listener, move |folder| {
-                    let open = handle.state::<AppState>().workspace.lock().ok().and_then(|w| w.clone());
-                    let takes = instance::takes(folder.as_deref(), open.as_deref());
-                    if takes {
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.unminimize();
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                    let state = handle.state::<AppState>();
+                    let open = state.workspace.lock().ok().and_then(|w| w.clone());
+                    if let instance::Route::Open(f) = instance::route(folder.as_deref(), open.as_deref()) {
+                        state.instance_inbox.push(f);
                     }
-                    takes
+                    if let Some(w) = handle.get_webview_window("main") {
+                        let _ = w.unminimize();
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                    true
                 });
                 *app.state::<AppState>().instance_socket.lock().expect("instance lock") = Some(path);
             }

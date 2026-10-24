@@ -3,10 +3,12 @@
 //! the request, so the desktop entry, `omarchy-launch-or-focus` and a terminal
 //! `colony` focus the window that is already open instead of stacking a new one.
 //!
-//! The running window takes a request with no folder, or with the folder it already
-//! has open, and raises itself. A different folder is declined for now (the window
-//! cannot switch folders from here yet), and the new process starts its own window,
-//! exactly as before this module existed.
+//! The running window takes every request with no folder or with an existing absolute
+//! directory, and raises itself. A folder other than the open one is handed to the
+//! window's frontend (`instance_subscribe`), which opens it the way `Open folder` does,
+//! unsaved-file question included: when you cancel that question the window keeps its
+//! folder, and the second process has already exited. A request that arrives before the
+//! frontend subscribes waits in `Inbox` and is opened right after the startup folder.
 //!
 //! One socket per binary and `COLONY_ENGINE` (a dev build or another engine never
 //! hands its folder to the wrong window). Skipped under `COLONY_SMOKE`, with
@@ -72,11 +74,62 @@ fn instance_key(exe: &Path, engine: &str) -> String {
     h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Whether the running window takes a request: no folder, or the one it has open.
-pub fn takes(requested: Option<&Path>, open: Option<&Path>) -> bool {
+/// What the running window does with a request.
+#[derive(Debug, PartialEq)]
+pub enum Route {
+    /// No folder, or the folder already open: raise the window.
+    Raise,
+    /// Another folder: raise the window and open that folder there.
+    Open(PathBuf),
+}
+
+/// Route a request: no folder or the open one raises, another folder opens there.
+pub fn route(requested: Option<&Path>, open: Option<&Path>) -> Route {
     match requested {
-        None => true,
-        Some(f) => open == Some(f),
+        None => Route::Raise,
+        Some(f) if open == Some(f) => Route::Raise,
+        Some(f) => Route::Open(f.to_path_buf()),
+    }
+}
+
+/// Folders forwarded by later launches, and the frontend channels that open them.
+#[derive(Default)]
+pub struct Inbox {
+    inner: std::sync::Mutex<InboxInner>,
+}
+
+#[derive(Default)]
+struct InboxInner {
+    pending: Vec<PathBuf>,
+    subs: Vec<tauri::ipc::Channel<InstanceEvent>>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum InstanceEvent {
+    /// `colony <folder>` from another process: open this folder in this window.
+    Open { folder: String },
+}
+
+impl Inbox {
+    /// Deliver to the live subscribers, or keep it until the frontend subscribes.
+    pub fn push(&self, folder: PathBuf) {
+        let Ok(mut i) = self.inner.lock() else { return };
+        let ev = InstanceEvent::Open { folder: folder.display().to_string() };
+        i.subs.retain(|c| c.send(ev.clone()).is_ok());
+        if i.subs.is_empty() {
+            i.pending.push(folder);
+        }
+    }
+
+    /// Subscribe a frontend channel; it first gets every folder that waited.
+    pub fn subscribe(&self, ch: tauri::ipc::Channel<InstanceEvent>) -> Result<(), String> {
+        let mut i = self.inner.lock().map_err(|_| "instance lock poisoned")?;
+        for f in std::mem::take(&mut i.pending) {
+            ch.send(InstanceEvent::Open { folder: f.display().to_string() }).map_err(|e| e.to_string())?;
+        }
+        i.subs.push(ch);
+        Ok(())
     }
 }
 
@@ -119,7 +172,7 @@ fn ask(mut stream: UnixStream, folder: Option<&str>) -> std::io::Result<bool> {
     Ok(reply.handled)
 }
 
-/// Serve requests on a background thread; `handle(folder)` decides and raises the window.
+/// Serve requests on a background thread; `handle(folder)` routes, raises and answers.
 pub fn serve<F>(listener: UnixListener, handle: F)
 where
     F: Fn(Option<PathBuf>) -> bool + Send + 'static,
@@ -138,8 +191,9 @@ fn answer<F: Fn(Option<PathBuf>) -> bool>(stream: UnixStream, handle: &F) -> std
     BufReader::new((&stream).take(MAX_LINE)).read_line(&mut line)?;
     let handled = match serde_json::from_str::<Request>(line.trim()) {
         Ok(req) if req.v == PROTOCOL => match req.folder.map(PathBuf::from) {
-            // The client sends a canonical directory; anything else is declined.
-            Some(f) if !f.is_absolute() => false,
+            // The client sends a canonical directory; anything else is declined, so the
+            // client opens its own window and reports the bad folder there.
+            Some(f) if !f.is_absolute() || !f.is_dir() => false,
             folder => handle(folder),
         },
         _ => false,
@@ -162,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn takes_no_folder_or_the_open_one() {
+    fn routes_no_folder_or_the_open_one_to_raise_and_others_to_open() {
         let open = Path::new("/w/a");
-        assert!(takes(None, Some(open)));
-        assert!(takes(None, None));
-        assert!(takes(Some(open), Some(open)));
-        assert!(!takes(Some(Path::new("/w/b")), Some(open)));
-        assert!(!takes(Some(open), None));
+        assert_eq!(route(None, Some(open)), Route::Raise);
+        assert_eq!(route(None, None), Route::Raise);
+        assert_eq!(route(Some(open), Some(open)), Route::Raise);
+        assert_eq!(route(Some(Path::new("/w/b")), Some(open)), Route::Open(PathBuf::from("/w/b")));
+        assert_eq!(route(Some(open), None), Route::Open(PathBuf::from("/w/a")));
     }
 
     #[test]
@@ -181,20 +235,28 @@ mod tests {
     }
 
     #[test]
-    fn second_launch_is_forwarded_or_declined() {
+    fn every_existing_folder_is_forwarded() {
         let path = sock("forward");
+        let dir = path.parent().unwrap().to_path_buf();
+        let (open, other) = (dir.join("open"), dir.join("other"));
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
         let Claim::Primary(listener, _) = claim_at(&path, None) else { panic!("first claim must be primary") };
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
+        let o = open.clone();
         serve(listener, move |f| {
-            s.lock().unwrap().push(f.clone());
-            takes(f.as_deref(), Some(Path::new("/w/open")))
+            s.lock().unwrap().push(route(f.as_deref(), Some(&o)));
+            true
         });
         assert!(matches!(claim_at(&path, None), Claim::Forwarded));
-        assert!(matches!(claim_at(&path, Some("/w/open")), Claim::Forwarded));
-        assert!(matches!(claim_at(&path, Some("/w/other")), Claim::Standalone));
-        let seen = seen.lock().unwrap().clone();
-        assert_eq!(seen, vec![None, Some(PathBuf::from("/w/open")), Some(PathBuf::from("/w/other"))]);
+        assert!(matches!(claim_at(&path, Some(open.to_str().unwrap())), Claim::Forwarded));
+        assert!(matches!(claim_at(&path, Some(other.to_str().unwrap())), Claim::Forwarded));
+        // Not a directory (gone, or a file): declined before `handle`, the client opens its own window.
+        assert!(matches!(claim_at(&path, Some(dir.join("missing").to_str().unwrap())), Claim::Standalone));
+        assert!(matches!(claim_at(&path, Some(path.to_str().unwrap())), Claim::Standalone));
+        let seen = std::mem::take(&mut *seen.lock().unwrap());
+        assert_eq!(seen, vec![Route::Raise, Route::Raise, Route::Open(other)]);
     }
 
     #[test]

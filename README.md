@@ -78,6 +78,9 @@ Omarchy 4.x is the reference Linux platform: a Linux feature is designed and ver
 | Surface | What Colony does |
 |---------|------------------|
 | Default agent | When Colony has no engine choice for the folder yet, the engine picker starts on the agent in `~/.config/omarchy/defaults/agent` (`omarchy-default-agent`): `claude`, `codex` and `cursor-agent` map one to one, and the note under the picker says "Omarchy default agent". The other Omarchy agents (`opencode`, `pi`, `gemini`, ...) have no Agent Kit backend, so Colony keeps its own default (`claude`). A choice you make in the picker always wins. The file is only read. |
+| Single instance | One window per Colony binary and engine (`COLONY_ENGINE`). `colony`, `colony <folder>`, the desktop entry and `omarchy-launch-or-focus` reach the running window over a Unix socket in `$XDG_RUNTIME_DIR` (`src-tauri/src/instance.rs`): it raises itself and, for another folder, opens that folder the way `Open folder` does (unsaved files are asked about first; cancel and the window keeps its folder). A path that is not a directory, `--new-instance`, `COLONY_SMOKE` or no `$XDG_RUNTIME_DIR` start a window of their own; any socket error does too (fail open). This works on any Linux desktop, not only Omarchy. |
+| Window | Window class and app id `colony` (`StartupWMClass=colony`), so `omarchy-launch-or-focus colony` matches it. Native decorations, which Hyprland negotiates away: no client-side titlebar or window buttons under a tiling WM. |
+| Keybinding | `packaging/install.sh --omarchy-snippet` prints an optional Omarchy 4 Lua snippet, `o.bind("SUPER + SHIFT + I", "Colony", { launch = "colony", focus = "^colony$" })` (free in the 4.0.6 defaults) plus a commented `o.window` example, and exits. It writes nothing: you paste it into `~/.config/hypr/bindings.lua` yourself, and delete it to remove it. |
 
 ## Settings
 
