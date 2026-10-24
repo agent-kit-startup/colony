@@ -8,6 +8,7 @@
 //! "$COLONY_HOST_CLI" request merge-pr 12 [--method squash|merge|rebase] [--reason "..."]
 //! "$COLONY_HOST_CLI" request rerun-checks <run-id> | --pr 12
 //! "$COLONY_HOST_CLI" request push-branch [<branch>]
+//! "$COLONY_HOST_CLI" request open-pr promote | staging-sync
 //! ```
 //!
 //! The CLI writes `<id>.request.json` into the spool named by `COLONY_HOST_SPOOL` (a
@@ -38,7 +39,7 @@ use crate::{branchrule, gitops, workspace, AppState};
 
 pub const SPOOL_ENV: &str = "COLONY_HOST_SPOOL";
 pub const CLI_ENV: &str = "COLONY_HOST_CLI";
-pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch"];
+pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch", "open-pr"];
 const PROTOCOL: u32 = 1;
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 const MAX_REASON_CHARS: usize = 2000;
@@ -62,12 +63,40 @@ kinds (closed allowlist):
   rerun-checks <run-id> | --pr <number>              rerun the failed jobs of a workflow run
   push-branch [<branch>]                             push a branch (default: the current one;
                                                      never forced, never a production branch)
+  open-pr promote | staging-sync                     open one of the two ship-lane pull requests:
+                                                     staging -> main, or the staging fast-forward
+                                                     sync (origin/main pushed to a new chore/ branch,
+                                                     PR into staging); branches, title and body are
+                                                     fixed by Colony
 
 Waits for the operator's click in Colony. --timeout takes seconds or 90s / 30m / 2h
 (default 30m). Exit: 0 approved and succeeded, 2 denied, 3 approved but failed,
 4 timeout, 64 usage error or no Colony host (COLONY_HOST_SPOOL unset).";
 
 // ---- the request vocabulary ------------------------------------------------------------
+
+/// The two pull requests of the ship lane Colony can open (`open-pr`). Nothing else about
+/// them is chosen by the requester: the branches come from the repository's own
+/// `origin/staging` and default branch, the title and body are written here.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrShape {
+    /// `staging` -> the default branch (`main` / `master`), merged later with a typed yes.
+    Promote,
+    /// The staging fast-forward sync: the default branch's tip pushed to a new
+    /// `chore/sync-staging-<main>-<sha7>` branch, PR into `staging`.
+    StagingSync,
+}
+
+impl PrShape {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "promote" => Some(Self::Promote),
+            "staging-sync" => Some(Self::StagingSync),
+            _ => None,
+        }
+    }
+}
 
 /// One allowlisted host action, as filed by the requester.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -90,6 +119,9 @@ pub enum Action {
         #[serde(default)]
         branch: Option<String>,
     },
+    OpenPr {
+        shape: PrShape,
+    },
 }
 
 impl Action {
@@ -111,6 +143,7 @@ impl Action {
             Action::MergePr { .. } => "merge-pr",
             Action::RerunChecks { .. } => "rerun-checks",
             Action::PushBranch { .. } => "push-branch",
+            Action::OpenPr { .. } => "open-pr",
         }
     }
 
@@ -120,6 +153,8 @@ impl Action {
             Action::RerunChecks { run: Some(r), .. } => format!("rerun the failed jobs of run {r}"),
             Action::RerunChecks { pr, .. } => format!("rerun the failed checks of PR #{}", pr.unwrap_or(0)),
             Action::PushBranch { branch } => format!("push {}", branch.as_deref().unwrap_or("the current branch")),
+            Action::OpenPr { shape: PrShape::Promote } => "open the staging -> main pull request".into(),
+            Action::OpenPr { shape: PrShape::StagingSync } => "open the staging fast-forward sync pull request".into(),
         }
     }
 
@@ -365,6 +400,12 @@ pub fn parse_cli(args: &[String]) -> Result<CliRequest, String> {
                 [b] => Action::PushBranch { branch: Some(b.to_string()) },
                 _ => return Err("push-branch takes at most one branch".into()),
             }
+        }
+        "open-pr" => {
+            no(&method, "--method")?;
+            no(&pr, "--pr")?;
+            let [shape] = rest else { return Err("open-pr takes exactly one shape: promote or staging-sync".into()) };
+            Action::OpenPr { shape: PrShape::parse(shape).ok_or_else(|| format!("open-pr shape must be promote or staging-sync, got {shape:?}"))? }
         }
         other => return Err(format!("Kind {other:?} is not allowed (allowed: {})", KINDS.join(", "))),
     };
@@ -857,6 +898,79 @@ fn write_response(spool: &Path, id: &str, outcome: Outcome, reason: Option<Strin
     write_atomic(&response_path(spool, id), &serde_json::to_vec_pretty(&r).map_err(|e| e.to_string())?)
 }
 
+/// What `open-pr` will do, derived from the repository's local remote-tracking refs (no
+/// network). Every string that reaches `git` / `gh` is built here from validated branch
+/// names and a hex sha; commit subjects only ever go into the PR body, as one argv value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPlan {
+    shape: PrShape,
+    base: String,
+    head: String,
+    /// `staging-sync`: the default branch's tip, pushed (never forced) to `head` first.
+    push_sha: Option<String>,
+    title: String,
+    body: String,
+    /// `git log --oneline` of what the PR carries (at most 30 lines).
+    log: String,
+}
+
+const MAX_PR_LOG: usize = 30;
+
+fn remote_ref_exists(cwd: &Path, branch: &str) -> bool {
+    gitops::git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_ok()
+}
+
+fn is_hex_sha(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+/// The plan for one ship-lane PR, or why Colony will not open it.
+pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
+    if !remote_ref_exists(cwd, "staging") {
+        return Err("Refused: this repository has no origin/staging, so it has no staging flow to open a ship-lane PR in".into());
+    }
+    let main = ["main", "master"].into_iter().find(|b| remote_ref_exists(cwd, b)).ok_or("Refused: no origin/main or origin/master")?;
+    // Same rule as the merge gate: with origin/staging, the default branch is production.
+    branchrule::production_branch(cwd, main).ok_or_else(|| format!("Refused: {main} is not a production branch here"))?;
+    let (base_ref, head_ref) = (format!("refs/remotes/origin/{main}"), "refs/remotes/origin/staging".to_string());
+    let log_of = |range: &str| gitops::git(cwd, &["log", "--format=%h %s", "-n", &MAX_PR_LOG.to_string(), range, "--"]).map(|s| s.trim_end().to_string());
+    match shape {
+        PrShape::Promote => {
+            let ahead: u64 = gitops::git(cwd, &["rev-list", "--count", &format!("{base_ref}..{head_ref}")])?.trim().parse().unwrap_or(0);
+            if ahead == 0 {
+                return Err(format!("Refused: origin/staging has nothing that origin/{main} lacks"));
+            }
+            let log = log_of(&format!("{base_ref}..{head_ref}"))?;
+            let list: String = log.lines().map(|l| format!("- {l}\n")).collect();
+            let more = if ahead as usize > MAX_PR_LOG { format!("- ... and {} more\n", ahead as usize - MAX_PR_LOG) } else { String::new() };
+            let body = format!(
+                "## Summary\n\nPromote `staging` to `{main}` ({ahead} commit(s)). Please merge with a merge commit, so `{main}` stays an ancestor of `staging`.\n\n{list}{more}\nOpened from Colony (Git e CI/CD, Ship lane). The merge into `{main}` needs the operator's typed yes in Colony.\n"
+            );
+            Ok(PrPlan { shape, base: main.to_string(), head: "staging".into(), push_sha: None, title: format!("Promote staging to {main}"), body, log })
+        }
+        PrShape::StagingSync => {
+            if gitops::git(cwd, &["merge-base", "--is-ancestor", &base_ref, &head_ref]).is_ok() {
+                return Err(format!("Refused: origin/{main} is already an ancestor of origin/staging, nothing to sync"));
+            }
+            let sha = gitops::git(cwd, &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")])?.trim().to_string();
+            if !is_hex_sha(&sha) {
+                return Err(format!("Unexpected sha for origin/{main}: {sha}"));
+            }
+            let short = sha[..7].to_string();
+            let head = format!("chore/sync-staging-{main}-{short}");
+            if !valid_branch(&head) || branchrule::production_branch(cwd, &head).is_some() {
+                return Err(format!("Refused: {head} is not a branch Colony pushes"));
+            }
+            let log = log_of(&format!("{head_ref}..{base_ref}"))?;
+            let body = format!(
+                "## Summary\n\nStaging fast-forward sync: brings `{main}` {short} onto `staging`, so `{main}` is an ancestor of `staging` again. The branch `{head}` is `origin/{main}` as is; no other changes.\n\nOpened from Colony (Git e CI/CD, Ship lane).\n"
+            );
+            Ok(PrPlan { shape, base: "staging".into(), head, push_sha: Some(sha), title: format!("chore: sync staging with {main} ({short})"), body, log })
+        }
+    }
+}
+
 /// `Ok(Some(why))`: the action needs a typed yes. `Err`: never allowed on request.
 fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String> {
     match action {
@@ -873,6 +987,10 @@ fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String
             }
         }
         Action::RerunChecks { .. } => Ok(None),
+        // Opening a PR merges nothing; the merge of the promote PR is its own merge-pr card,
+        // with the typed yes. A plan Colony refuses (no staging flow, nothing to promote or
+        // sync) is refused here, so the card cannot be approved.
+        Action::OpenPr { shape } => pr_plan(*shape, cwd).map(|_| None),
     }
 }
 
@@ -916,6 +1034,20 @@ fn execute(action: &Action, cwd: &Path) -> Result<String, String> {
                 Err(log)
             }
         }
+        Action::OpenPr { shape } => {
+            // Re-derived at approval time: the refs may have moved since the card opened.
+            let plan = pr_plan(*shape, cwd)?;
+            let forge = Forge::detect()?;
+            let mut log = String::new();
+            if let Some(sha) = &plan.push_sha {
+                // Never forced: a plain refspec push of the default branch's own tip to a new
+                // non-production branch.
+                log.push_str(&gitops::git(cwd, &["push", "origin", &format!("{sha}:refs/heads/{}", plan.head)])?);
+            }
+            let out = forge.run(cwd, &Op::PrCreate { base: plan.base.clone(), head: plan.head.clone(), title: plan.title.clone(), body: plan.body.clone() }).map_err(|e| format!("{log}{e}"))?;
+            log.push_str(&out);
+            Ok(log)
+        }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
             if !valid_branch(b) {
@@ -958,6 +1090,10 @@ fn context(action: &Action, cwd: &Path) -> Value {
             Err(e) => json!({ "error": e }),
         },
         Action::RerunChecks { .. } => json!({}),
+        Action::OpenPr { shape } => match pr_plan(*shape, cwd) {
+            Ok(plan) => json!({ "prPlan": plan }),
+            Err(_) => json!({}),
+        },
         Action::PushBranch { branch } => {
             let b = branch.clone().unwrap_or_default();
             let upstream = gitops::git(cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).ok().map(|s| s.trim().to_string());
@@ -1000,6 +1136,11 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
         Action::PushBranch { branch: Some(b) } => {
             let upstream = gitops::git(&cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).map(|s| s.trim().to_string()).unwrap_or_else(|_| format!("origin/{b}"));
             gitops::git(&cwd, &["diff", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
+        }
+        Action::OpenPr { shape } => {
+            let plan = pr_plan(*shape, &cwd)?;
+            let head = plan.push_sha.clone().unwrap_or_else(|| format!("refs/remotes/origin/{}", plan.head));
+            gitops::git(&cwd, &["diff", "--stat", &format!("refs/remotes/origin/{}...{head}", plan.base), "--"])
         }
         _ => Err("No diff for this request".into()),
     }
@@ -1068,6 +1209,8 @@ mod tests {
         assert_eq!(parse(&["push-branch"]).unwrap().action, Action::PushBranch { branch: None });
         assert_eq!(parse(&["push-branch", "feat/x-1", "--timeout", "90s"]).unwrap().timeout, Duration::from_secs(90));
         assert_eq!(parse(&["merge-pr", "1", "--timeout=2h"]).unwrap().timeout, Duration::from_secs(7200));
+        assert_eq!(parse(&["open-pr", "promote"]).unwrap().action, Action::OpenPr { shape: PrShape::Promote });
+        assert_eq!(parse(&["open-pr", "staging-sync", "--reason", "after v1"]).unwrap().action, Action::OpenPr { shape: PrShape::StagingSync });
     }
 
     #[test]
@@ -1095,6 +1238,13 @@ mod tests {
             &["merge-pr", "1", "--reason"],
             &["merge-pr", "1", "--timeout", "0"],
             &["merge-pr", "1", "--timeout", "25h"],
+            &["open-pr"],
+            &["open-pr", "main"],
+            &["open-pr", "promote", "staging-sync"],
+            &["open-pr", "promote", "--method", "merge"],
+            &["open-pr", "promote", "--pr", "3"],
+            &["open-pr", "--base", "main", "--head", "feat/x"],
+            &["open-pr", "Promote"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
@@ -1110,6 +1260,63 @@ mod tests {
         assert!(Action::from_parts("merge-pr", &json!({ "number": 4, "admin": true })).is_err());
         assert!(Action::from_parts("push-branch", &json!({ "branch": "--force" })).is_err());
         assert!(Action::from_parts("rerun-checks", &json!({ "run": 1, "pr": 2 })).is_err());
+        let o = Action::OpenPr { shape: PrShape::StagingSync };
+        assert_eq!(o.to_parts(), ("open-pr".to_string(), json!({ "shape": "staging-sync" })));
+        assert_eq!(Action::from_parts("open-pr", &json!({ "shape": "promote" })).unwrap(), Action::OpenPr { shape: PrShape::Promote });
+        // Fixed shape only: no free base/head/title from a request file.
+        assert!(Action::from_parts("open-pr", &json!({ "shape": "promote", "base": "prod" })).is_err());
+        assert!(Action::from_parts("open-pr", &json!({ "shape": "anything" })).is_err());
+        assert!(Action::from_parts("open-pr", &json!({ "base": "main", "head": "x" })).is_err());
+    }
+
+    /// A repository with one commit; the test sets origin/* remote-tracking refs itself.
+    fn flow_repo() -> (PathBuf, impl Fn(&[&str]) -> String) {
+        let d = repo();
+        let d2 = d.clone();
+        let g = move |args: &[&str]| gitops::git(&d2, args).unwrap().trim().to_string();
+        mk(&g, "base");
+        (d, g)
+    }
+
+    fn mk(g: &dyn Fn(&[&str]) -> String, msg: &str) -> String {
+        g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg]);
+        g(&["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn open_pr_plans_from_local_refs_only() {
+        let (cwd, g) = flow_repo();
+        let base = g(&["rev-parse", "HEAD"]);
+        // No origin/staging: no staging flow, both shapes refused (and so is the card).
+        assert!(pr_plan(PrShape::Promote, &cwd).unwrap_err().contains("no origin/staging"));
+        g(&["update-ref", "refs/remotes/origin/main", &base]);
+        g(&["update-ref", "refs/remotes/origin/staging", &base]);
+        assert!(pr_plan(PrShape::Promote, &cwd).unwrap_err().contains("nothing that origin/main lacks"));
+        assert!(pr_plan(PrShape::StagingSync, &cwd).unwrap_err().contains("already an ancestor"));
+        assert!(production_gate(&Action::OpenPr { shape: PrShape::Promote }, &cwd).is_err());
+
+        // staging two ahead (one subject is hostile text): the promote plan is fixed fields.
+        let s1 = mk(&g, "feat: one");
+        g(&["update-ref", "refs/remotes/origin/staging", &s1]);
+        let s2 = mk(&g, "fix: $(curl x) `two`; --admin");
+        g(&["update-ref", "refs/remotes/origin/staging", &s2]);
+        let p = pr_plan(PrShape::Promote, &cwd).unwrap();
+        assert_eq!((p.base.as_str(), p.head.as_str(), p.title.as_str(), p.push_sha.as_deref()), ("main", "staging", "Promote staging to main", None));
+        assert!(p.body.contains("(2 commit(s))") && p.body.contains("merge commit") && p.body.contains("`two`; --admin"));
+        assert!(!p.body.to_lowercase().contains("co-authored") && !p.body.contains("Generated with"));
+        assert_eq!(p.log.lines().count(), 2);
+        assert_eq!(production_gate(&Action::OpenPr { shape: PrShape::Promote }, &cwd).unwrap(), None, "opening a PR needs no typed yes");
+
+        // main gets a merge commit staging lacks: the sync plan pushes main's own tip.
+        g(&["checkout", "-q", "--detach", &base]);
+        let m = mk(&g, "Merge staging (release)");
+        g(&["update-ref", "refs/remotes/origin/main", &m]);
+        let p = pr_plan(PrShape::StagingSync, &cwd).unwrap();
+        assert_eq!((p.base.as_str(), p.push_sha.as_deref()), ("staging", Some(m.as_str())));
+        assert_eq!(p.head, format!("chore/sync-staging-main-{}", &m[..7]));
+        assert!(valid_branch(&p.head) && branchrule::production_branch(&cwd, &p.head).is_none());
+        assert_eq!(p.title, format!("chore: sync staging with main ({})", &m[..7]));
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 
     #[test]

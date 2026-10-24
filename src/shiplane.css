@@ -1,0 +1,17 @@
+/* Ship lane tile (src/shiplane.ts). State is the 1px border color and the state word's
+   text color only: no accent bar, no tinted fill (operator UI rule). */
+.ship-tile [hidden] { display: none !important; }
+.ship-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ship-rows, .ship-prs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ship-row, .ship-pr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--mc-radius); background: var(--bg-card); min-width: 0; }
+.ship-row.is-red, .ship-pr.is-red { border-color: var(--red); }
+.ship-row.is-yellow { border-color: var(--yellow); }
+.ship-row-label { font-weight: 600; color: var(--text-primary); min-width: 120px; }
+.ship-row-state { font-size: var(--mc-chrome-meta-size); color: var(--text-muted); }
+.ship-row-state.is-green { color: var(--green); }
+.ship-row-state.is-yellow { color: var(--yellow); }
+.ship-row-state.is-red { color: var(--red); }
+.ship-row-detail { color: var(--text-secondary); flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.ship-row-cmd { font-family: var(--mc-font-mono); font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.ship-row-acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.ship-sub { font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); margin-top: 4px; }

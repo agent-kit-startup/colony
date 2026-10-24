@@ -2,6 +2,7 @@
 import { icon } from "./icons";
 import { api, errText, h, type GitStatus } from "./api";
 import { obj, snapshot, str } from "./snapshot";
+import { type ShipHost, ShipLaneTile } from "./shiplane";
 import { btn, card, chip, empty, iconBtn } from "./ui";
 
 export class GitPanel {
@@ -118,24 +119,28 @@ export class GitPanel {
 }
 
 /**
- * Git center tab: the snapshot's branch flow and graph, the working tree panel above, and
- * the production promotion card. Colony never runs /git-prod or any prod promotion: the
- * card only reveals the command after a typed yes, for the operator's own agent session.
+ * Git e CI/CD center tab, one bento grid like the web panel's section of the same name: the
+ * Ship lane tile leads (snapshot `shipLane`, with the host-allowlist actions), then Requests,
+ * Pull requests, the snapshot's branch flow and graph, the working tree and the production
+ * promotion card. Colony never runs /git-prod or any prod promotion: the card only reveals
+ * the command after a typed yes, for the operator's own agent session.
  */
 export class GitView {
   readonly el: HTMLElement;
   readonly panel: GitPanel;
-  private repo = h("div", { class: "git-repo" });
-  private left: HTMLElement;
+  readonly ship: ShipLaneTile;
+  private repo = h("div", { class: "git-repo bento-tile bento-flow" });
+  private grid: HTMLElement;
   private extras: { el: HTMLElement; refresh?: () => void }[] = [];
   private dirty = true;
   visible = false;
 
-  constructor(status: (msg: string) => void, onCommitted: () => void, private copy: (text: string, what: string) => void) {
-    const work = h("section", { class: "card git-work" }, h("div", { class: "card-title" }, "Working tree"));
+  constructor(status: (msg: string) => void, onCommitted: () => void, private copy: (text: string, what: string) => void, ship: ShipHost) {
+    const work = h("section", { class: "card git-work bento-tile bento-work" }, h("div", { class: "card-title" }, "Working tree"));
     this.panel = new GitPanel(work, status, onCommitted);
-    this.left = h("div", { class: "git-left" }, this.repo, this.prodCard());
-    this.el = h("div", { class: "cv cv-git" }, h("div", { class: "cv-body git-grid" }, this.left, work));
+    this.ship = new ShipLaneTile(ship);
+    this.grid = h("div", { class: "cv-body git-bento", "aria-label": "Git e CI/CD" }, this.ship.el, this.repo, work, this.prodCard());
+    this.el = h("div", { class: "cv cv-git" }, this.grid);
     snapshot.on((why) => {
       if (why !== "data") return;
       this.dirty = true;
@@ -143,10 +148,11 @@ export class GitView {
     });
   }
 
-  /** Extra sections above the repository card (host requests, pull requests), refreshed on show. */
+  /** Extra tiles right after the Ship lane (host requests, pull requests), refreshed on show. */
   addSections(...extras: { el: HTMLElement; refresh?: () => void }[]) {
     this.extras.push(...extras);
-    this.left.prepend(...extras.map((x) => x.el));
+    for (const x of extras) x.el.classList.add("bento-tile", "bento-side");
+    this.ship.el.after(...extras.map((x) => x.el));
   }
 
   show() {
@@ -167,6 +173,7 @@ export class GitView {
 
   private renderRepo() {
     this.dirty = false;
+    this.ship.render();
     const g = snapshot.git;
     if (!snapshot.data) {
       this.repo.replaceChildren(card("Repository", empty("Waiting for Mission Control data…")));
@@ -211,7 +218,7 @@ export class GitView {
     });
     return h(
       "section",
-      { class: "card prod-card" },
+      { class: "card prod-card bento-tile bento-prod" },
       h("div", { class: "card-title" }, "Production promotion"),
       h("div", { class: "hint warn" }, "Never run from Colony or from a headless tick. /git-prod stays an operator action in your own agent session."),
       h("div", { class: "prod-confirm" }, yes, reveal),

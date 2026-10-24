@@ -1,5 +1,5 @@
 // Host requests (src-tauri/src/hostreq.rs): an agent inside Colony files
-// `"$COLONY_HOST_CLI" request merge-pr|rerun-checks|push-branch ...`; each request is an
+// `"$COLONY_HOST_CLI" request merge-pr|rerun-checks|push-branch|open-pr ...`; each request is an
 // approval card here (Git tab, Requests). Colony runs the action with the operator's own
 // git / gh login only after Approve is clicked; a production base or branch needs a typed
 // yes. Deny takes an optional reason that goes back to the agent.
@@ -10,7 +10,7 @@ import { ago, btn, card, chip, empty } from "./ui";
 
 export interface HostRequest {
   id: string;
-  kind: "merge-pr" | "rerun-checks" | "push-branch";
+  kind: "merge-pr" | "rerun-checks" | "push-branch" | "open-pr";
   args: Record<string, unknown>;
   summary: string;
   reason: string;
@@ -36,6 +36,8 @@ interface RequestContext {
   branch?: string;
   upstream?: string | null;
   log?: string;
+  /** open-pr: what Colony will open (branches, title and body are Colony's own). */
+  prPlan?: { shape: string; base: string; head: string; pushSha: string | null; title: string; body: string; log: string };
 }
 
 export const hostApi = {
@@ -115,7 +117,7 @@ class RequestCard {
     if (r.kind === "merge-pr" || (r.kind === "rerun-checks" && r.args.pr)) {
       extra.push(btn("View diff", () => void this.diff(), { class: "link", "data-act": "diff" }));
       extra.push(btn("Open PR", () => void hostApi.open(r.id).catch((e) => this.status(errText(e))), { class: "link", "data-act": "open", title: "gh pr view --web" }));
-    } else if (r.kind === "push-branch") {
+    } else if (r.kind === "push-branch" || r.kind === "open-pr") {
       extra.push(btn("View diff", () => void this.diff(), { class: "link", "data-act": "diff" }));
     }
     this.el.dataset.id = r.id;
@@ -186,6 +188,15 @@ class RequestCard {
     if (this.r.kind === "push-branch") {
       rows.push(h("div", { class: "row mono" }, `${s(c.branch)} → ${c.upstream ?? "origin (new upstream)"}`));
       if (c.log) rows.push(h("pre", { class: "hostreq-checks" }, c.log.trim() || "(nothing to push)"));
+    }
+    const plan = c.prPlan;
+    if (this.r.kind === "open-pr" && plan) {
+      rows.push(
+        h("div", { class: "row" }, h("strong", { class: "grow ellipsis", title: plan.title }, plan.title)),
+        h("div", { class: "row mono" }, `${plan.base} ← ${plan.head}`),
+        ...(plan.pushSha ? [h("div", { class: "row mono small" }, `push ${plan.pushSha.slice(0, 12)} (the default branch's tip) → new branch ${plan.head}, never forced`)] : []),
+        h("pre", { class: "hostreq-checks" }, plan.log || "(no commits)"),
+      );
     }
     if (c.refused) rows.push(h("div", { class: "hint warn" }, c.refused));
     else if (c.production) rows.push(h("div", { class: "hint warn" }, `${c.production}: type yes to approve.`));
@@ -284,7 +295,7 @@ export class RequestsSection {
     const els = items.map((r) => this.cards.get(r.id)!.el);
     if (!els.length) {
       const hint = hostRequests.spool
-        ? "Nothing waits for you. An agent in a Colony terminal or run files git and forge actions here with \"$COLONY_HOST_CLI\" request merge-pr|rerun-checks|push-branch."
+        ? "Nothing waits for you. An agent in a Colony terminal or run files git and forge actions here with \"$COLONY_HOST_CLI\" request merge-pr|rerun-checks|push-branch|open-pr."
         : "Host requests are off: Colony could not create its request spool.";
       this.list.replaceChildren(empty(hint));
     } else {
