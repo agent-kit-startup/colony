@@ -76,7 +76,9 @@ export class InboxView {
     const gates = pendingGates();
     const live = gates.map((g) => gateCard(g, this.host, "inbox-card"));
     const att = snapshot.attention.map((a) => this.attention(a));
-    const tickets: J[] = Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
+    // Same source as the Flight Log pointer: the flight log's tickets, else gateExit's.
+    const fl = snapshot.flightLog;
+    const tickets: J[] = Array.isArray(fl.tickets) && fl.tickets.length ? fl.tickets : Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
     return [
       card({ title: "Live gates", aside: gates.length ? [pill(`${gates.length} waiting`, "awaiting", "\u23EF")] : [] }, h("div", { class: "inbox-list" }, ...(live.length ? live : [empty("Nothing waits for you. Gates from every agent run in this window land here.")]))),
       ...this.sections.flatMap((s) => s()),
@@ -85,7 +87,17 @@ export class InboxView {
         ? [
             card(
               "Gate exits",
-              ...tickets.map((t) => h("div", { class: "row" }, chip(str(t.branchState, "ticket"), "chip-gate"), h("span", { class: "grow ellipsis", title: str(t.headline) }, `${str(t.askId)} · ${str(t.headline)}`), h("span", { class: "run-meta mono" }, ago(t.openedAt)))),
+              ...tickets.map((t) =>
+                h(
+                  "div",
+                  { class: "row" },
+                  chip(str(t.branchState, "ticket"), "chip-gate"),
+                  h("span", { class: "grow ellipsis", title: `${str(t.askId)} · ${str(t.headline)}` }, `${str(t.askId)} · ${str(t.headline)}`),
+                  h("span", { class: "run-meta mono" }, ago(t.openedAt)),
+                  ...(t.url ? [btn("Copy URL", () => this.host.copy(str(t.url), "ticket URL"), { class: "link" })] : []),
+                ),
+              ),
+              h("div", { class: "hint" }, "Triage with agent-kit ground-control (status / accept / discard) in a terminal."),
               btn("Copy agent-kit ground-control status", () => this.host.copy("agent-kit ground-control status", "command"), { class: "link" }),
             ),
           ]

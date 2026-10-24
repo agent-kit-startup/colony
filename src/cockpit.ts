@@ -411,7 +411,11 @@ export class MissionView extends View {
       row.addEventListener("click", () => this.host.showTab("inbox"));
       items.push(row);
     }
-    if (tickets.length) items.push(h("div", { class: "row" }, chip(`${tickets.length}`, "chip-gate"), h("span", { class: "grow" }, "gate-exit ticket(s) pending: see Flight Log")));
+    if (tickets.length) {
+      const row = h("div", { class: "row click", title: "Triage them in the Inbox (Gate exits)" }, chip(`${tickets.length}`, "chip-gate"), h("span", { class: "grow" }, `gate-exit ticket${tickets.length === 1 ? "" : "s"} pending`));
+      row.addEventListener("click", () => this.host.showTab("inbox"));
+      items.push(row);
+    }
     const n = gates.length + att.length + tickets.length;
     const hidden = att.length - Math.min(att.length, 4);
     const c = card(
@@ -533,7 +537,6 @@ export class ActivityView extends View {
 // ---- Plans ---------------------------------------------------------------------------
 const PLAN_FILTERS: [string, string, (p: McPlan) => boolean][] = [
   ["open", "Open", (p) => p.lifecycle !== "completed"],
-  ["queue", "In queue", (p) => p.queueRole !== "none"],
   ["backlog", "Backlog", (p) => p.lifecycle === "backlog"],
   ["parked", "Parked", (p) => p.lifecycle === "parked"],
   ["incomplete", "Incomplete", (p) => p.lifecycle === "incomplete"],
@@ -543,7 +546,7 @@ const PLAN_FILTERS: [string, string, (p: McPlan) => boolean][] = [
 const TODO_ICON: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○", cancelled: "✕" };
 
 /** run-plan-all queue role (dashboard .queue-role-pill: colored text, no fill). */
-const ROLE: Record<string, [string, string]> = { next_up: ["⏵ Next up", "next-up"], queued: ["⋯ Queued", "queued"], executing: ["▶ Executing", "executing"], done: ["✓ Done", "done"] };
+const ROLE: Record<string, [string, string]> = { next_up: ["Next up", "next-up"], queued: ["Queued", "queued"], executing: ["Executing", "executing"], done: ["Done", "done"] };
 function rolePill(role: string): HTMLElement {
   const [label, cls] = ROLE[role] ?? [role.replace(/_/g, " "), "queued"];
   return h("span", { class: `role-pill role-${cls}` }, label);
@@ -594,8 +597,8 @@ export class PlansView extends View {
   private row(p: McPlan, active: boolean): HTMLElement {
     const open = this.expanded.has(p.file);
     const acts: HTMLElement[] = [btn("Open", () => this.host.openRepoFile(p.path || `.cursor/plans/${p.file}`), { class: "status-bar-btn", title: p.path })];
-    if (active) acts.unshift(btn("▶ Run", () => void this.host.runPlan(), { class: "primary", "data-act": "run-plan", title: "agent-kit run-plan --events ndjson (this is the HANDOFF plan)" }));
-    else if (p.lifecycle !== "completed") {
+    // The HANDOFF plan runs from Mission (Run plan); other open plans get activated here.
+    if (!active && p.lifecycle !== "completed") {
       acts.unshift(
         btn("Run…", () => void this.host.interactive(`/run-plan ${p.file}`, `agent-kit run-plan only runs the HANDOFF plan (${snapshot.activePlanFile || "none"}). This opens your agent interactively with /run-plan ${p.file}, which activates it.`), {
           class: "status-bar-btn",
@@ -739,17 +742,9 @@ export class FlightLogView extends View {
       );
     if (str(f.current)) out.push(entry("Now", str(f.current), str(f.currentKind), str(f.sourcePath), str(obj(f.currentAction).command) || null));
     for (const w of Array.isArray(f.warnings) ? f.warnings : []) out.push(entry(str(w.title, "Warning"), str(w.text), str(w.kind, "warning"), str(w.sourcePath), str(obj(w.action).command) || null));
+    // Gate-exit tickets are triaged in the Inbox (Gate exits); here only a pointer to it.
     const tickets = Array.isArray(f.tickets) && f.tickets.length ? f.tickets : Array.isArray(snapshot.gateExit.tickets) ? snapshot.gateExit.tickets : [];
-    if (tickets.length) {
-      out.push(
-        card(
-          "Gate-exit tickets",
-          ...tickets.map((t: J) => h("div", { class: "row" }, chip(str(t.branchState, "ticket")), h("span", { class: "grow ellipsis", title: str(t.headline) }, `${str(t.askId)} · ${str(t.headline)}`), h("span", { class: "run-meta mono" }, ago(t.openedAt)), ...(t.url ? [btn("Copy URL", () => this.host.copy(str(t.url), "ticket URL"), { class: "link" })] : []))),
-          h("div", { class: "hint" }, "Triage with agent-kit ground-control (status / accept / discard) in a terminal."),
-          btn("Copy agent-kit ground-control status", () => this.host.copy("agent-kit ground-control status", "command"), { class: "link" }),
-        ),
-      );
-    }
+    if (tickets.length) out.push(h("div", { class: "row" }, chip(String(tickets.length), "chip-gate"), h("span", { class: "grow" }, `gate-exit ticket${tickets.length === 1 ? "" : "s"} pending`), btn("Open in the Inbox", () => this.host.showTab("inbox"), { class: "link" })));
     const triages = Array.isArray(f.quietOpenTriages) ? f.quietOpenTriages : [];
     if (triages.length) out.push(card("Open triages", ...triages.map((t: J) => h("div", { class: "row" }, chip(str(t.kind)), h("span", { class: "grow ellipsis", title: str(t.findingsSummary) }, str(t.label)), btn("Inbox", () => this.host.showTab("inbox"), { class: "link" })))));
     const past = Array.isArray(f.past) ? f.past : [];
