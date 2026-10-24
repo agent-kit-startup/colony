@@ -8,7 +8,7 @@
 .hostreq-card input.yes { width: 110px; }
 .hostreq-card input.deny-reason { flex: 1; min-width: 140px; }
 .hostreq-meta { color: var(--text-secondary); word-break: break-all; }
-.hostreq-reason { font-size: 13px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid var(--yellow); padding-left: 8px; }
+.hostreq-reason { font-size: 13px; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--yellow); border-radius: var(--mc-radius-chrome); padding: 6px 8px; }
 .hostreq-ctx { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .hostreq-checks { margin: 0; font-family: var(--mc-font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px; max-height: 160px; overflow: auto; white-space: pre; }
 .hostreq-out { min-height: 0; max-height: 300px; flex: none; }
