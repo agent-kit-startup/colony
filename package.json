@@ -2,7 +2,7 @@
   "name": "colony",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mission Kit Colony desktop IDE",
   "type": "module",
   "scripts": {

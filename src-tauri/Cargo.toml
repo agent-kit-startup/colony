@@ -1,6 +1,6 @@
 [package]
 name = "colony"
-version = "0.1.0"
+version = "0.2.0"
 description = "Mission Kit Colony desktop IDE"
 edition = "2021"
 publish = false
