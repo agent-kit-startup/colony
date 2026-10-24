@@ -4,15 +4,16 @@ Colony collects no telemetry. It sends no usage events, crash reports, identifie
 
 ## Network calls Colony makes itself
 
-Colony opens a network connection on its own only when you ask for one of these actions in `More → Engine…`:
+Colony opens a network connection on its own only when you ask for one of these actions in `More → Engine…` or `More → About Colony…`:
 
 | Action | Request | Code |
 |--------|---------|------|
 | `Install engine` / `Update engine` with no version typed | GET `https://api.github.com/repos/<repo>/releases?per_page=30` (the release list; default repo `agent-kit-startup/agent-kit`, `COLONY_ENGINE_REPO` overrides it), then the small `engine.json` of the newest releases from the release downloads until one speaks a driver protocol this Colony installs | `src-tauri/src/engine.rs` (`latest_version`) |
 | `Install engine` / `Update engine` | GET `agent-kit-engine-<version>.tar.gz`, `SHA256SUMS` (and `SHA256SUMS.minisig` once an engine signing key is configured) from the release downloads (default `https://github.com/<repo>/releases/download`, `COLONY_ENGINE_DOWNLOAD_BASE` overrides it) | `src-tauri/src/engine.rs` (`download_base`, `install_engine`) |
+| `Check for updates` / `Update and restart` (direct builds only; package builds do not contain the updater) | GET `https://github.com/agent-kit-startup/colony/releases/latest/download/latest.json`, and for `Update and restart` the AppImage it names, through `tauri-plugin-updater` (its own HTTPS client, not `curl`; the download is checked against the release key before it is installed) | `src-tauri/src/appupdate.rs` |
 | `Install Node runtime` | GET the pinned official Node build and `SHASUMS256.txt` from `https://nodejs.org/dist` (`COLONY_NODE_DIST_BASE` overrides it) | `src-tauri/src/engine.rs` (`install_node`) |
 
-Each of these is a download of public files, made with the system `curl`. Nothing runs on a timer or at startup.
+Each of these is a download of public files, made with the system `curl` except the app update. Nothing runs on a timer or at startup.
 
 ## Tools Colony starts for you
 

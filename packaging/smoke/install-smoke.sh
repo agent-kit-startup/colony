@@ -113,4 +113,23 @@ grep -q '^o.bind("SUPER + SHIFT + I", "Colony", { launch = "colony", focus = "^c
 [[ -z "$(ls -A "$snip")" ]] || fail "omarchy snippet wrote into HOME: $(ls -A "$snip")"
 ok "--omarchy-snippet prints the Omarchy 4 snippet, downloads and writes nothing"
 
+# Updater files: AppImage + its updater signature -> latest.json; package-channel tarball.
+printf 'ELF-stub' > "$work/Colony_0.0.9_amd64.AppImage"
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=smoke "$tauri" signer sign -f "$work/key" "$work/Colony_0.0.9_amd64.AppImage" >/dev/null 2>&1
+COLONY_RELEASE_BIN="$work/stub" COLONY_PACKAGE_BIN="$work/stub" COLONY_RELEASE_APPIMAGE="$work/Colony_0.0.9_amd64.AppImage" \
+  "$repo/packaging/make-release.sh" 0.0.9 "$work/rel9" >/dev/null
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1] + "/latest.json", "utf8"));
+  const p = m.platforms["linux-x86_64-appimage"];
+  const sig = fs.readFileSync(process.argv[1] + "/Colony_0.0.9_amd64.AppImage.sig", "utf8").trim();
+  if (m.version !== "0.0.9" || !p || p.signature !== sig || Object.keys(m.platforms).length !== 1
+    || p.url !== "https://github.com/agent-kit-startup/colony/releases/download/v0.0.9/Colony_0.0.9_amd64.AppImage"
+    || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(m.pub_date)) { console.error(JSON.stringify(m)); process.exit(1); }
+' "$work/rel9" || fail "latest.json"
+for f in colony-0.0.9-linux-x86_64-package.tar.gz Colony_0.0.9_amd64.AppImage latest.json; do
+  grep -q " $f\$" "$work/rel9/SHA256SUMS" || fail "$f not in SHA256SUMS"
+done
+ok "make-release writes latest.json (AppImage only), the package tarball, and lists them in SHA256SUMS"
+
 echo "install smoke: $pass checks passed"

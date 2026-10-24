@@ -2,7 +2,7 @@
 
 Colony is the Mission Kit desktop IDE: a Tauri 2 cockpit with Mission Control as its home screen. It drives the open [Agent Kit](https://github.com/agent-kit-startup/agent-kit) CLI and each vendor's own agent on the user's own subscription or API key.
 
-Open source under the [Apache License 2.0](LICENSE) ([NOTICE](NOTICE)). Contributions come in under the Developer Certificate of Origin (`git commit -s`, see [CONTRIBUTING.md](CONTRIBUTING.md)). Colony collects no telemetry: its only network calls of its own are the engine and Node runtime downloads you start from `More → Engine…` (see [PRIVACY.md](PRIVACY.md)).
+Open source under the [Apache License 2.0](LICENSE) ([NOTICE](NOTICE)). Contributions come in under the Developer Certificate of Origin (`git commit -s`, see [CONTRIBUTING.md](CONTRIBUTING.md)). Colony collects no telemetry: its only network calls of its own are the engine and Node runtime downloads you start from `More → Engine…` and the app update check you start from `More → About Colony…` (see [PRIVACY.md](PRIVACY.md)).
 
 ## Status
 
@@ -37,10 +37,10 @@ Not yet: engine choice per to-do (the CLI picks the backend per run), a driver r
 ## Install (Linux x86_64)
 
 ```bash
-curl -fsSL https://colony.missionkit.io/install.sh | sh
+curl -fsSL https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh | sh
 ```
 
-`packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`). The download host is not live yet: see [docs/release.md](docs/release.md) for the release files, publishing, the identity checklist and the install smoke.
+`packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. `More → About Colony…` shows the version and the distribution channel: the AppImage of a release updates itself in place (signed, user-started); a tarball install updates by running the install line again; distro packages update through the package manager. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`) and live in this repository's GitHub Releases; `install.sh` installs the Latest one unless `--version` names another. `https://colony.missionkit.io/install.sh` is meant to redirect to the URL above (not set up yet). See [docs/release.md](docs/release.md) for the release files, the identity checklist and the install smoke.
 
 ## Requirements (Linux)
 

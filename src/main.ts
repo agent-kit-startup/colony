@@ -11,6 +11,7 @@ import { api, errText, focusPolicy, h, type StartupInfo, type TickReview, type W
 import { type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
+import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree } from "./filetree";
 import { CicdView, PullRequestsSection } from "./forge";
@@ -81,6 +82,7 @@ document.getElementById("app")!.innerHTML = `
   <button data-more="refresh">Reload Mission Control data</button>
   <button data-more="terminal">New shell terminal</button>
   <button data-more="engine">Engine…</button>
+  <button data-more="about">About Colony…</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
@@ -627,6 +629,7 @@ menu.addEventListener("click", (ev) => {
     );
   }
   else if (what === "engine") showEngine();
+  else if (what === "about") void openAboutPanel(status);
   else if (what === "commands") void palette.show();
   else if (what === "terminal") {
     toggleTerminal(true);

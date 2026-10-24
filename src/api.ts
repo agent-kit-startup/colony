@@ -16,6 +16,15 @@ export interface WorkspaceInfo { root: string; name: string; isGit: boolean; has
 export interface Entry { name: string; path: string; isDir: boolean }
 export interface DashboardInfo { url: string; port: number; servePath: string; logPath: string; engine: string }
 export interface EngineManifest { name: string; version: string; node: string; driverProtocol: string; dashboardDataVersion: string | null; entry: string; dashboardServe: string }
+export interface AppUpdateStatus {
+  version: string;
+  channel: "direct" | "package";
+  install: string;
+  canCheck: boolean;
+  canInstall: boolean;
+  note: string;
+}
+export interface AppUpdateInfo { current: string; available: string | null; notes: string | null; date: string | null }
 export interface EngineStatus {
   source: "env" | "managed" | "unmanaged" | "none";
   label: string;
@@ -82,6 +91,9 @@ export interface GitStatus { isRepo: boolean; branch: string; header: string; pr
 
 export const api = {
   appInfo: () => invoke<StartupInfo>("app_info"),
+  appUpdateStatus: () => invoke<AppUpdateStatus>("app_update_status"),
+  appUpdateCheck: () => invoke<AppUpdateInfo>("app_update_check"),
+  appUpdateInstall: () => invoke<string>("app_update_install"),
   smokeLog: (line: string) => invoke<void>("smoke_log", { line }),
   smokeExit: () => invoke<void>("smoke_exit"),
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
