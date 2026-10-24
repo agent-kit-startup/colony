@@ -154,7 +154,10 @@ export class RunControls {
     start.disabled = !o.plan;
     start.addEventListener("click", async () => {
       close();
-      o.onStarted?.(await this.start());
+      // Start first, then tell the caller: inside `o.onStarted?.(…)` the argument is not
+      // evaluated when there is no callback, so the run would never start.
+      const run = await this.start();
+      o.onStarted?.(run);
     });
     const cancel = h("button", { "data-act": "run-cancel" }, o.plan ? "Cancel" : "Close");
     cancel.addEventListener("click", close);
