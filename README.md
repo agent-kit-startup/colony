@@ -37,10 +37,10 @@ Not yet: engine choice per to-do (the CLI picks the backend per run), a driver r
 ## Install (Linux x86_64)
 
 ```bash
-curl -fsSL https://colony.missionkit.io/install.sh | sh
+curl -fsSL https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh | sh
 ```
 
-`packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`). The download host is not live yet: see [docs/release.md](docs/release.md) for the release files, publishing, the identity checklist and the install smoke.
+`packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`) and live in this repository's GitHub Releases; `install.sh` installs the Latest one unless `--version` names another. `https://colony.missionkit.io/install.sh` is meant to redirect to the URL above (not set up yet). See [docs/release.md](docs/release.md) for the release files, the identity checklist and the install smoke.
 
 ## Requirements (Linux)
 

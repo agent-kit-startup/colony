@@ -1,16 +1,24 @@
 #!/bin/sh
 # Colony installer (Linux x86_64, per user, no sudo).
 #
-#   curl -fsSL https://colony.missionkit.io/install.sh | sh
-#   curl -fsSL https://colony.missionkit.io/install.sh | sh -s -- --uninstall
+#   curl -fsSL https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh | sh -s -- --uninstall
+#
+# (https://colony.missionkit.io/install.sh is meant to redirect to the first URL.)
 #
 # It downloads SHA256SUMS and SHA256SUMS.sig of a release, verifies the signature
 # with the Colony release public key below (minisign format, made by the Tauri
 # signer in the release workflow), checks the tarball against SHA256SUMS, and only
 # then installs. Any failed check stops before anything is written.
 #
-# Layout of a release under the download base:
-#   <base>/LATEST                                  one line: the latest version
+# Releases are the GitHub Releases of the public repository agent-kit-startup/colony.
+# The latest version is the tag GitHub's releases/latest redirects to (prereleases
+# are never "latest"); files come from releases/download/v<version>/.
+#
+# Layout of a release under a download base (COLONY_DOWNLOAD_BASE; the GitHub default
+# has the same v<version>/<file> shape):
+#   <base>/LATEST                                  one line: the latest version (only read
+#                                                  when COLONY_DOWNLOAD_BASE is set)
 #   <base>/v<version>/SHA256SUMS                   sha256 of every release file
 #   <base>/v<version>/SHA256SUMS.sig               base64 minisign signature of SHA256SUMS
 #   <base>/v<version>/colony-<version>-linux-x86_64.tar.gz
@@ -22,23 +30,22 @@
 #   ${XDG_DATA_HOME:-~/.local/share}/applications/colony.desktop
 #
 # Environment:
-#   COLONY_DOWNLOAD_BASE  download base, https:// or file:// (default below)
-#   COLONY_VERSION        version to install (default: the one in <base>/LATEST)
+#   COLONY_DOWNLOAD_BASE  download base, https:// or file:// (default: the GitHub
+#                         release downloads below; a local copy for tests)
+#   COLONY_VERSION        version to install (default: the latest release)
 #   COLONY_BIN_DIR        launcher folder (default ~/.local/bin)
-#
-# The Colony repository is private, so its GitHub releases cannot be fetched
-# anonymously: the default base only works once the release files are published
-# there (see docs/release.md).
 set -eu
 
 PUBKEY_ID="9A9BB4349C2248C6"
 PUBKEY="RWTGSCKcNLSbmtr69jGw/BdVDJPeqVUJFZYuePFlQH0626GHgPpxdalV"
-DEFAULT_BASE="https://colony.missionkit.io/releases"
+RELEASES_URL="https://github.com/agent-kit-startup/colony/releases"
+DEFAULT_BASE="$RELEASES_URL/download"
 
 say() { printf 'colony-install: %s\n' "$*"; }
 die() { printf 'colony-install: error: %s\n' "$*" >&2; exit 1; }
 
 base="${COLONY_DOWNLOAD_BASE:-$DEFAULT_BASE}"
+base_set="${COLONY_DOWNLOAD_BASE:+1}"
 version="${COLONY_VERSION:-}"
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 app_root="$data_home/colony/app"
@@ -126,9 +133,24 @@ fetch() { # url dest
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
+# The tag GitHub's releases/latest redirects to (.../releases/tag/v<version>).
+# With no published release it lands on .../releases instead.
+latest_github() {
+  url="$(curl -fsSLI --proto '=https' --retry 2 -o /dev/null -w '%{url_effective}' "$RELEASES_URL/latest")" \
+    || die "could not reach $RELEASES_URL/latest"
+  case "$url" in
+    */releases/tag/v*) printf '%s\n' "${url##*/releases/tag/}" ;;
+    *) die "no Colony release is published yet at $RELEASES_URL (got $url)" ;;
+  esac
+}
+
 if [ -z "$version" ]; then
-  fetch "$base/LATEST" "$tmp/LATEST"
-  version="$(tr -d ' \t\r\n' < "$tmp/LATEST")"
+  if [ -n "$base_set" ]; then
+    fetch "$base/LATEST" "$tmp/LATEST"
+    version="$(tr -d ' \t\r\n' < "$tmp/LATEST")"
+  else
+    version="$(latest_github)"
+  fi
 fi
 version="${version#v}"
 case "$version" in
