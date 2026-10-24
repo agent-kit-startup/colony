@@ -174,7 +174,9 @@ class RequestCard {
         h(
           "div",
           { class: "row" },
-          h("span", { class: "mono" }, `${s(pr.baseRefName)} ← ${s(pr.headRefName)}`),
+          h("span", { class: "mono" }, `${s(pr.baseRefName)} ← ${pr.isCrossRepository === false ? "" : `${s((pr.headRepositoryOwner as J | undefined)?.login) || "?"}:`}${s(pr.headRefName)}`),
+          ...(pr.isCrossRepository === false ? [] : [chip("fork", "chip-failed")]),
+          ...((pr.author as J | undefined)?.login ? [h("span", { class: "dim" }, `by ${s((pr.author as J).login)}`)] : []),
           chip(`mergeable: ${s(pr.mergeable).toLowerCase() || "?"}`, pr.mergeable === "MERGEABLE" ? "chip-done" : pr.mergeable === "CONFLICTING" ? "chip-failed" : ""),
           ...(pr.mergeStateStatus ? [chip(s(pr.mergeStateStatus).toLowerCase())] : []),
           ...(pr.reviewDecision ? [chip(s(pr.reviewDecision).toLowerCase().replace(/_/g, " "))] : []),

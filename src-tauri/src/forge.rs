@@ -68,7 +68,7 @@ pub enum Provider {
 }
 
 const PR_LIST_FIELDS: &str = "number,title,headRefName,baseRefName,isDraft,mergeable,reviewDecision,statusCheckRollup,url";
-const PR_VIEW_FIELDS: &str = "number,title,state,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,url,author";
+const PR_VIEW_FIELDS: &str = "number,title,state,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,url,author,isCrossRepository,headRepositoryOwner";
 const RUN_FIELDS: &str = "databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,createdAt,url";
 
 impl Provider {

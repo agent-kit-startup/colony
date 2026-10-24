@@ -971,13 +971,28 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
     }
 }
 
+/// The merge gate on one `gh pr view` answer (pure, unit-tested): `Err` when a fork PR
+/// targets a production base (its head branch name, e.g. `staging`, is the fork's own and
+/// proves nothing: security review 2026-10-24, finding 1), `Ok(Some(why))` when the typed
+/// yes is needed.
+pub fn merge_gate(number: u64, pr: &Value) -> Result<Option<String>, String> {
+    let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default();
+    let Some(why) = branchrule::request_production_reason(base) else { return Ok(None) };
+    // A missing field counts as a fork: fail closed.
+    if pr.get("isCrossRepository").and_then(Value::as_bool) != Some(false) {
+        let owner = pr.pointer("/headRepositoryOwner/login").and_then(Value::as_str).unwrap_or("?");
+        let head = pr.get("headRefName").and_then(Value::as_str).unwrap_or("?");
+        return Err(format!("Refused: PR #{number} comes from another repository ({owner}:{head}) and targets {base}. A fork PR never merges into a production base from Colony"));
+    }
+    Ok(Some(format!("PR #{number} targets {base}: {why}")))
+}
+
 /// `Ok(Some(why))`: the action needs a typed yes. `Err`: never allowed on request.
 fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String> {
     match action {
         Action::MergePr { number, .. } => {
             let pr = Forge::detect()?.json(cwd, &Op::PrView(*number))?;
-            let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default().to_string();
-            Ok(branchrule::request_production_reason(&base).map(|why| format!("PR #{number} targets {base}: {why}")))
+            merge_gate(*number, &pr)
         }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
@@ -1281,6 +1296,16 @@ mod tests {
     fn mk(g: &dyn Fn(&[&str]) -> String, msg: &str) -> String {
         g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg]);
         g(&["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn merge_gate_needs_yes_for_main_and_refuses_forks() {
+        let pr = |base: &str, cross: Value| json!({ "baseRefName": base, "headRefName": "staging", "isCrossRepository": cross, "headRepositoryOwner": { "login": "mallory" } });
+        assert_eq!(merge_gate(1, &pr("staging", json!(true))).unwrap(), None, "a fork PR into staging is an ordinary card");
+        assert!(merge_gate(1, &pr("main", json!(false))).unwrap().unwrap().contains("targets main"));
+        let e = merge_gate(1, &pr("main", json!(true))).unwrap_err();
+        assert!(e.contains("mallory:staging") && e.starts_with("Refused"), "{e}");
+        assert!(merge_gate(1, &pr("release", Value::Null)).is_err(), "unknown origin fails closed");
     }
 
     #[test]
