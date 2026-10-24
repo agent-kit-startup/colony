@@ -938,6 +938,11 @@ pub struct PrPlan {
 
 const MAX_PR_LOG: usize = 30;
 
+/// Host-request pushes run in the requester's folder: never through an `ext::` transport
+/// its git config might name (security review 2026-10-24, finding 6). The repository's own
+/// hooks still run: its pre-push guard is a safety layer, not a risk to switch off.
+const NO_EXT_PROTOCOL: [&str; 2] = ["-c", "protocol.ext.allow=never"];
+
 fn remote_ref_exists(cwd: &Path, branch: &str) -> bool {
     gitops::git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_ok()
 }
@@ -1095,7 +1100,7 @@ fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, Str
             if let Some(sha) = &plan.push_sha {
                 // Never forced: a plain refspec push of the default branch's own tip to a new
                 // non-production branch.
-                log.push_str(&gitops::git(cwd, &["push", "origin", &format!("{sha}:refs/heads/{}", plan.head)])?);
+                log.push_str(&gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", "origin", &format!("{sha}:refs/heads/{}", plan.head)])?);
             }
             let out = forge.run(cwd, &Op::PrCreate { base: plan.base.clone(), head: plan.head.clone(), title: plan.title.clone(), body: plan.body.clone() }).map_err(|e| format!("{log}{e}"))?;
             log.push_str(&out);
@@ -1112,8 +1117,8 @@ fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, Str
             }
             // Never forced: no --force, no +refspec.
             match gitops::git(cwd, &["config", "--get", &format!("branch.{b}.remote")]).map(|s| s.trim().to_string()) {
-                Ok(remote) if !remote.is_empty() && !remote.starts_with('-') => gitops::git(cwd, &["push", &remote, b]),
-                _ => gitops::git(cwd, &["push", "-u", "origin", b]),
+                Ok(remote) if !remote.is_empty() && !remote.starts_with('-') => gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", &remote, b]),
+                _ => gitops::git(cwd, &[NO_EXT_PROTOCOL[0], NO_EXT_PROTOCOL[1], "push", "-u", "origin", b]),
             }
         }
     }
@@ -1205,12 +1210,12 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
         Action::MergePr { number, .. } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(&cwd, &Op::PrDiff(*number)),
         Action::PushBranch { branch: Some(b) } => {
             let upstream = gitops::git(&cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).map(|s| s.trim().to_string()).unwrap_or_else(|_| format!("origin/{b}"));
-            gitops::git(&cwd, &["diff", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
+            gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
         }
         Action::OpenPr { shape } => {
             let plan = pr_plan(*shape, &cwd)?;
             let head = plan.push_sha.clone().unwrap_or_else(|| format!("refs/remotes/origin/{}", plan.head));
-            gitops::git(&cwd, &["diff", "--stat", &format!("refs/remotes/origin/{}...{head}", plan.base), "--"])
+            gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", &format!("refs/remotes/origin/{}...{head}", plan.base), "--"])
         }
         _ => Err("No diff for this request".into()),
     }
