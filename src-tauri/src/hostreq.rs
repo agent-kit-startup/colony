@@ -972,10 +972,12 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
                 return Err(format!("Refused: origin/staging has nothing that origin/{main} lacks"));
             }
             let log = log_of(&format!("{base_ref}..{head_ref}"))?;
-            let list: String = log.lines().map(|l| format!("- {l}\n")).collect();
-            let more = if ahead as usize > MAX_PR_LOG { format!("- ... and {} more\n", ahead as usize - MAX_PR_LOG) } else { String::new() };
+            // Commit subjects are repo text: inside a code block they cannot ping, link or
+            // close issues (security review 2026-10-24, finding 8); backticks cannot end it.
+            let list: String = log.lines().map(|l| format!("{}\n", l.replace('`', "'"))).collect();
+            let more = if ahead as usize > MAX_PR_LOG { format!("... and {} more\n", ahead as usize - MAX_PR_LOG) } else { String::new() };
             let body = format!(
-                "## Summary\n\nPromote `staging` to `{main}` ({ahead} commit(s)). Please merge with a merge commit, so `{main}` stays an ancestor of `staging`.\n\n{list}{more}\nOpened from Colony (Git e CI/CD, Ship lane). The merge into `{main}` needs the operator's typed yes in Colony.\n"
+                "## Summary\n\nPromote `staging` to `{main}` ({ahead} commit(s)). Please merge with a merge commit, so `{main}` stays an ancestor of `staging`.\n\n```text\n{list}{more}```\n\nOpened from Colony (Git e CI/CD, Ship lane). The merge into `{main}` needs the operator's typed yes in Colony.\n"
             );
             Ok(PrPlan { shape, base: main.to_string(), head: "staging".into(), push_sha: None, title: format!("Promote staging to {main}"), body, log })
         }
@@ -1399,7 +1401,7 @@ mod tests {
         g(&["update-ref", "refs/remotes/origin/staging", &s2]);
         let p = pr_plan(PrShape::Promote, &cwd).unwrap();
         assert_eq!((p.base.as_str(), p.head.as_str(), p.title.as_str(), p.push_sha.as_deref()), ("main", "staging", "Promote staging to main", None));
-        assert!(p.body.contains("(2 commit(s))") && p.body.contains("merge commit") && p.body.contains("`two`; --admin"));
+        assert!(p.body.contains("(2 commit(s))") && p.body.contains("merge commit") && p.body.contains("fix: $(curl x) 'two'; --admin") && p.body.contains("```text\n"));
         assert!(!p.body.to_lowercase().contains("co-authored") && !p.body.contains("Generated with"));
         assert_eq!(p.log.lines().count(), 2);
         assert_eq!(production_gate(&Action::OpenPr { shape: PrShape::Promote }, &cwd).unwrap(), None, "opening a PR needs no typed yes");
