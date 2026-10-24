@@ -366,11 +366,13 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .mission-fold { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
 .mission-stack { display: flex; flex-direction: column; gap: var(--mc-space-xl); min-width: 0; min-height: 0; }
 .mission-fold .card { container-type: inline-size; }
-@media (min-width: 1024px) and (min-height: 560px) {
-  .cv-mission { overflow: hidden; }
+@media (min-width: 1024px) {
+  /* The rows have a floor: when the window (or a tall terminal panel) leaves less room
+     than that, the view scrolls instead of squeezing every panel to a sliver. */
+  .cv-mission { overflow: auto; }
   .cv-mission .cv-body { height: 100%; padding-bottom: var(--mc-space-xl); gap: var(--mc-space-lg); }
   .cv-mission .gate-strip { flex: none; max-height: 38%; overflow: auto; margin-bottom: 0; }
-  .mission-fold { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "now attention" "flight queue"; align-items: stretch; gap: var(--mc-space-lg); }
+  .mission-fold { flex: 1 1 0; min-height: calc(520px + var(--mc-space-lg)); grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(300px, 1fr) minmax(220px, 1fr); grid-template-areas: "now attention" "flight queue"; align-items: stretch; gap: var(--mc-space-lg); }
   .mission-fold > .hero { grid-area: now; }
   .mission-fold > .mission-stack { grid-area: attention; gap: var(--mc-space-lg); }
   .mission-fold > .flight-card { grid-area: flight; }
