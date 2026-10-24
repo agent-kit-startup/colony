@@ -1153,8 +1153,13 @@ async function runSmoke(root: string, info: StartupInfo) {
     closeEnginePanel();
     showTab("mission");
     await wait(300);
-    const hero = view("mission").querySelector(".hero")?.textContent ?? "";
-    await log("view-mission", activeTab === "mission" && !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]'), { hero: hero.slice(0, 160), cards: view("mission").querySelectorAll(".card").length });
+    const hero = view("mission").querySelector(".hero:not(.first-run)")?.textContent ?? "";
+    // A folder without the kit, without a readiness report or with open essential checks
+    // (and no active plan) opens on the First run card instead of the hero.
+    const firstRun = view("mission").querySelector<HTMLElement>(".first-run");
+    const firstRunOk = !!firstRun && !!firstRun.querySelector('[data-act="onboard"], [data-act="install-kit"]');
+    const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]');
+    await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
     showTab("plans");
     view("plans").querySelector<HTMLButtonElement>('button[data-filter="all"]')?.click();
     await wait(200);
