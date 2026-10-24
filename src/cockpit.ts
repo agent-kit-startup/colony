@@ -15,7 +15,7 @@ import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "
 import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { inlineMd, plainMd, prose } from "./transcript";
-import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
+import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, emptyCta, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
 
 export interface CockpitHost {
   status(msg: string): void;
@@ -35,6 +35,12 @@ export interface CockpitHost {
   workspaceRoot(): string;
   /** `agent-kit install` in a bottom terminal tab, after a confirmation (it asks its own questions there). */
   installKit(): Promise<unknown>;
+  /** Start (or reach) the folder's Mission Control server again and reconnect the feed. */
+  retryMc(): void;
+  /** The server log, when Colony knows where it is ("" otherwise). */
+  mcLogPath(): string;
+  /** Follow the server log in a bottom terminal tab (`tail -F`). */
+  showMcLog(): void;
 }
 
 /** Base: a scrollable center view that re-renders on snapshot or run changes while shown. */
@@ -106,7 +112,18 @@ abstract class View {
   protected noData(): Node[] | null {
     if (snapshot.data) return null;
     const f = snapshot.feed;
-    return [empty(f.error ? `Mission Control data unavailable: ${f.error}` : "Waiting for the Mission Control server…")];
+    const log = this.host.mcLogPath();
+    return [
+      emptyCta({
+        icon: "monitor",
+        headline: f.error ? "Mission Control data unavailable" : "Waiting for the Mission Control server…",
+        support: f.error || `Colony started the kit's server for this folder (${f.detail}); its first snapshot has not arrived yet.`,
+        actions: [
+          { label: "Retry", onClick: () => this.host.retryMc(), act: "mc-retry", title: "Start or reach the server again and reconnect the live feed" },
+          ...(log ? [{ label: "Show server log", onClick: () => this.host.showMcLog(), act: "mc-log", title: `tail -F ${log} in a terminal tab` }] : []),
+        ],
+      }),
+    ];
   }
 }
 
@@ -320,6 +337,20 @@ function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonEle
   return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" });
 }
 
+const RUN_PLAN_ALL_WHY = "/run-plan-all proposes a queue from the open plans and asks you to confirm it before it writes it to HANDOFF.";
+
+/** No run-plan-all queue: the kit's way to make one is /run-plan-all in the agent. */
+function noQueue(host: CockpitHost, compact: boolean): HTMLElement {
+  // In a Mission cell (compact) the card header already carries the icon.
+  return emptyCta({
+    ...(compact ? {} : { icon: "queue" as const }),
+    headline: "No run-plan-all queue",
+    support: "HANDOFF has no queue. /run-plan-all in your agent proposes one from the open plans.",
+    compact,
+    actions: [{ label: "Ask agent: /run-plan-all", onClick: () => void host.interactive("/run-plan-all", RUN_PLAN_ALL_WHY), act: "empty-run-plan-all" }],
+  });
+}
+
 // ---- First run -----------------------------------------------------------------------
 /** Readiness status -> check chip tone and label (readiness.json status vocabulary). */
 const CHECK_STATUS: Record<ReadinessCheck["status"], [CheckTone, string]> = {
@@ -502,7 +533,7 @@ export class MissionView extends View {
       { class: "actions now-actions" },
       run,
       // No active plan (or it is done): the next mission is a new plan.
-      ...(!pend && (!plan || planDone) ? [newPlanBtn(this.host, plan ? "status-bar-btn" : "primary"), backlogAddBtn(this.host)] : []),
+      ...(snapshot.data && !pend && (!plan || planDone) ? [newPlanBtn(this.host, plan ? "status-bar-btn" : "primary"), backlogAddBtn(this.host)] : []),
       iconBtn("terminals", "Open interactive", () => void this.host.interactive(), { class: "status-bar-btn", "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
       ...(pend
         ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`), { class: "status-bar-btn" })]
@@ -597,7 +628,7 @@ export class MissionView extends View {
     const hidden = att.length - Math.min(att.length, 4);
     const c = card(
       { title: "Needs you", aside: n ? [gates.length ? pill(`${n} waiting`, "awaiting", "⏯") : chip(String(n))] : [] },
-      ...(items.length ? items : [empty("Nothing waits for you.")]),
+      ...(items.length ? items : [emptyCta({ headline: "Nothing waits for you", support: "Gates, attention items and gate-exit tickets land here and in the Inbox.", compact: true })]),
       ...(hidden ? [btn(`+${hidden} more in the Inbox`, () => this.host.showTab("inbox"), { class: "link", "data-act": "needs-more" })] : []),
     );
     c.classList.add("needs-you");
@@ -616,10 +647,20 @@ export class MissionView extends View {
     }
     const live = mine.filter((l) => l.state !== "ended").length;
     // The web Mission Control's name for this panel: Crew Monitor.
-    const c = card({ title: "Crew Monitor", aside: live ? [pill(`${live} live`, "running", "▶")] : [] }, ...(rows.length ? rows : [empty("No runs in this window. Run plan, Open interactive and the plan actions start one; each opens as its own tab.")]));
+    const c = card({ title: "Crew Monitor", aside: live ? [pill(`${live} live`, "running", "▶")] : [] }, ...(rows.length ? rows : [this.noRuns()]));
     c.classList.add("runs-card");
     c.dataset.keepScroll = "runs";
     return c;
+  }
+
+  private noRuns(): HTMLElement {
+    const plan = snapshot.activePlanFile;
+    return emptyCta({
+      headline: "No runs in this window",
+      support: "Each run opens as its own tab: Run plan, Open interactive and the plan actions start one.",
+      compact: true,
+      actions: [plan ? { label: "Run plan", onClick: () => void this.host.runPlan(), act: "empty-run-plan" } : { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" }, { label: "Open interactive", onClick: () => void this.host.interactive(), act: "empty-interactive" }],
+    });
   }
 
   private queueCard(): HTMLElement {
@@ -635,7 +676,7 @@ export class MissionView extends View {
     );
     const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono", title: "Queue cursor: the plan the queue runs now" }, `plan ${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];
     const liveRow = live ? [h("div", { class: "row dim small queue-live-row" }, chip("live", "chip-done"), h("span", { class: "grow ellipsis" }, `queue run #${live.id} · ${live.backend}${live.queue?.status ? ` · ${live.queue.status}` : ""}`))] : [];
-    const c = card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [empty("No run-plan-all queue in HANDOFF.")]), ...(queue.length ? [acts] : []));
+    const c = card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [noQueue(this.host, true)]), ...(queue.length ? [acts] : []));
     c.classList.add("queue-card");
     c.dataset.keepScroll = "queue";
     return c;
@@ -770,8 +811,39 @@ export class PlansView extends View {
       .sort((a, b) => order(a) - order(b) || a.id.localeCompare(b.id));
     return [
       h("div", { class: "toolbar" }, h("div", { class: "chips" }, ...chips), h("div", { class: "actions" }, this.search, newPlanBtn(this.host), backlogAddBtn(this.host))),
-      h("div", { class: "plan-list" }, ...(shown.length ? shown.map((p) => this.row(p, p.file === active)) : [empty("No plans match.")])),
+      h("div", { class: "plan-list" }, ...(shown.length ? shown.map((p) => this.row(p, p.file === active)) : [this.noPlans(plans.length)])),
     ];
+  }
+
+  private noPlans(total: number): HTMLElement {
+    if (!total)
+      return emptyCta({
+        icon: "plans",
+        headline: "No plans yet",
+        support: "A plan is a list of to-dos the agent runs one tick at a time. /start-project makes one active; /backlog-add parks one in the backlog.",
+        actions: [
+          { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" },
+          { label: "Add to backlog", onClick: () => void this.host.interactive("/backlog-add", BACKLOG_ADD_WHY), act: "empty-backlog-add" },
+        ],
+      });
+    return emptyCta({
+      icon: "plans",
+      headline: "No plans match",
+      support: `${total} plan${total === 1 ? "" : "s"} in the snapshot; none fits this filter${this.query ? " and search" : ""}.`,
+      compact: true,
+      actions: [
+        {
+          label: "Show all plans",
+          onClick: () => {
+            this.filter = "all";
+            this.query = "";
+            this.search.value = "";
+            this.invalidate();
+          },
+          act: "plans-show-all",
+        },
+      ],
+    });
   }
 
   private row(p: McPlan, active: boolean): HTMLElement {
@@ -903,7 +975,7 @@ export class QueueView extends View {
       return r;
     });
     const status = str(q.status);
-    return [head, h("div", { class: "q-list" }, ...(rows.length ? rows : [empty("HANDOFF has no run-plan-all queue. /run-plan-all in your agent proposes one.")])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
+    return [head, h("div", { class: "q-list" }, ...(rows.length ? rows : [noQueue(this.host, false)])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
   }
 }
 

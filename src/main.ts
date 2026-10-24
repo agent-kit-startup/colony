@@ -107,6 +107,8 @@ const status = (msg: string) => {
 let workspace: WorkspaceInfo | null = null;
 let mcUrl = "";
 let mcOrigin = "";
+/** The folder's Mission Control server log (~/.cache/colony/dashboard-<port>.log), once known. */
+let mcLog = "";
 
 // ---- tabs and rail --------------------------------------------------------------------
 interface Tab {
@@ -562,6 +564,13 @@ const host: CockpitHost = {
     await terminals.create(argv, "agent-kit install");
     status("Agent Kit install runs in the terminal below; Mission lists the readiness checks once it is done");
   },
+  retryMc: () => void startMc(),
+  mcLogPath: () => mcLog,
+  showMcLog: () => {
+    if (!workspace || !mcLog) return status("No Mission Control server log yet");
+    toggleTerminal(true);
+    void terminals.create(["tail", "-n", "200", "-F", mcLog], "Mission Control log");
+  },
 };
 
 
@@ -939,6 +948,7 @@ async function openWorkspace(path: string) {
   void readiness.load();
   mcUrl = "";
   mcOrigin = "";
+  mcLog = "";
   mcFrame.removeAttribute("src");
   alerts.setBase(`${workspace.name} · Colony`);
   // The folder name never truncates; its parent path ellipsizes (full path in the title).
@@ -952,18 +962,36 @@ async function openWorkspace(path: string) {
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
   if (!shell.classList.contains("no-bottom")) void terminals.create();
+  await startMc();
+}
+
+/**
+ * Start the folder's Mission Control server (or reach the running one) and connect the
+ * snapshot feed. Also the Retry of the "Waiting for the Mission Control server" state.
+ */
+async function startMc() {
+  if (!workspace) return;
+  const root = workspace.root;
   $("st-mc").textContent = "Mission Control: starting…";
+  snapshot.feed.error = null;
+  snapshot.feed.detail = "starting";
+  for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
   try {
     const mc = await api.dashboardStart();
+    if (workspace?.root !== root) return;
     mcUrl = mc.url;
     mcOrigin = new URL(mc.url).origin;
+    mcLog = mc.logPath;
     $("st-mc").title = `${mc.servePath}\nengine: ${mc.engine}\nlog: ${mc.logPath}`;
     void refreshEngineBadge($("st-engine"));
     await snapshot.connect();
   } catch (e) {
+    if (workspace?.root !== root) return;
+    // A server that never listened names its log in the error.
+    mcLog = /log: (\S+\.log)/.exec(errText(e))?.[1] ?? mcLog;
     snapshot.feed.error = errText(e);
     renderFeed();
-    mission.invalidate();
+    for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
     status(`Mission Control: ${errText(e)}`);
   }
 }
