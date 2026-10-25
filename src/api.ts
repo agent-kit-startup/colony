@@ -139,6 +139,8 @@ export const api = {
   /** This window's open gates and live runs, for the omarchy-shell bar widget (Omarchy only). */
   shellStatusSet: (folder: string | null, gates: number, runs: number) => invoke<void>("shell_status_set", { folder, gates, runs }),
   instanceSubscribe: (onEvent: Channel<InstanceEvent>) => invoke<void>("instance_subscribe", { onEvent }),
+  /** On Hyprland, ask the compositor to focus this window (src-tauri/src/hyprland.rs). */
+  windowRaise: () => invoke<void>("window_raise"),
   termLaunch: (o: { kind: "interactive" | "run-plan-all"; engine: string; model?: string; prompt?: string; resume?: string; dryRun?: boolean }) =>
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
   commandsCatalog: () => invoke<CommandsCatalog>("commands_catalog"),

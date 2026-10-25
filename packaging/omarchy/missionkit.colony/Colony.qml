@@ -3,8 +3,11 @@
 // windows keep in $XDG_RUNTIME_DIR/colony/ and prints Waybar-style JSON:
 // {"text","tooltip","class","gates","runs","windows"}. Uses only the documented
 // custom-module contract (bar.foreground / urgent / fontFamily / barSize / run /
-// showTooltip / hideTooltip) and Quickshell.Io.
+// showTooltip / hideTooltip) and Quickshell.Io. The icon is the Colony mark
+// (colony-icon.svg, written next to this file), white and tinted with the bar's
+// foreground, or its urgent colour while a gate waits (the Tray's MultiEffect pattern).
 import QtQuick
+import QtQuick.Effects
 import Quickshell.Io
 
 Item {
@@ -18,7 +21,9 @@ Item {
   property int windows: 0
   property string tip: "Colony"
 
-  implicitWidth: label.implicitWidth + 12
+  readonly property color tint: root.bar ? (root.gates > 0 ? root.bar.urgent : root.bar.foreground) : "white"
+
+  implicitWidth: content.implicitWidth + 12
   implicitHeight: root.bar ? root.bar.barSize : 26
   opacity: windows > 0 ? 1.0 : 0.5
 
@@ -52,14 +57,58 @@ Item {
     onTriggered: if (!statusProc.running) statusProc.running = true
   }
 
-  Text {
-    id: label
+  Row {
+    id: content
     anchors.centerIn: parent
-    // Nerd Font nf-md-robot (U+F06A9, as a surrogate pair) and the open gate count.
-    text: root.gates > 0 ? "\uDB81\uDEA9 " + root.gates : "\uDB81\uDEA9"
-    color: root.bar ? (root.gates > 0 ? root.bar.urgent : root.bar.foreground) : "white"
-    font.family: root.bar ? root.bar.fontFamily : "monospace"
-    font.pixelSize: 12
+    spacing: 4
+
+    Item {
+      width: 21
+      height: 16
+      anchors.verticalCenter: parent.verticalCenter
+
+      Image {
+        id: mark
+        anchors.fill: parent
+        source: Qt.resolvedUrl("colony-icon.svg")
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+        // Decode at physical pixels so the mark stays sharp on HiDPI.
+        sourceSize.width: Math.round(width * Math.max(1, Screen.devicePixelRatio))
+        sourceSize.height: Math.round(height * Math.max(1, Screen.devicePixelRatio))
+        // Kept as a hidden layer so the effect can sample it as a texture.
+        visible: false
+        layer.enabled: true
+      }
+
+      MultiEffect {
+        anchors.fill: mark
+        source: mark
+        visible: mark.status === Image.Ready
+        colorization: 1.0
+        colorizationColor: root.tint
+      }
+
+      // Without the SVG (an install from before it shipped): the Nerd Font ringed planet.
+      Text {
+        anchors.centerIn: parent
+        visible: mark.status !== Image.Ready
+        text: "\ue22e"
+        color: root.tint
+        font.family: root.bar ? root.bar.fontFamily : "monospace"
+        font.pixelSize: 14
+      }
+    }
+
+    Text {
+      id: label
+      anchors.verticalCenter: parent.verticalCenter
+      visible: root.gates > 0
+      text: root.gates
+      color: root.tint
+      font.family: root.bar ? root.bar.fontFamily : "monospace"
+      font.pixelSize: 12
+    }
   }
 
   MouseArea {

@@ -22,6 +22,13 @@ use serde::{Deserialize, Serialize};
 pub const PLUGIN_ID: &str = "missionkit.colony";
 const PLUGIN_MANIFEST: &str = include_str!("../../packaging/omarchy/missionkit.colony/manifest.json");
 const PLUGIN_QML: &str = include_str!("../../packaging/omarchy/missionkit.colony/Colony.qml");
+/// The Colony mark at bar size, next to `Colony.qml`, which tints it with the bar colours.
+const PLUGIN_ICON: &str = include_str!("../../packaging/omarchy/missionkit.colony/colony-icon.svg");
+const PLUGIN_ICON_FILE: &str = "colony-icon.svg";
+/// The menu's icon for Colony: Nerd Font `fae-planet` (U+E22E), a ringed planet, the glyph
+/// closest to the Colony mark. The menu JSONC takes a font glyph only (no image path), so the
+/// menu cannot show the mark itself; the bar widget does.
+const MENU_GLYPH: char = '\u{e22e}';
 const BEGIN: &str = "// colony:begin";
 const END: &str = "// colony:end";
 const OMARCHY_BIN: &str = "/usr/share/omarchy/bin";
@@ -38,8 +45,8 @@ fn menu_file(home: &Path) -> PathBuf {
 pub fn menu_block() -> String {
     let when = r#""when":"command -v colony""#;
     let rows = [
-        format!(r#""colony": {{"icon":"{}","label":"Colony","description":"Mission Kit cockpit",{when}}},"#, '\u{f06a9}'),
-        format!(r#""colony.open": {{"icon":"{}","label":"Open Colony","description":"Focus the Colony window, or start it",{when},"action":"colony"}},"#, '\u{f06a9}'),
+        format!(r#""colony": {{"icon":"{MENU_GLYPH}","label":"Colony","description":"Mission Kit cockpit",{when}}},"#),
+        format!(r#""colony.open": {{"icon":"{MENU_GLYPH}","label":"Open Colony","description":"Focus the Colony window, or start it",{when},"action":"colony"}},"#),
         format!(r#""colony.inbox": {{"icon":"{}","label":"Colony Inbox","description":"Open HITL gates of the running windows",{when},"action":"colony --inbox"}},"#, '\u{f009a}'),
         format!(r#""colony.folder": {{"icon":"{}","label":"Open folder in Colony","description":"Pick a folder in the running window",{when},"action":"colony --open-folder"}},"#, '\u{f07b}'),
     ];
@@ -192,6 +199,8 @@ pub fn install_plan(home: &Path) -> Plan {
     if !widget.starts_with("conflict") {
         let dir = plugin_dir(home);
         steps.push(Step::write(dir.join("manifest.json"), PLUGIN_MANIFEST.into()));
+        // The icon before the QML that loads it: the shell reloads the plugin on a QML change.
+        steps.push(Step::write(dir.join(PLUGIN_ICON_FILE), PLUGIN_ICON.into()));
         steps.push(Step::write(dir.join("Colony.qml"), PLUGIN_QML.into()));
     }
     if !menu.starts_with("conflict") {
@@ -217,6 +226,7 @@ pub fn remove_plan(home: &Path) -> Plan {
         let dir = plugin_dir(home);
         steps.push(Step::remove(dir.join("manifest.json")));
         steps.push(Step::remove(dir.join("Colony.qml")));
+        steps.push(Step::remove(dir.join(PLUGIN_ICON_FILE)));
         steps.push(Step::remove(dir));
     }
     if menu == "installed" {
@@ -457,10 +467,11 @@ mod tests {
         assert_eq!((p.widget.as_str(), p.menu.as_str()), ("absent", "absent"));
         let targets: Vec<_> = p.steps.iter().map(|s| (s.kind.as_str(), s.target.replace(&home.display().to_string(), "~"))).collect();
         assert_eq!(targets[0], ("write", "~/.config/omarchy/plugins/missionkit.colony/manifest.json".into()));
-        assert_eq!(targets[1], ("write", "~/.config/omarchy/plugins/missionkit.colony/Colony.qml".into()));
-        assert_eq!(targets[2], ("write", "~/.config/omarchy/extensions/omarchy-menu.jsonc".into()));
-        assert!(targets[3].1.ends_with("omarchy-shell shell rescanPlugins"));
-        assert!(targets[4].1.ends_with("omarchy-plugin-enable missionkit.colony"));
+        assert_eq!(targets[1], ("write", "~/.config/omarchy/plugins/missionkit.colony/colony-icon.svg".into()));
+        assert_eq!(targets[2], ("write", "~/.config/omarchy/plugins/missionkit.colony/Colony.qml".into()));
+        assert_eq!(targets[3], ("write", "~/.config/omarchy/extensions/omarchy-menu.jsonc".into()));
+        assert!(targets[4].1.ends_with("omarchy-shell shell rescanPlugins"));
+        assert!(targets[5].1.ends_with("omarchy-plugin-enable missionkit.colony"));
         assert!(remove_plan(&home).blocked.is_some());
 
         // Apply with a recording runner: no omarchy command really runs.
@@ -472,11 +483,13 @@ mod tests {
         assert!(report.iter().all(|l| !l.starts_with("failed")), "{report:?}");
         assert_eq!(ran.lock().unwrap().len(), 2);
         assert_eq!(std::fs::read_to_string(plugin_dir(&home).join("Colony.qml")).unwrap(), PLUGIN_QML);
+        assert_eq!(std::fs::read_to_string(plugin_dir(&home).join("colony-icon.svg")).unwrap(), PLUGIN_ICON);
         assert_eq!(install_plan(&home).widget, "installed");
         assert_eq!(install_plan(&home).menu, "installed");
 
         let r = remove_plan(&home);
         assert!(r.steps[0].target.ends_with("omarchy-plugin-disable missionkit.colony"));
+        assert!(r.steps.iter().any(|s| s.kind == "remove" && s.target.ends_with("missionkit.colony/colony-icon.svg")));
         let report = apply(&r, |_| Ok(String::new()));
         assert!(report.iter().all(|l| !l.starts_with("failed")), "{report:?}");
         assert!(!plugin_dir(&home).exists());
@@ -542,5 +555,60 @@ mod tests {
         assert_eq!(m["schemaVersion"], 1);
         assert_eq!(m["entryPoints"]["barWidget"], "Colony.qml");
         assert!(PLUGIN_QML.contains("\"status\", \"--bar\""));
+    }
+
+    /// The `d` / `cx` / `cy` attributes of an SVG, in order.
+    fn shape_attrs(svg: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for key in [" d=\"", " cx=\"", " cy=\""] {
+            let mut rest = svg;
+            while let Some(i) = rest.find(key) {
+                rest = &rest[i + key.len()..];
+                let end = rest.find('"').unwrap();
+                out.push(format!("{}{}", key.trim(), &rest[..end]));
+                rest = &rest[end..];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_bar_widget_shows_the_colony_mark_tinted_with_the_bar_colours() {
+        // Not the robot (nf-md-robot U+F06A9, the surrogate pair QML spells it with).
+        for robot in ["\\uDB81\\uDEA9", "\u{f06a9}", "f06a9"] {
+            assert!(!PLUGIN_QML.contains(robot), "robot glyph {robot} still in Colony.qml");
+            assert!(!menu_block().contains(robot), "robot glyph {robot} still in the menu");
+        }
+        // The mark, as an Image beside the QML, tinted by MultiEffect with foreground / urgent.
+        assert!(PLUGIN_QML.contains("Qt.resolvedUrl(\"colony-icon.svg\")"));
+        assert!(PLUGIN_QML.contains("import QtQuick.Effects"));
+        assert!(PLUGIN_QML.contains("colorizationColor: root.tint"));
+        assert!(PLUGIN_QML.contains("root.gates > 0 ? root.bar.urgent : root.bar.foreground"));
+        // White, so the tint is the bar colour itself.
+        assert!(PLUGIN_ICON.contains("stroke=\"#FFFFFF\"") && !PLUGIN_ICON.contains("#E6E6E6"));
+        // The bar cut keeps the brand mark's planet, ring and moon (only the highlight arc goes).
+        let brand = shape_attrs(include_str!("../../assets/brand/colony-icon.svg"));
+        let bar = shape_attrs(PLUGIN_ICON);
+        assert_eq!(bar.len(), 4, "{bar:?}");
+        for a in &bar {
+            assert!(brand.contains(a), "{a} is not in assets/brand/colony-icon.svg");
+        }
+        // The menu takes a glyph only: the ringed planet for Colony and Open Colony.
+        let menu: serde_json::Value = serde_json::from_str(&strip_jsonc(&menu_with_block(None).unwrap())).unwrap();
+        assert_eq!(menu["colony"]["icon"], "\u{e22e}");
+        assert_eq!(menu["colony.open"]["icon"], "\u{e22e}");
+    }
+
+    #[test]
+    fn an_install_from_before_the_icon_still_removes_cleanly() {
+        let home = tmp("old-install");
+        let dir = plugin_dir(&home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest.json"), PLUGIN_MANIFEST).unwrap();
+        std::fs::write(dir.join("Colony.qml"), "// 1.0.0").unwrap();
+        let report = apply(&remove_plan(&home), |_| Ok(String::new()));
+        assert!(report.iter().all(|l| !l.starts_with("failed")), "{report:?}");
+        assert!(report.iter().any(|l| l.starts_with("already gone:") && l.ends_with("colony-icon.svg")), "{report:?}");
+        assert!(!dir.exists());
     }
 }

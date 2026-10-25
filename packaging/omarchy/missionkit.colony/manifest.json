@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "missionkit.colony",
   "name": "Colony",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Mission Kit",
   "license": "Apache-2.0",
   "description": "Open HITL gates and live agent runs of the Colony windows, with a click to the window or its Inbox.",
