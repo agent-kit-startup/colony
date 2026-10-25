@@ -72,7 +72,7 @@ fn serve_command() -> Result<(PathBuf, PathBuf, String), String> {
 /// `shims/agent-kit -> /usr/bin/mise`) is resolved through `mise which agent-kit`; the
 /// last fallback is `npm root -g`.
 fn unmanaged_serve_script() -> Result<PathBuf, String> {
-    let bin = tools::agent_kit_bin().ok_or("No Agent Kit engine: install one from More → Engine (or set COLONY_ENGINE)")?;
+    let bin = tools::agent_kit_bin().ok_or("No Agent Kit engine: install one from Run → Engine… (or set COLONY_ENGINE)")?;
     let real = bin.canonicalize().map_err(|e| e.to_string())?;
     if let Some(found) = serve_next_to(&real) {
         return Ok(found);

@@ -130,7 +130,7 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, res
             if !agent::BACKENDS.contains(&engine) {
                 return Err(format!("Unknown backend: {engine}"));
             }
-            let bin = find("agent-kit").ok_or("No Agent Kit engine (More → Engine) and no agent-kit on PATH")?;
+            let bin = find("agent-kit").ok_or("No Agent Kit engine (Run → Engine…) and no agent-kit on PATH")?;
             // A managed engine runs as `<node> <engine>/dist/index.js` (engine.rs).
             let mut argv = vec![bin.clone()];
             argv.extend(find("agent-kit-entry"));

@@ -1,4 +1,4 @@
-// Engine panel (More → Engine…) and status-bar badge: which Agent Kit build Colony runs
+// Engine panel (Run → Engine…) and status-bar badge: which Agent Kit build Colony runs
 // (src-tauri/src/engine.rs), install/update from the kit's GitHub release, roll back, and
 // the Node runtime. The PATH fallback is flagged as an unmanaged engine.
 import { api, type EngineStatus, errText, h } from "./api";

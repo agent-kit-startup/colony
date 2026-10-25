@@ -1,7 +1,9 @@
-//! Native menu bar (File, View, Run, Help). The items come from `src/menu.json`, the same
-//! file the window's action map reads (src/main.ts `runAction`), so the menu bar and the
-//! More menu run one set of actions and there is no second list here. A click emits
-//! `colony-menu` with the item id to the main window; the window runs the action.
+//! Native menu bar (File, View, Run, Help). The items come from `src/menu.json`, the one
+//! command source: its `menus` are this bar, its `more` the action rows of the rail's More
+//! menu (settings only; the window renders those, never here). Every id sits in exactly one
+//! of the two and is a key of the window's action map (src/main.ts `runAction`); the tests
+//! below check that against main.ts. A click emits `colony-menu` with the item id to the
+//! main window; the window runs the action.
 //!
 //! No accelerators and no mnemonics: GTK binds them on the window, before the webview,
 //! and would take Ctrl+P, Alt+F, ... from the terminals and the editor. The window's own
@@ -21,6 +23,9 @@ const SPEC: &str = include_str!("../../src/menu.json");
 #[derive(Deserialize, Debug)]
 struct Spec {
     menus: Vec<SpecMenu>,
+    /// The action rows of the rail's More menu (src/main.ts renders them; not in the bar).
+    #[serde(default)]
+    more: Vec<SpecItem>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -59,26 +64,36 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b':')
 }
 
-fn parse() -> Result<Spec, String> {
-    let spec: Spec = serde_json::from_str(SPEC).map_err(|e| format!("src/menu.json: {e}"))?;
+fn parse_str(text: &str) -> Result<Spec, String> {
+    let spec: Spec = serde_json::from_str(text).map_err(|e| format!("src/menu.json: {e}"))?;
     let mut seen = std::collections::HashSet::new();
+    let mut check = |i: &SpecItem| {
+        if !valid_id(&i.id) || !seen.insert(i.id.clone()) {
+            return Err(format!("src/menu.json: bad or duplicate id {:?}", i.id));
+        }
+        if i.label.trim().is_empty() || i.label.contains('&') || i.label.contains('_') {
+            return Err(format!("src/menu.json: label of {} is empty or has a mnemonic marker", i.id));
+        }
+        Ok(())
+    };
     for m in &spec.menus {
         if m.label.trim().is_empty() || m.items.is_empty() {
             return Err("src/menu.json: a menu without a label or items".into());
         }
-        for i in &m.items {
-            if i.separator {
-                continue;
-            }
-            if !valid_id(&i.id) || !seen.insert(i.id.as_str()) {
-                return Err(format!("src/menu.json: bad or duplicate id {:?}", i.id));
-            }
-            if i.label.trim().is_empty() || i.label.contains('&') || i.label.contains('_') {
-                return Err(format!("src/menu.json: label of {} is empty or has a mnemonic marker", i.id));
-            }
+        for i in m.items.iter().filter(|i| !i.separator) {
+            check(i)?;
         }
     }
+    // One id, one place: a More row may not repeat a menu bar item (nor carry a separator:
+    // More draws its own section breaks).
+    for i in &spec.more {
+        check(i)?;
+    }
     Ok(spec)
+}
+
+fn parse() -> Result<Spec, String> {
+    parse_str(SPEC)
 }
 
 /// Every action id of the menu bar, in menu order.
@@ -167,6 +182,114 @@ mod tests {
         for want in ["open-folder", "close-window", "terminal", "quick-open", "commands", "run-plan", "interactive", "about"] {
             assert!(ids.iter().any(|i| i == want), "missing {want}");
         }
+    }
+
+    const MAIN_TS: &str = include_str!("../../src/main.ts");
+
+    /// The action ids of the rail's More menu (settings only; never in the menu bar).
+    fn more_ids() -> Vec<String> {
+        parse().unwrap().more.into_iter().map(|i| i.id).collect()
+    }
+
+    /// The text of `main.ts` from `start` to the first `end` after it.
+    fn main_ts_block(start: &str, end: &str) -> &'static str {
+        let from = MAIN_TS.find(start).unwrap_or_else(|| panic!("main.ts has no {start:?}"));
+        let rest = &MAIN_TS[from..];
+        &rest[..rest.find(end).unwrap_or_else(|| panic!("main.ts: {start:?} has no {end:?}"))]
+    }
+
+    /// The keys of the ACTIONS map in main.ts: its lines at a 2-space indent, `"a:b": ...` or `a: ...`.
+    fn action_keys() -> Vec<String> {
+        main_ts_block("const ACTIONS", "\n};")
+            .lines()
+            .filter_map(|l| {
+                let entry = l.strip_prefix("  ").filter(|e| !e.starts_with(' '))?;
+                let key = match entry.strip_prefix('"') {
+                    Some(quoted) => quoted.split_once("\":")?.0,
+                    None => entry.split_once(':')?.0,
+                };
+                valid_id(key).then(|| key.to_string())
+            })
+            .collect()
+    }
+
+    /// The quoted strings of a `[...]` list in main.ts that starts after `start`.
+    fn quoted_list(after: &str) -> Vec<String> {
+        main_ts_block(after, "]").split('"').skip(1).step_by(2).map(String::from).collect()
+    }
+
+    /// Every `view:<id>` the window resolves: rail items with views, and the views off the rail.
+    fn view_ids() -> Vec<String> {
+        let rail = main_ts_block("const RAIL: RailItem[] = [", "\n];");
+        let mut out: Vec<String> = rail
+            .lines()
+            .filter(|l| l.contains("views: [\""))
+            .filter_map(|l| l.split("id: \"").nth(1)?.split('"').next().map(|id| format!("view:{id}")))
+            .collect();
+        out.extend(quoted_list("const OFF_RAIL_VIEWS = [").into_iter().map(|v| format!("view:{v}")));
+        out
+    }
+
+    #[test]
+    fn no_action_is_in_both_the_menu_bar_and_more() {
+        let bar = ids();
+        let more = more_ids();
+        assert!(!more.is_empty(), "More has no action rows");
+        for id in &more {
+            assert!(!bar.contains(id), "{id} is in the menu bar and in More");
+        }
+    }
+
+    #[test]
+    fn more_holds_settings_only() {
+        // No views, commands, About or Engine in More: those live in the menu bar.
+        for id in more_ids() {
+            assert!(!id.starts_with("view:") && !["commands", "about", "engine", "web", "refresh", "new-terminal", "run-elsewhere"].contains(&id.as_str()), "{id} in More");
+        }
+        // More's action rows come from menu.json, not from markup in main.ts.
+        let markup = main_ts_block("<div id=\"more-menu\"", "</div>\n<div id=\"quick\"");
+        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a More action row: {markup}");
+    }
+
+    #[test]
+    fn every_action_is_in_exactly_one_menu() {
+        let keys = action_keys();
+        assert!(keys.len() >= 20 && keys.iter().any(|k| k == "new-terminal") && keys.iter().any(|k| k == "settings"), "{keys:?}");
+        let all: Vec<String> = ids().into_iter().chain(more_ids()).collect();
+        for k in &keys {
+            assert_eq!(all.iter().filter(|i| *i == k).count(), 1, "action {k} is not in exactly one of the menu bar and More");
+        }
+        let views = view_ids();
+        for id in &all {
+            if id.starts_with("view:") {
+                assert!(views.contains(id), "{id} names no view ({views:?})");
+            } else {
+                assert!(keys.contains(id), "{id} has no action in main.ts ACTIONS");
+            }
+        }
+    }
+
+    #[test]
+    fn view_items_resolve() {
+        let views = view_ids();
+        for want in ["view:mission", "view:pipelines", "view:plans", "view:flight", "view:activity"] {
+            assert!(views.iter().any(|v| v == want), "{want} not in {views:?}");
+        }
+        assert!(!views.iter().any(|v| v == "view:terminal"), "Terminal is a toggle, not a view");
+    }
+
+    #[test]
+    fn a_duplicate_id_is_refused() {
+        let twice_in_bar = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"},{"id":"x","label":"X again"}]}]}"#;
+        assert!(parse_str(twice_in_bar).is_err());
+        let bar_and_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"x","label":"X"}]}"#;
+        assert!(parse_str(bar_and_more).is_err());
+        let twice_in_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"y","label":"Y"},{"id":"y","label":"Y"}]}"#;
+        assert!(parse_str(twice_in_more).is_err());
+        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"y","label":"Y"}]}"#;
+        assert_eq!(parse_str(fine).map(|s| s.more.len()), Ok(1));
+        let separator_in_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"separator":true}]}"#;
+        assert!(parse_str(separator_in_more).is_err());
     }
 
     #[test]
