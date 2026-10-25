@@ -22,7 +22,8 @@ export interface CockpitHost {
   openRepoFile(rel: string): void;
   /** Driver run of the folder's active plan (opens its agent tab). */
   runPlan(): Promise<unknown>;
-  /** `agent-kit run-plan-all` in a terminal tab, after a confirmation. */
+  /** `agent-kit run-plan-all` after a confirmation: a driver run (gates in the Inbox) or,
+   *  on an engine without its driver mode, a terminal tab. Needs no stored queue. */
   runQueue(): Promise<unknown>;
   /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command. */
   interactive(prompt?: string, why?: string): Promise<unknown>;
@@ -284,7 +285,11 @@ function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
   return note;
 }
 
-const RUN_QUEUE_TIP = "agent-kit run-plan-all: an agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
+const RUN_QUEUE_TIP = "agent-kit run-plan-all: resumes the HANDOFF queue, or proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm). An agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
+
+function runQueueBtn(host: CockpitHost, cls: string, title = RUN_QUEUE_TIP): HTMLButtonElement {
+  return iconBtn("queue", "Run queue", () => void host.runQueue(), { class: cls, "data-act": "run-queue", title });
+}
 
 const CHAT_SOURCE: Record<ChatSession["titleSource"], string> = { custom: "name you set", ai: "title from Claude Code", "first-prompt": "first prompt", none: "no title" };
 const CHATS_SHOWN = 8;
@@ -337,17 +342,17 @@ function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonEle
   return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" });
 }
 
-const RUN_PLAN_ALL_WHY = "/run-plan-all proposes a queue from the open plans and asks you to confirm it before it writes it to HANDOFF.";
-
-/** No run-plan-all queue: the kit's way to make one is /run-plan-all in the agent. */
-function noQueue(host: CockpitHost, compact: boolean): HTMLElement {
+/**
+ * No run-plan-all queue. Run queue (the Mission hero, the Queue view's header) makes one the
+ * kit's way: agent-kit run-plan-all proposes it and asks queue-confirm, so no action here.
+ */
+function noQueue(compact: boolean): HTMLElement {
   // In a Mission cell (compact) the card header already carries the icon.
   return emptyCta({
     ...(compact ? {} : { icon: "queue" as const }),
     headline: "No run-plan-all queue",
-    support: "HANDOFF has no queue. /run-plan-all in your agent proposes one from the open plans.",
+    support: `HANDOFF has no queue. Run queue${compact ? " in Current mission" : ""} proposes one from the active plan and the backlog and asks you to confirm it before it writes HANDOFF.`,
     compact,
-    actions: [{ label: "Ask agent: /run-plan-all", onClick: () => void host.interactive("/run-plan-all", RUN_PLAN_ALL_WHY), act: "empty-run-plan-all" }],
   });
 }
 
@@ -528,10 +533,13 @@ export class MissionView extends View {
       title: plan ? "Run the HANDOFF plan (agent-kit run-plan --events ndjson): pick the engine, then the run opens as a tab with its transcript and gates" : "HANDOFF names no active plan: agent-kit run-plan would stop with “no active plan”",
     });
     run.disabled = !plan;
+    // Like agent-kit run-plan-all: no active plan or stored queue needed (it proposes one).
+    const queueRun = runQueueBtn(this.host, "status-bar-btn");
     const actions = h(
       "div",
       { class: "actions now-actions" },
       run,
+      queueRun,
       // No active plan (or it is done): the next mission is a new plan.
       ...(snapshot.data && !pend && (!plan || planDone) ? [newPlanBtn(this.host, plan ? "status-bar-btn" : "primary"), backlogAddBtn(this.host)] : []),
       iconBtn("terminals", "Open interactive", () => void this.host.interactive(), { class: "status-bar-btn", "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
@@ -570,7 +578,7 @@ export class MissionView extends View {
       { icon: "folder", text: str(sys.name), title: `Folder: ${str(sys.name)}` },
       { icon: "git", text: str(snapshot.git.branch), mono: true, title: `Branch: ${str(snapshot.git.branch)}` },
       { icon: "mode", text: mode, title: `Mode: ${mode}`, live: status === "executing" },
-      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan and Open interactive). Click to change it in the run dialog.`, onClick: () => void this.host.runPlan() } : null,
+      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive). Click to change it in the run dialog.`, onClick: () => void this.host.runPlan() } : null,
       pend ? { icon: "elapsed", text: `${clock(pend.startedAt)} · ${elapsed(pend.startedAt)}`, mono: true, title: `Started ${pend.startedAt}` } : null,
       !pend && str(now.modifiedAt) ? { icon: "updated", text: ago(now.modifiedAt), mono: true, title: `Updated ${str(now.modifiedAt)}` } : null,
       !pend ? { icon: "elapsed", text: timing(now), mono: true, title: "Elapsed on this plan" } : null,
@@ -668,15 +676,11 @@ export class MissionView extends View {
     const mark = (i: number) => (i !== cursor ? String(i + 1) : hold ? "⏸" : "▶");
     const rows = queue.map((p, i) => h("div", { class: `row q-mini ${i < cursor ? (finished(q, p) ? "past" : "past-open") : i === cursor ? (hold ? "held" : "current") : ""}`, title: q.outcomes?.[p] ? `${p} · ${String(q.outcomes[p])}` : p }, h("span", { class: "q-mark" }, mark(i)), h("span", { class: "grow ellipsis" }, planName(p)), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
     const held = hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "⏸"), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
-    const acts = h(
-      "div",
-      { class: "actions" },
-      iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: "status-bar-btn", "data-act": "run-queue", title: RUN_QUEUE_TIP }),
-      btn("Open Queue", () => this.host.showTab("queue"), { class: "link" }),
-    );
+    // Run queue lives in the hero; the card only links to the Queue view.
+    const acts = h("div", { class: "actions" }, btn("Open Queue", () => this.host.showTab("queue"), { class: "link" }));
     const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono", title: "Queue cursor: the plan the queue runs now" }, `plan ${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];
     const liveRow = live ? [h("div", { class: "row dim small queue-live-row" }, chip("live", "chip-done"), h("span", { class: "grow ellipsis" }, `queue run #${live.id} · ${live.backend}${live.queue?.status ? ` · ${live.queue.status}` : ""}`))] : [];
-    const c = card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [noQueue(this.host, true)]), ...(queue.length ? [acts] : []));
+    const c = card({ title: "Queue", aside: pos }, ...held, ...liveRow, ...(rows.length ? rows : [noQueue(true)]), acts);
     c.classList.add("queue-card");
     c.dataset.keepScroll = "queue";
     return c;
@@ -948,10 +952,11 @@ export class QueueView extends View {
       h(
         "div",
         { class: "actions now-actions" },
-        iconBtn("queue", "Run queue", () => void this.host.runQueue(), { class: runnable ? "primary" : "status-bar-btn", "data-act": "run-queue", title: runnable ? RUN_QUEUE_TIP : `${RUN_QUEUE_TIP}. Nothing left to run from the cursor: every plan has an outcome or the queue is held.` }),
+        // No queue: Run queue is how one is made (primary). A held or spent queue: secondary.
+        runQueueBtn(this.host, runnable || !queue.length ? "primary" : "status-bar-btn", runnable || !queue.length ? RUN_QUEUE_TIP : `${RUN_QUEUE_TIP}. Nothing left to run from the cursor: every plan has an outcome or the queue is held.`),
         btn("Open HANDOFF", () => this.host.openRepoFile(".cursor/HANDOFF.md"), { class: "status-bar-btn" }),
       ),
-      h("p", { class: "hint" }, "Run queue starts agent-kit run-plan-all. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
+      h("p", { class: "hint" }, "Run queue starts agent-kit run-plan-all, with or without a queue in HANDOFF: without one it proposes a queue from the active plan and the backlog and asks you to confirm it (queue-confirm); with no eligible plan it reports that and stops. On an engine with driver protocol 1.2.0 or newer it runs as an agent tab: its gates appear in the Inbox and this view follows its queue_state events. An older engine opens it in a terminal tab, where its numbered gates are answered."),
     );
     const rows = queue.map((file, i) => {
       const p = plans.get(file);
@@ -975,7 +980,7 @@ export class QueueView extends View {
       return r;
     });
     const status = str(q.status);
-    return [head, h("div", { class: "q-list" }, ...(rows.length ? rows : [noQueue(this.host, false)])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
+    return [head, h("div", { class: "q-list" }, ...(rows.length ? rows : [noQueue(false)])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
   }
 }
 

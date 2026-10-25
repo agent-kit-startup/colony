@@ -303,6 +303,33 @@ mod tests {
         assert_eq!(queue_args("claude", None), ["run-plan-all", "--events", "ndjson", "--backend", "claude"]);
         assert_eq!(queue_args("codex", Some("gpt-5.1")), ["run-plan-all", "--events", "ndjson", "--backend", "codex", "--model", "gpt-5.1"]);
     }
+
+    /// Run queue behaves like `agent-kit run-plan-all`, which needs no stored queue and no
+    /// active plan (it proposes a queue and asks queue-confirm): the Mission hero always
+    /// offers it next to Run plan, the Queue card adds no second one, and no empty state
+    /// sends the operator to an interactive `/run-plan-all` instead.
+    #[test]
+    fn run_queue_always_on() {
+        let src = include_str!("../../src/cockpit.ts");
+        let slice = |from: &str, to: &str| {
+            let a = src.find(from).unwrap_or_else(|| panic!("{from} not in cockpit.ts"));
+            let b = a + src[a..].find(to).unwrap_or_else(|| panic!("{to} after {from}"));
+            &src[a..b]
+        };
+        let hero = slice("private hero(): HTMLElement {", "private gateStrip(");
+        let button = slice("function runQueueBtn(", "\n}\n");
+        assert!(button.contains("host.runQueue()") && button.contains("\"data-act\": \"run-queue\""), "runQueueBtn starts the queue runner");
+        assert!(hero.contains("runQueueBtn(this.host"), "Mission hero has Run queue");
+        assert!(!hero.contains("queueRun.disabled"), "hero Run queue is never disabled");
+        let card = slice("private queueCard(): HTMLElement {", "private flightCard(");
+        assert!(!card.contains("runQueue()"), "Queue card adds no second Run queue in Mission");
+        assert!(!card.contains("queue.length ? [acts]"), "Queue card actions do not depend on a stored queue");
+        assert!(!src.contains("empty-run-plan-all") && !src.contains("Ask agent: /run-plan-all"), "no interactive /run-plan-all fallback");
+        let main = include_str!("../../src/main.ts");
+        let run_queue = &main[main.find("runQueue: async () => {").expect("host.runQueue")..];
+        let run_queue = &run_queue[..run_queue.find("interactive: async").expect("end of runQueue")];
+        assert!(run_queue.contains("queue-confirm"), "the confirm says a run without a queue asks queue-confirm");
+    }
 }
 
 #[derive(Serialize)]
