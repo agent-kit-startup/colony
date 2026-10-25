@@ -78,6 +78,21 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
   grid-template-rows: 40px minmax(0, 1fr) 24px;
   grid-template-areas: "top top top top top top" "rail side side-resizer center resizer bottom" "status status status status status status";
 }
+/* Rail at the right (More → Rail, ui.layout.railPosition): the same tracks, the rail last. */
+#shell[data-rail="right"] {
+  grid-template-columns: var(--sw) var(--sr) minmax(0, 1fr) var(--rail-w);
+  grid-template-areas: "top top top top" "side side-resizer center rail" "side side-resizer resizer rail" "side side-resizer bottom rail" "status status status status";
+}
+#shell[data-rail="right"][data-dock="top"] {
+  grid-template-areas: "top top top top" "side side-resizer bottom rail" "side side-resizer resizer rail" "side side-resizer center rail" "status status status status";
+}
+#shell[data-rail="right"][data-dock="side"] {
+  grid-template-columns: var(--sw) var(--sr) minmax(0, 1fr) var(--tr) var(--tw) var(--rail-w);
+  grid-template-areas: "top top top top top top" "side side-resizer center resizer bottom rail" "status status status status status status";
+}
+/* Icons only (ui.layout.railLabels false): a narrower rail; each item keeps its tooltip
+   and aria-label. */
+#shell.rail-icons { --rail-w: 48px; }
 #shell.no-bottom { --th: 0px; --tw: 0px; --tr: 0px; }
 #shell.no-bottom #bottom, #shell.no-bottom #resizer { display: none; }
 #shell.no-side { --sw: 0px; --sr: 0px; }
@@ -102,8 +117,12 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls button.win-close:hover { border-color: var(--red); color: var(--red); }
 #win-controls svg { width: 14px; height: 14px; }
 
-/* Rail: the primary views (icon over label, never icon-only) and More at the bottom. */
+/* Rail: the primary views and More at the bottom. Labels under the icons by default,
+   icons only on request (More → Rail); every item keeps its tooltip and aria-label. */
 #rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
+#shell[data-rail="right"] #rail { border-right: 0; border-left: 1px solid var(--border); }
+#shell.rail-icons .rail-item .lbl { display: none; }
+#shell.rail-icons .rail-item { padding: 9px 2px; }
 #shell.no-folder #rail { visibility: hidden; }
 .rail-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
 .rail-item:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: transparent; }

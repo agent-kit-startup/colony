@@ -79,9 +79,16 @@ pub struct LayoutSettings {
     /// Terminal panel width, docked at the side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_width: Option<u32>,
+    /// The rail's side of the window: `left` (default) or `right`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rail_position: Option<String>,
+    /// Labels under the rail icons (default true); false = icon-only, tooltips kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rail_labels: Option<bool>,
 }
 
 pub const DOCKS: &[&str] = &["bottom", "top", "side"];
+pub const RAIL_POSITIONS: &[&str] = &["left", "right"];
 /// Sizes outside this range are refused (a typo in settings.json, not a real window).
 const LAYOUT_PX: std::ops::RangeInclusive<u64> = 40..=8000;
 
@@ -113,6 +120,14 @@ pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<
                     _ => return Err(format!("layout.terminalDock: {v} (bottom, top or side)")),
                 }
             }
+            "railPosition" => {
+                l.rail_position = match v.as_str() {
+                    None if v.is_null() => None,
+                    Some(p) if RAIL_POSITIONS.contains(&p) => Some(p.to_string()),
+                    _ => return Err(format!("layout.railPosition: {v} (left or right)")),
+                }
+            }
+            "railLabels" => l.rail_labels = flag(v)?,
             "terminalVisible" => l.terminal_visible = flag(v)?,
             "explorerVisible" => l.explorer_visible = flag(v)?,
             "explorerWidth" => l.explorer_width = px(v)?,
@@ -456,7 +471,19 @@ mod tests {
         assert_eq!(l.explorer_width, None);
         assert_eq!(l.terminal_width, Some(420));
         assert_eq!(l.terminal_dock.as_deref(), Some("side"));
+        // the rail: side and label mode
+        let l = merge_layout(l, &serde_json::json!({"railPosition": "right", "railLabels": false})).unwrap();
+        assert_eq!(l.rail_position.as_deref(), Some("right"));
+        assert_eq!(l.rail_labels, Some(false));
+        assert_eq!(l.terminal_width, Some(420));
+        let l = merge_layout(l, &serde_json::json!({"railPosition": "left", "railLabels": null})).unwrap();
+        assert_eq!(l.rail_position.as_deref(), Some("left"));
+        assert_eq!(l.rail_labels, None);
         for bad in [
+            serde_json::json!({"railPosition": "top"}),
+            serde_json::json!({"railPosition": "bottom"}),
+            serde_json::json!({"railPosition": true}),
+            serde_json::json!({"railLabels": "off"}),
             serde_json::json!({"terminalDock": "left"}),
             serde_json::json!({"explorerWidth": 5}),
             serde_json::json!({"terminalHeight": -1}),
@@ -467,9 +494,9 @@ mod tests {
         ] {
             assert!(merge_layout(l.clone(), &bad).is_err(), "{bad}");
         }
-        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260}}}"#).unwrap();
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260,"railPosition":"right","railLabels":false}}}"#).unwrap();
         let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260}));
+        assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260, "railPosition": "right", "railLabels": false}));
     }
 
     #[test]
