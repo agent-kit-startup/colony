@@ -4,6 +4,7 @@
 // and an OS notification whose click focuses the window and opens the Inbox on that gate.
 // Gate text is untrusted: it is only ever rendered as text, and the notification body
 // carries the ask id and the run label, never the gate line.
+import { api } from "./api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction, sendNotification } from "@tauri-apps/plugin-notification";
 import { launches } from "./launches";
@@ -131,11 +132,13 @@ export class GateAlerts {
     this.log.push({ id, key: g.key, title, body, sent });
   }
 
-  /** Bring the window forward. Wayland compositors may only mark it urgent instead. */
+  /** Bring the window forward. Wayland compositors may only mark it urgent for setFocus(),
+   *  so on Hyprland the host also asks the compositor to focus it. */
   private async focusWindow() {
     const w = getCurrentWindow();
     await w.unminimize().catch(() => {});
     await w.show().catch(() => {});
     await w.setFocus().catch(() => {});
+    await api.windowRaise().catch(() => {});
   }
 }

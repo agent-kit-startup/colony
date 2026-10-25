@@ -74,8 +74,8 @@ Item {
         fillMode: Image.PreserveAspectFit
         smooth: true
         // Decode at physical pixels so the mark stays sharp on HiDPI.
-        sourceSize.width: Math.round(width * Screen.devicePixelRatio)
-        sourceSize.height: Math.round(height * Screen.devicePixelRatio)
+        sourceSize.width: Math.round(width * Math.max(1, Screen.devicePixelRatio))
+        sourceSize.height: Math.round(height * Math.max(1, Screen.devicePixelRatio))
         // Kept as a hidden layer so the effect can sample it as a texture.
         visible: false
         layer.enabled: true

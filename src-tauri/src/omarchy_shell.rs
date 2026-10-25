@@ -199,8 +199,9 @@ pub fn install_plan(home: &Path) -> Plan {
     if !widget.starts_with("conflict") {
         let dir = plugin_dir(home);
         steps.push(Step::write(dir.join("manifest.json"), PLUGIN_MANIFEST.into()));
-        steps.push(Step::write(dir.join("Colony.qml"), PLUGIN_QML.into()));
+        // The icon before the QML that loads it: the shell reloads the plugin on a QML change.
         steps.push(Step::write(dir.join(PLUGIN_ICON_FILE), PLUGIN_ICON.into()));
+        steps.push(Step::write(dir.join("Colony.qml"), PLUGIN_QML.into()));
     }
     if !menu.starts_with("conflict") {
         if let Ok(next) = menu_with_block(text.as_deref()) {
@@ -466,8 +467,8 @@ mod tests {
         assert_eq!((p.widget.as_str(), p.menu.as_str()), ("absent", "absent"));
         let targets: Vec<_> = p.steps.iter().map(|s| (s.kind.as_str(), s.target.replace(&home.display().to_string(), "~"))).collect();
         assert_eq!(targets[0], ("write", "~/.config/omarchy/plugins/missionkit.colony/manifest.json".into()));
-        assert_eq!(targets[1], ("write", "~/.config/omarchy/plugins/missionkit.colony/Colony.qml".into()));
-        assert_eq!(targets[2], ("write", "~/.config/omarchy/plugins/missionkit.colony/colony-icon.svg".into()));
+        assert_eq!(targets[1], ("write", "~/.config/omarchy/plugins/missionkit.colony/colony-icon.svg".into()));
+        assert_eq!(targets[2], ("write", "~/.config/omarchy/plugins/missionkit.colony/Colony.qml".into()));
         assert_eq!(targets[3], ("write", "~/.config/omarchy/extensions/omarchy-menu.jsonc".into()));
         assert!(targets[4].1.ends_with("omarchy-shell shell rescanPlugins"));
         assert!(targets[5].1.ends_with("omarchy-plugin-enable missionkit.colony"));

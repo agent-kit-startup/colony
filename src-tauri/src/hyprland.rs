@@ -12,23 +12,17 @@
 //! line, and the GTK path still ran.
 
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
-use serde::Deserialize;
-
-/// The address of this process's mapped window in `hyprctl -j clients` output.
+/// The address of this process's mapped window in `hyprctl -j clients` output. Each entry
+/// is read on its own, so one client of an odd shape does not hide Colony's.
 pub fn client_address(clients_json: &str, pid: u32) -> Option<String> {
-    #[derive(Deserialize)]
-    struct Client {
-        address: String,
-        pid: i64,
-        #[serde(default = "mapped_default")]
-        mapped: bool,
-    }
-    fn mapped_default() -> bool {
-        true
-    }
-    let clients: Vec<Client> = serde_json::from_str(clients_json).ok()?;
-    clients.into_iter().find(|c| c.pid == i64::from(pid) && c.mapped && valid_address(&c.address)).map(|c| c.address)
+    let clients: Vec<serde_json::Value> = serde_json::from_str(clients_json).ok()?;
+    clients.iter().find_map(|c| {
+        let address = c.get("address")?.as_str()?;
+        let mapped = c.get("mapped").and_then(|m| m.as_bool()).unwrap_or(true);
+        (c.get("pid")?.as_i64()? == i64::from(pid) && mapped && valid_address(address)).then(|| address.to_string())
+    })
 }
 
 /// `0x` and hex digits only: the address goes into a dispatch line (and a Lua string).
@@ -53,8 +47,7 @@ pub fn dispatch_ok(reply: &str) -> bool {
 /// Focus the window of `pid`. `hyprctl(args)` runs the tool and returns its stdout, or
 /// `None` when it could not run or exited non-zero (injected so tests run nothing).
 pub fn raise_pid<F: FnMut(&[String]) -> Option<String>>(pid: u32, mut hyprctl: F) -> Result<(), String> {
-    let clients = hyprctl(&["-j".to_string(), "clients".to_string()]).ok_or("hyprctl clients did not answer")?;
-    let address = client_address(&clients, pid).ok_or_else(|| format!("no mapped window of pid {pid} in hyprctl clients"))?;
+    let address = window_address(pid, &mut hyprctl, Duration::from_millis(100))?;
     let mut last = String::new();
     for args in focus_commands(&address) {
         match hyprctl(&args) {
@@ -64,6 +57,22 @@ pub fn raise_pid<F: FnMut(&[String]) -> Option<String>>(pid: u32, mut hyprctl: F
         }
     }
     Err(last)
+}
+
+/// This process's window address; a window that `show()` is still mapping gets a few
+/// more looks, `pause` apart.
+fn window_address<F: FnMut(&[String]) -> Option<String>>(pid: u32, hyprctl: &mut F, pause: Duration) -> Result<String, String> {
+    const LOOKS: usize = 5;
+    for look in 1..=LOOKS {
+        let clients = hyprctl(&["-j".to_string(), "clients".to_string()]).ok_or("hyprctl clients did not answer")?;
+        if let Some(a) = client_address(&clients, pid) {
+            return Ok(a);
+        }
+        if look < LOOKS {
+            std::thread::sleep(pause);
+        }
+    }
+    Err(format!("no mapped window of pid {pid} in hyprctl clients"))
 }
 
 fn run_hyprctl(args: &[String]) -> Option<String> {
@@ -103,6 +112,8 @@ mod tests {
         assert_eq!(client_address(r#"[{"address":"0xabc","mapped":false,"pid":7}]"#, 7), None);
         assert_eq!(client_address(r#"[{"address":"0xabc\" }) os.exit() --","pid":7}]"#, 7), None);
         assert_eq!(client_address(r#"[{"address":"0xabc","pid":7}]"#, 7).as_deref(), Some("0xabc"));
+        // Another client of an odd shape does not hide ours.
+        assert_eq!(client_address(r#"[{"address":null,"pid":null},{"address":"0xabc","pid":7}]"#, 7).as_deref(), Some("0xabc"));
     }
 
     #[test]
@@ -148,5 +159,22 @@ mod tests {
         .is_err());
         assert!(!dispatched);
         assert!(raise_pid(1815010, |_| None).is_err());
+    }
+
+    #[test]
+    fn a_window_still_mapping_gets_a_few_more_looks() {
+        let mut looks = 0;
+        let mut hyprctl = |_: &[String]| {
+            looks += 1;
+            Some(if looks < 3 { "[]".to_string() } else { CLIENTS.to_string() })
+        };
+        assert_eq!(window_address(1815010, &mut hyprctl, Duration::ZERO).as_deref(), Ok("0x55b0aebe9dd0"));
+        let mut looks = 0;
+        let mut never = |_: &[String]| {
+            looks += 1;
+            Some("[]".to_string())
+        };
+        assert!(window_address(1815010, &mut never, Duration::ZERO).is_err());
+        assert_eq!(looks, 5);
     }
 }

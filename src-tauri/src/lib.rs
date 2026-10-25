@@ -170,6 +170,14 @@ fn smoke_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), S
     Ok(())
 }
 
+/// Ask the compositor to focus this window (on Hyprland; elsewhere nothing). The frontend
+/// calls it after `setFocus()`, which on Wayland may only mark the window urgent.
+#[tauri::command]
+fn window_raise() {
+    #[cfg(unix)]
+    hyprland::raise_self();
+}
+
 /// Folders a later `colony <folder>` launch hands to this window (single instance).
 #[cfg(unix)]
 #[tauri::command]
@@ -324,6 +332,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             instance_subscribe,
+            window_raise,
             appupdate::app_update_status,
             appupdate::app_update_check,
             appupdate::app_update_install,
