@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="38 82 434 336" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round">
+  <!-- Bar-size cut of assets/brand/colony-icon.svg (same planet, ring and moon paths): white so the bar
+       widget can tint it, heavier stroke and moon, highlight arc dropped and the box cropped, so it
+       still reads at 16 px. Colony's omarchy_shell.rs tests keep the paths in step with the brand mark. -->
+  <path d="M395.7 269.0 A142.0 142.0 0 0 1 167.0 361.4 M138.0 330.4 A142.0 142.0 0 1 1 395.1 226.6"></path>
+  <path d="M156.9 345.6 A205.0 66.0 -22.0 0 1 95.0 268.1 M382.7 151.9 A205.0 66.0 -22.0 0 1 217.8 332.5"></path>
+  <circle cx="187.6" cy="340.1" r="36.0" fill="#FFFFFF" stroke="none"></circle>
+</svg>

@@ -12,6 +12,8 @@ mod forge;
 mod gitops;
 mod hostreq;
 #[cfg(unix)]
+mod hyprland;
+#[cfg(unix)]
 mod instance;
 mod launch;
 mod mcdata;
@@ -409,6 +411,9 @@ pub fn run() {
                         let _ = w.unminimize();
                         let _ = w.show();
                         let _ = w.set_focus();
+                        // GTK's present() goes through xdg-activation, which the compositor
+                        // may not honour; on Hyprland also ask it directly (hyprland.rs).
+                        hyprland::raise_self();
                     }
                     true
                 });
