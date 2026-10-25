@@ -250,9 +250,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .gate.flash { animation: gate-flash 1.2s ease-out 2; }
 @keyframes gate-flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px var(--yellow); } }
 @media (prefers-reduced-motion: reduce) { .gate.flash { animation: none; outline: 2px solid var(--yellow); } }
-/* Mission: open gates pinned above the hero. */
+/* Mission: open gates pinned above the hero. No scroller of its own (the view is the one
+   scroller): each card shows its answer controls first and the question clamped to three
+   lines; the Inbox and the run's tab show it in full. */
 .gate-strip { display: flex; flex-direction: column; gap: 8px; margin-bottom: var(--mc-space-xl); }
-.gate-strip .gate-prompt { max-height: 10em; }
+.gate-strip .inbox-meta .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gate-strip .gate-prompt { max-height: none; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 
 /* ---- cockpit: tabs ------------------------------------------------------------------ */
 .tabbar .tab .tab-icon { display: inline-flex; color: var(--text-secondary); }
@@ -429,7 +432,11 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
      than that, the view scrolls instead of squeezing every panel to a sliver. */
   .cv-mission { overflow: auto; }
   .cv-mission .cv-body { height: 100%; padding-bottom: var(--mc-space-xl); gap: var(--mc-space-lg); }
-  .cv-mission .gate-strip { flex: none; max-height: 38%; overflow: auto; margin-bottom: 0; }
+  /* Gates side by side (a row per two or three), so every card's buttons stay in the
+     first screen even with the terminal panel open; the fold keeps its floor below. */
+  .cv-mission .gate-strip { flex: none; flex-flow: row wrap; margin-bottom: 0; }
+  .cv-mission .gate-strip > .panel-row { flex: 1 0 100%; }
+  .cv-mission .gate-strip > .gate { flex: 1 1 340px; min-width: 0; }
   .mission-fold { flex: 1 1 0; min-height: calc(520px + var(--mc-space-lg)); grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(300px, 1fr) minmax(220px, 1fr); grid-template-areas: "now attention" "flight queue"; align-items: stretch; gap: var(--mc-space-lg); }
   .mission-fold > .hero { grid-area: now; }
   .mission-fold > .mission-stack { grid-area: attention; gap: var(--mc-space-lg); }
