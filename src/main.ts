@@ -1510,8 +1510,8 @@ window.addEventListener(
     // Alt+Left / Alt+Right: Back / Forward, except where the key edits text: a terminal (the
     // shell moves by word), the editor, a text field.
     if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && (ev.key === "ArrowLeft" || ev.key === "ArrowRight") && workspace) {
-      const t = ev.target as HTMLElement | null;
-      if (termFocus() || t?.closest("input, textarea, select, [contenteditable='true'], .monaco-editor")) return;
+      const t = ev.target;
+      if (termFocus() || (t instanceof Element && t.closest("input, textarea, select, [contenteditable='true'], .monaco-editor"))) return;
       navigate(ev.key === "ArrowLeft" ? "back" : "forward");
       ev.preventDefault();
       ev.stopPropagation();
@@ -1928,7 +1928,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // (dispatched in the page: whether WebKitGTK itself reacts to the real keys is a manual check),
     // and a closed tab leaving the history.
     const navBtn = (step: string) => $("tabs").querySelector<HTMLButtonElement>(`.nav-${step}`)!;
-    const altKey = (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }));
+    // On the focused element, as a real key press is (the handler reads its target).
+    const altKey = (key: string) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }));
     const navDoc = `${root}/smoke-nav.txt`;
     await api.writeTextFile(navDoc, "Back / Forward smoke\n");
     const navSteps: Record<string, unknown> = {};
