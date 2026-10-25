@@ -610,7 +610,12 @@ const host: CockpitHost = {
     const where = mode.driver
       ? "as an agent run; its gates appear in the Inbox"
       : "in a terminal tab; answer its numbered gates there";
-    const ok = await confirmAction(`Start agent-kit run-plan-all with ${engine} in ${workspace.name}? It runs the HANDOFF queue ${where}. It never runs /git-prod.`, "Run queue");
+    // Like the kit: no stored queue (or no active plan) is fine, run-plan-all proposes one.
+    const stored = Array.isArray(snapshot.runQueue.queue) && snapshot.runQueue.queue.length > 0;
+    const what = stored
+      ? "It resumes the HANDOFF queue (asking first if the backlog changed since it was confirmed)"
+      : "HANDOFF has no queue: it proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm) before it writes HANDOFF. With no eligible plan it reports that and stops";
+    const ok = await confirmAction(`Start agent-kit run-plan-all with ${engine} in ${workspace.name}? ${what}. It runs ${where}. It never runs /git-prod.`, "Run queue");
     if (!ok) return status("Queue run not started");
     if (mode.driver) {
       try {
