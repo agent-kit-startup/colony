@@ -20,6 +20,25 @@ export function iconBtn(kind: IconKind, text: string, onClick: () => void, attrs
   return b;
 }
 
+/** Show that `b` started `work`: disabled and aria-busy until it settles. A `label` replaces
+ *  the button text with a spinner and that label; with none (icon buttons) the icon spins.
+ *  It re-enables the button when done: a caller with its own disabled rule re-applies it after. */
+export async function busy<T>(b: HTMLButtonElement, label: string, work: () => Promise<T>): Promise<T> {
+  const kids = [...b.childNodes];
+  b.disabled = true;
+  b.classList.add("is-busy");
+  b.setAttribute("aria-busy", "true");
+  if (label) b.replaceChildren(h("span", { class: "busy-spin", "aria-hidden": "true" }), label);
+  try {
+    return await work();
+  } finally {
+    if (label) b.replaceChildren(...kids);
+    b.classList.remove("is-busy");
+    b.removeAttribute("aria-busy");
+    b.disabled = false;
+  }
+}
+
 export function chip(text: string, cls = ""): HTMLElement {
   return h("span", { class: `chip ${cls}` }, text);
 }

@@ -6,7 +6,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { errText, h } from "./api";
 import "./hostreq.css";
-import { ago, btn, card, chip, empty } from "./ui";
+import { ago, btn, busy, card, chip, empty } from "./ui";
 
 export interface HostRequest {
   id: string;
@@ -233,7 +233,8 @@ class RequestCard {
     this.out.hidden = false;
     this.out.textContent = `Running: ${this.r.summary}…`;
     try {
-      const d = await hostApi.approve(this.r.id, this.ctx?.production ? this.yes.value.trim() : undefined);
+      const yes = this.ctx?.production ? this.yes.value.trim() : undefined;
+      const d = await busy(this.approveBtn, "Running…", () => hostApi.approve(this.r.id, yes));
       this.out.textContent = d.output || d.outcome;
       this.done(this.r, d);
     } catch (e) {
@@ -305,6 +306,7 @@ export class RequestsSection {
       const same = els.length === this.list.children.length && els.every((e, i) => this.list.children[i] === e);
       if (!same) this.list.replaceChildren(...els);
     }
+    if (this.pendingReveal && this.cards.has(this.pendingReveal)) this.reveal(this.pendingReveal);
   }
 
   private decide(r: HostRequest, d: Decision) {
@@ -312,22 +314,39 @@ export class RequestsSection {
     this.decided.length = Math.min(this.decided.length, 5);
     this.status(`${r.summary}: ${d.outcome}`);
     this.onDecided?.(r, d);
+    // The output is the answer to "why did it fail": open for a failure, one click away otherwise.
+    // A clock time, not "ago": this list only re-renders on the next decision.
     this.recent.replaceChildren(
-      ...this.decided.map((x) =>
-        h(
-          "div",
-          { class: "row small", title: x.d.output },
-          chip(x.d.outcome, x.d.outcome === "succeeded" ? "chip-done" : x.d.outcome === "failed" ? "chip-failed" : ""),
-          h("span", { class: "grow ellipsis" }, x.r.summary),
-          h("span", { class: "dim" }, ago(x.at)),
-        ),
-      ),
+      ...this.decided.map((x) => {
+        const failed = x.d.outcome === "failed";
+        const at = new Date(x.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const cells = [
+          chip(x.d.outcome, x.d.outcome === "succeeded" ? "chip-done" : failed ? "chip-failed" : ""),
+          h("span", { class: "grow ellipsis", title: x.r.summary }, x.r.summary),
+          h("span", { class: "dim", title: x.at }, at),
+        ];
+        const output = x.d.output.trim();
+        if (!output) return h("div", { class: "row small hostreq-done" }, ...cells);
+        return h("details", { class: "hostreq-done", ...(failed ? { open: "" } : {}) }, h("summary", { class: "row small" }, ...cells), h("pre", { class: "git-out hostreq-done-out" }, output));
+      }),
     );
   }
 
-  /** Scroll a card into view (e.g. right after the PR list's Merge created it). */
+  private pendingReveal = "";
+
+  /** Scroll a card into view and flash it (right after a Merge / Open PR button created it).
+   *  The card may arrive through the request channel after this call: it is revealed then. */
   reveal(id: string) {
-    this.cards.get(id)?.el.scrollIntoView({ block: "nearest" });
+    const el = this.cards.get(id)?.el;
+    if (!el) {
+      this.pendingReveal = id;
+      return;
+    }
+    this.pendingReveal = "";
+    el.scrollIntoView({ block: "nearest" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
   }
 }
 

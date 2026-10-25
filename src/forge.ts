@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { api, errText, h } from "./api";
 import { hostApi } from "./hostreq";
-import { ago, btn, card, chip, empty, iconBtn, rerender } from "./ui";
+import { ago, btn, busy, card, chip, empty, iconBtn, rerender } from "./ui";
 
 export interface ForgeStatus { provider: string; bin: string | null; authenticated: boolean; detail: string }
 type J = Record<string, unknown>;
@@ -53,21 +53,22 @@ export class PullRequestsSection {
   readonly el: HTMLElement;
   private body = h("div", { class: "hostreq-prs" });
   private loading = false;
+  private refreshBtn: HTMLButtonElement;
 
   constructor(
     private status: (msg: string) => void,
     private onCard: (id: string) => void,
   ) {
-    const refresh = iconBtn("refresh", "", () => this.refresh(), { title: "Refresh (gh pr list)", "aria-label": "Refresh pull requests" });
+    this.refreshBtn = iconBtn("refresh", "", () => this.refresh(), { title: "Refresh (gh pr list)", "aria-label": "Refresh pull requests" });
     this.el = card(h("span", { class: "grow" }, "Pull requests"), this.body);
-    this.el.querySelector(".card-title")?.append(h("span", { class: "spacer" }), refresh);
+    this.el.querySelector(".card-title")?.append(h("span", { class: "spacer" }), this.refreshBtn);
     this.el.classList.add("forge-prs");
   }
 
   refresh() {
     if (this.loading) return;
     this.loading = true;
-    void this.load().finally(() => (this.loading = false));
+    void busy(this.refreshBtn, "", () => this.load()).finally(() => (this.loading = false));
   }
 
   private async load() {
@@ -129,7 +130,7 @@ export class CicdView {
   visible = false;
 
   constructor(private status: (msg: string) => void) {
-    const refresh = iconBtn("refresh", "Refresh", () => void this.load(), { title: "gh run list" });
+    const refresh: HTMLButtonElement = iconBtn("refresh", "Refresh", () => void busy(refresh, "", () => this.load()), { title: "gh run list" });
     this.el.append(this.body);
     this.body.append(card(h("span", { class: "grow" }, "Workflow runs"), h("div", { class: "row" }, this.filters, h("span", { class: "spacer" }), refresh), this.note, this.list));
     this.renderFilters();

@@ -29,6 +29,11 @@ button.primary:hover { background: var(--blue); border-color: var(--blue); color
 button.status-bar-btn { font-size: var(--mc-chrome-subtitle-size); padding: 3px 12px; }
 button.has-icon, button.status-bar-btn, button.primary { min-height: 26px; }
 button:disabled { opacity: 0.5; cursor: default; }
+/* A button whose action is running (ui.ts busy): readable, not greyed out like a refusal. */
+button.is-busy:disabled { opacity: 1; cursor: progress; }
+.busy-spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
+button.is-busy .btn-icon { animation: mc-spin 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .busy-spin, button.is-busy .btn-icon { animation: none; } }
 input, select, textarea { font: inherit; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 4px 8px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--blue); }
 textarea { font-family: var(--mc-font-mono); resize: vertical; }
@@ -170,6 +175,18 @@ input.num { width: 64px; }
 .git-file > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .git-file:hover { background: var(--bg-card-hover); }
 .git-file .xy { color: var(--yellow); }
+/* The file whose diff is open: border colour only (no accent bar, no tinted fill). */
+.git-file { border: 1px solid transparent; border-radius: var(--mc-radius-chrome); }
+.git-file.is-selected { border-color: var(--blue); }
+.git-diff, .git-result { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.git-diff[hidden], .git-result[hidden] { display: none; }
+.git-diff-title { color: var(--text-secondary); }
+.git-result { border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 6px; }
+.git-result.is-ok { border-color: var(--green); }
+.git-result.is-err { border-color: var(--red); }
+.git-result-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.git-result.is-ok .git-result-title { color: var(--green); }
+.git-result.is-err .git-result-title { color: var(--red); }
 .git-out { flex: 1; overflow: auto; margin: 0; font-family: var(--mc-font-mono); font-size: 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 6px; white-space: pre-wrap; min-height: 60px; }
 .git-out .add { color: var(--green); }
 .git-out .del { color: var(--red); }

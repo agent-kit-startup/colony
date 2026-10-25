@@ -50,7 +50,7 @@ fn current_branch(root: &Path) -> Result<String, String> {
     Ok(git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_status(state: State<'_, AppState>) -> Result<GitStatus, String> {
     let root = workspace::workspace_root(&state)?;
     if !root.join(".git").exists() {
@@ -71,7 +71,7 @@ pub fn git_status(state: State<'_, AppState>) -> Result<GitStatus, String> {
     Ok(GitStatus { is_repo: true, prod_branch, branch, header, files })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_diff(state: State<'_, AppState>, path: Option<String>) -> Result<String, String> {
     let root = workspace::workspace_root(&state)?;
     let mut args = vec!["diff", "HEAD", "--"];
@@ -88,7 +88,7 @@ pub fn git_diff(state: State<'_, AppState>, path: Option<String>) -> Result<Stri
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_commit(state: State<'_, AppState>, message: String, stage_all: bool) -> Result<String, String> {
     let root = workspace::workspace_root(&state)?;
     if message.trim().is_empty() {
@@ -102,7 +102,7 @@ pub fn git_commit(state: State<'_, AppState>, message: String, stage_all: bool) 
     Ok(log)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_push(state: State<'_, AppState>, typed_confirm: Option<String>) -> Result<String, String> {
     let root = workspace::workspace_root(&state)?;
     let branch = current_branch(&root)?;
