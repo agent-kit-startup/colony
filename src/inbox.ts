@@ -146,9 +146,9 @@ export class InboxView {
 }
 
 /**
- * One gate card (Inbox and the Mission view's pinned strip): where it waits, the full
- * question and the gate line as text, and the answer controls for a driver run or a
- * button to the terminal that holds it.
+ * One gate card (Inbox and the Mission view's pinned strip): where it waits, the answer
+ * controls for a driver run (or a button to the terminal that holds it), then the full
+ * question and the gate line as text.
  */
 /** One label and colour per triage / attention item, the same in Mission, Inbox and Flight
  *  Log: severity, else group, else kind; blocking items in the gate colour. */
@@ -170,13 +170,15 @@ export function gateCard(g: PendingGate, host: CockpitHost, cls: string): HTMLEl
       "div",
       { class: "panel-row inbox-meta" },
       pill("Awaiting", "awaiting", "\u23EF"),
-      h("span", { class: "grow" }, g.where),
+      h("span", { class: "grow", title: g.where }, g.where),
       ...(g.gate ? [h("span", { class: "run-meta mono" }, `tick ${g.gate.tick}`)] : [h("span", { class: "run-meta mono" }, "terminal")]),
       jump,
     ),
+    // The answer controls come right after the meta row, before the (possibly long)
+    // question, as in the run transcript: they never sit below a clipped prompt.
+    ...(g.gate ? gateControls(g.gate, (msg) => host.status(`Inbox: ${msg}`)) : [h("div", { class: "gate-title" }, `Decision needed · ${g.askId} · answer in the terminal tab`)]),
     ...(g.prompt ? [h("div", { class: "gate-prompt" }, g.prompt)] : []),
     h("div", { class: "inbox-line" }, g.line || `HITL_GATE: ${g.askId}`),
-    ...(g.gate ? gateControls(g.gate, (msg) => host.status(`Inbox: ${msg}`)) : [h("div", { class: "gate-title" }, `Decision needed · ${g.askId} · answer in the terminal tab`)]),
   );
   if (g.gate) c.dataset.run = String(g.gate.runId);
   else c.dataset.tab = g.tabId;

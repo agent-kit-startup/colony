@@ -612,7 +612,6 @@ export class MissionView extends View {
       h("div", { class: "panel-row" }, pill(`${gates.length} gate${gates.length === 1 ? "" : "s"} waiting for Ground Control`, "awaiting", "⏯"), h("span", { class: "grow" }), btn("Open Inbox", () => this.host.showTab("inbox"), { class: "link" })),
       ...gates.map((g) => gateCard(g, this.host, "compact mission-gate")),
     );
-    s.dataset.keepScroll = "gates";
     return [s];
   }
 
