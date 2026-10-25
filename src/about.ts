@@ -1,4 +1,4 @@
-// About panel (More → About Colony…): version, distribution channel and app updates
+// About panel (Help → About Colony…): version, distribution channel and app updates
 // (src-tauri/src/appupdate.rs). Direct builds check the latest GitHub Release and install
 // the signed AppImage in place; package builds say updates come from the package manager.
 import { api, type AppUpdateStatus, errText, h } from "./api";

@@ -24,7 +24,7 @@ use crate::{tools, vendor, workspace, AppState};
 
 /// The `catalogVersion` major this Colony reads.
 const CATALOG_MAJOR: u64 = 1;
-const UPDATE_ENGINE: &str = "Update the engine (More → Engine) to list commands";
+const UPDATE_ENGINE: &str = "Update the engine (Run → Engine…) to list commands";
 const MAX_DESCRIPTION: usize = 400;
 
 #[derive(Serialize, Debug, PartialEq)]
