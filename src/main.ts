@@ -1316,12 +1316,17 @@ for (const b of $("tabs").querySelectorAll<HTMLButtonElement>("[data-nav]")) {
   b.replaceChildren(icon(step, "tab-svg"));
   b.addEventListener("click", () => navigate(step));
 }
-// The mouse's back and forward buttons over the main pane.
-$("center").addEventListener("mouseup", (ev) => {
+// The mouse's back and forward buttons, anywhere in the window (not inside the web panel
+// frame, whose events stay in the frame). The press is swallowed so WebKit runs no history
+// navigation of its own.
+window.addEventListener("mousedown", (ev) => {
+  if (ev.button === 3 || ev.button === 4) ev.preventDefault();
+}, true);
+window.addEventListener("mouseup", (ev) => {
   if (ev.button !== 3 && ev.button !== 4) return;
   ev.preventDefault();
   navigate(ev.button === 3 ? "back" : "forward");
-});
+}, true);
 
 async function openWorkspace(path: string) {
   if (workspace) {
@@ -1345,6 +1350,8 @@ async function openWorkspace(path: string) {
     order.splice(order.indexOf(id), 1);
     if (t.el !== $("view-editor")) t.el.remove();
   }
+  // The history belongs to the folder (its tabs just left): Mission becomes its first entry.
+  nav.reset();
   document.getElementById("run-dialog")?.remove();
   editors.closeAll();
   terminals.closeAll();
@@ -1370,8 +1377,6 @@ async function openWorkspace(path: string) {
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
   shell.classList.remove("no-folder");
-  // The history belongs to the folder: Mission is its first entry.
-  nav.reset();
   showTab("mission");
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace();
@@ -1501,15 +1506,19 @@ function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
 window.addEventListener(
   "keydown",
   (ev) => {
-    const inTerm = terminals.hasFocus() || !!centerTerms.get(activeTab)?.hasFocus();
-    // Alt+Left / Alt+Right: Back / Forward, except in a terminal (shells move by word there).
-    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && (ev.key === "ArrowLeft" || ev.key === "ArrowRight") && !inTerm && workspace) {
+    const termFocus = () => terminals.hasFocus() || !!centerTerms.get(activeTab)?.hasFocus();
+    // Alt+Left / Alt+Right: Back / Forward, except where the key edits text: a terminal (the
+    // shell moves by word), the editor, a text field.
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && (ev.key === "ArrowLeft" || ev.key === "ArrowRight") && workspace) {
+      const t = ev.target as HTMLElement | null;
+      if (termFocus() || t?.closest("input, textarea, select, [contenteditable='true'], .monaco-editor")) return;
       navigate(ev.key === "ArrowLeft" ? "back" : "forward");
       ev.preventDefault();
       ev.stopPropagation();
       return;
     }
     if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    const inTerm = termFocus();
     const key = ev.key.toLowerCase();
     let handled = true;
     if (ev.code === "Backquote") toggleTerminal(!terminals.hasFocus());
@@ -1946,6 +1955,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     navBtn("back").click();
     navAt("back-after-close", "inbox");
     await log("inner-nav", Object.values(navSteps).every((v) => v === true), navSteps);
+    // Leave the history as a fresh folder has it, for the steps after this one.
+    nav.reset();
     showTab("mission");
     const launch = await openInEditor(file);
     let proof = "";

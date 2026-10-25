@@ -1,4 +1,5 @@
-// Back-forward history of the main pane (src/nav-history.ts). Node strips the types.
+// Back-forward history of the main pane (src/nav-history.ts). Node strips the types
+// (Node 22.18 or later; src/nav-history.ts keeps to erasable syntax for that).
 // Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
