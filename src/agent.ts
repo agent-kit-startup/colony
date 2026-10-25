@@ -82,7 +82,7 @@ export class RunControls {
   private renderNote() {
     const c = this.choices.find((x) => x.id === this.backend.value);
     const missing = c && !c.available ? ` · ${c.bin || "no agent CLI"} not found on PATH` : "";
-    const old = c?.needsEngine ? ` · needs engine ${c.needsEngine} or newer: update it in More → Engine` : "";
+    const old = c?.needsEngine ? ` · needs engine ${c.needsEngine} or newer: update it in Run → Engine…` : "";
     const system = c?.systemDefault ? " · Omarchy default agent" : "";
     this.note.textContent = c ? `${c.note}${system}${missing}${old}` : "";
     this.note.classList.toggle("warn", this.backend.value === "cursor-agent" || !!(c && (!c.available || c.needsEngine)));

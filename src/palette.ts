@@ -1,4 +1,4 @@
-// Command palette (Ctrl+Shift+P, More → Commands): the opened folder's slash commands from
+// Command palette (Ctrl+Shift+P, View → Commands): the opened folder's slash commands from
 // the kit's versioned catalog (`agent-kit commands --json`, read by src-tauri catalog.rs).
 // Colony keeps no list: an engine without the catalog shows "Update the engine".
 //  - Run: the row's name is in vendor.rs PROMPT_SLASH (decided on the Rust side, `run`);
@@ -6,6 +6,8 @@
 //    checks it again.
 //  - Copy: every other row (factory, project, /git-prod, ...): `/<name>` to the clipboard,
 //    to paste in the agent's chat input.
+// Then a "Colony" section: every menu action of src/menu.json (menu bar and More), run
+// through the window's action map, so the palette reaches what the menus reach.
 // Below them, a "Claude Code" section lists the vendor's built-in commands from the static,
 // cited claude-builtins.ts list: always copy, plus "Open Claude tab" (the unmodified
 // `claude`, no prompt). It does not depend on the engine, so it shows under the gate too.
@@ -22,9 +24,19 @@ export interface PaletteHost {
   showEngine(): void;
   /** The unmodified `claude` in a terminal tab, no prompt (whatever the engine choice). */
   openClaude(): Promise<unknown>;
+  /** The menu actions (src/menu.json), in menu order, and the window's runAction. */
+  actions(): readonly ColonyAction[];
+  runAction(id: string): void;
 }
 
-type Entry = { kind: "kit"; row: CommandRow } | { kind: "claude"; row: ClaudeBuiltin };
+/** A menu item as a palette row: `name` is its label, `description` the menu it sits in. */
+export interface ColonyAction {
+  id: string;
+  name: string;
+  description: string;
+}
+
+type Entry = { kind: "kit"; row: CommandRow } | { kind: "colony"; row: ColonyAction } | { kind: "claude"; row: ClaudeBuiltin };
 
 const LAYER_TIP: Record<string, string> = {
   kit: "Shipped by Agent Kit",
@@ -41,6 +53,7 @@ const KIND_TIP: Record<string, string> = {
 
 /** 0 name prefix, 1 name substring, 2 description match, -1 no match. */
 function rank(q: string, name: string, description: string): number {
+  name = name.toLowerCase();
   return name.startsWith(q) ? 0 : name.includes(q) ? 1 : description.toLowerCase().includes(q) ? 2 : -1;
 }
 
@@ -136,17 +149,19 @@ export class CommandPalette {
     return CLAUDE_BUILTINS;
   }
 
-  /** Kit rows first, then Claude Code built-ins, each ranked by the query. */
+  /** Kit rows first, then Colony's menu actions, then Claude Code built-ins, each ranked by the query. */
   private matches(): Entry[] {
     const q = this.input.value.trim().replace(/^\//, "").toLowerCase();
     return [
       ...ranked(q, this.rows()).map((row): Entry => ({ kind: "kit", row })),
+      ...ranked(q, this.host.actions()).map((row): Entry => ({ kind: "colony", row })),
       ...ranked(q, this.builtins()).map((row): Entry => ({ kind: "claude", row })),
     ];
   }
 
   private pick(e: Entry) {
     this.hide();
+    if (e.kind === "colony") return this.host.runAction(e.row.id);
     const slash = `/${e.row.name}`;
     if (e.kind === "kit" && e.row.run) {
       void this.host.interactive(slash, `Command palette: ${e.row.description}`);
@@ -177,13 +192,28 @@ export class CommandPalette {
     });
     return h(
       "div",
-      { class: "palette-section" },
+      { class: "palette-section palette-claude" },
       h("div", { class: "row" }, h("span", { class: "grow" }, `Claude Code · ${shown} of ${CLAUDE_BUILTINS.length} · Copy for Claude's chat input`), open, " ", link),
       h("div", { class: "dim small ellipsis", title: `${SOURCE_TITLE}, checked ${VERIFIED_AT}` }, `${SOURCE_TITLE} · ${SOURCE_URL} · checked ${VERIFIED_AT}`),
     );
   }
 
-  private item(e: Entry, sel: boolean): HTMLElement {
+  /** A Colony menu action: its label, the menu it sits in, Run. */
+  private action(a: ColonyAction, sel: boolean): HTMLElement {
+    const el = h(
+      "div",
+      { class: `quick-item palette-action ${sel ? "sel" : ""}`, title: `${a.description} → ${a.name}` },
+      h("div", { class: "row" }, h("span", { class: "grow ellipsis" }, a.name), h("span", { class: "dim small" }, a.description), h("span", { class: "palette-act run" }, "Run")),
+    );
+    el.dataset.action = a.id;
+    el.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+      this.pick({ kind: "colony", row: a });
+    });
+    return el;
+  }
+
+  private item(e: Exclude<Entry, { kind: "colony" }>, sel: boolean): HTMLElement {
     const slash = `/${e.row.name}`;
     const kit = e.kind === "kit";
     const run = kit && e.row.run;
@@ -228,8 +258,11 @@ export class CommandPalette {
       this.head.replaceChildren(`Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion} · Run opens your agent with it; Copy is for your agent's chat input`);
       if (!kitShown) kitList.push(h("div", { class: "quick-item dim" }, c.commands.length ? "No command matches" : "This folder has no slash commands (.cursor/commands/)"));
     }
-    const items = entries.map((e, i) => this.item(e, i === this.sel));
-    this.list.replaceChildren(...kitList, ...items.slice(0, kitShown), this.claudeHead(entries.length - kitShown), ...items.slice(kitShown));
+    const items = entries.map((e, i) => (e.kind === "colony" ? this.action(e.row, i === this.sel) : this.item(e, i === this.sel)));
+    const actionsShown = entries.filter((e) => e.kind === "colony").length;
+    const colonyHead = h("div", { class: "palette-section palette-colony" }, `Colony · ${actionsShown} of ${this.host.actions().length} · the menu actions`);
+    const claudeFrom = kitShown + actionsShown;
+    this.list.replaceChildren(...kitList, ...items.slice(0, kitShown), colonyHead, ...items.slice(kitShown, claudeFrom), this.claudeHead(entries.length - claudeFrom), ...items.slice(claudeFrom));
     this.list.querySelector(".sel")?.scrollIntoView({ block: "nearest" });
   }
 }

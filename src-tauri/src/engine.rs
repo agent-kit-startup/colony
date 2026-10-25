@@ -452,7 +452,7 @@ pub fn resolve_node(range: &str) -> Result<NodeChoice, String> {
         }
     }
     let found = if seen.is_empty() { "no node on PATH".to_string() } else { seen.join("; ") };
-    Err(format!("the engine needs Node {range} ({found}): install the Node runtime from More → Engine"))
+    Err(format!("the engine needs Node {range} ({found}): install the Node runtime from Run → Engine…"))
 }
 
 // ---- what Colony spawns ----------------------------------------------------------------
@@ -488,7 +488,7 @@ pub fn kit_command() -> Result<KitCommand, String> {
         let node = resolve_node(engine.node_range())?;
         return Ok(KitCommand { program: node.bin, args: vec![engine.entry.clone()], source: source_name(engine.source) });
     }
-    let bin = tools::agent_kit_bin().ok_or("No Agent Kit engine: install one from More → Engine (or set COLONY_ENGINE)")?;
+    let bin = tools::agent_kit_bin().ok_or("No Agent Kit engine: install one from Run → Engine… (or set COLONY_ENGINE)")?;
     Ok(KitCommand { program: bin, args: vec![], source: "unmanaged" })
 }
 

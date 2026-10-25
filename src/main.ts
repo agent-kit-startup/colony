@@ -1,8 +1,9 @@
 // Colony window: the cockpit. A vertical rail holds the primary views (Mission, Inbox,
-// Review, Git, Terminal, Pipelines) and More (Plans, Flight Log, Activity, commands); the
+// Review, Git, Terminal, Pipelines) and More (settings: skin, title bar); the other views
+// (Plans, Flight Log, Activity) and every command live in the menu bar (src/menu.json). The
 // tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
-// (a fallback under More). Explorer next to the rail, shell terminals at the bottom.
+// (a fallback under View). Explorer next to the rail, shell terminals at the bottom.
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
@@ -25,7 +26,7 @@ import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
-import { CommandPalette } from "./palette";
+import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
@@ -94,20 +95,6 @@ document.getElementById("app")!.innerHTML = `
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="more-menu" class="menu" hidden>
-  <div class="menu-label">Views</div>
-  <button data-cmd="view:plans" title="Ctrl+7">Plans</button>
-  <button data-cmd="view:flight" title="Ctrl+8">Flight Log</button>
-  <button data-cmd="view:activity" title="Ctrl+9">Activity</button>
-  <div class="menu-sep"></div>
-  <button data-cmd="commands" title="Ctrl+Shift+P">Commands…</button>
-  <button data-cmd="web">Mission Control (web panel)</button>
-  <button data-cmd="run-elsewhere">Run plan in another folder…</button>
-  <button data-cmd="refresh">Reload Mission Control data</button>
-  <button data-cmd="new-terminal">New shell terminal</button>
-  <button data-cmd="engine">Engine…</button>
-  <button data-cmd="about">About Colony…</button>
-  <button data-cmd="omarchy" hidden title="Bar widget and menu entries for omarchy-shell (opt-in, removable)">Omarchy integration…</button>
-  <div class="menu-sep"></div>
   <div class="menu-label">Skin</div>
   <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
   <button data-more="skin" data-skin="legacy">Legacy</button>
@@ -142,7 +129,7 @@ interface Tab {
   /** Kit SVG icon of the tab ("" for none: editor files). */
   icon: IconKind | "";
   tip: string;
-  /** A view of the rail or of More, not a document: never in the tab strip, never closed. */
+  /** A view (rail or View menu), not a document: never in the tab strip, never closed. */
   pinned: boolean;
   el: HTMLElement;
   /** `extra`: a second, separate count next to the first (the Inbox: gates, then attention). */
@@ -159,8 +146,9 @@ let activeTab = "mission";
 
 /**
  * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git, Terminal and
- * Pipelines; everything else under More). A rail item shows one view, or a group of views
- * with a switch at the head of the tab strip; Terminal toggles the bottom panel.
+ * Pipelines; the other views in the View menu, settings under More). A rail item shows one
+ * view, or a group of views with a switch at the head of the tab strip; Terminal toggles
+ * the bottom panel.
  */
 interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[] }
 const RAIL: RailItem[] = [
@@ -171,8 +159,8 @@ const RAIL: RailItem[] = [
   { id: "terminal", label: "Terminal", icon: "terminals", tip: "Terminal drawer: show or hide it. It lists every live terminal: your shells, then the agent CLIs and queue runners open in the centre tabs (Ctrl+5 or Ctrl+`)", views: [] },
   { id: "pipelines", label: "Pipelines", icon: "devops", tip: "Pipelines: the run-plan-all queue and the CI/CD runs of this branch (Ctrl+6)", views: ["queue", "cicd"] },
 ];
-/** Views under More, after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
-const MORE_VIEWS = ["plans", "flight", "activity"];
+/** Views off the rail (View menu, palette), after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
+const OFF_RAIL_VIEWS = ["plans", "flight", "activity"];
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
@@ -214,7 +202,8 @@ function renderRail() {
       railEls.set(r.id, el);
       return el;
     });
-    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: Plans, Flight Log, Activity, commands, engine, skin", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
+    // Settings only: never the current view, so never "active".
+    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar and other settings", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
     more.dataset.tab = "more";
     more.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -242,7 +231,6 @@ function renderRail() {
       wrap.append(...b);
     }
   }
-  railEls.get("more")!.classList.toggle("active", MORE_VIEWS.includes(activeTab));
 }
 
 function openRail(r: RailItem) {
@@ -891,8 +879,13 @@ runs.on((c) => {
   }
 });
 
-// ---- More menu (rail) ------------------------------------------------------------------
+// ---- More menu (rail): settings only ---------------------------------------------------
 const menu = $("more-menu");
+// Its action rows come from src/menu.json `more` (never in the menu bar; menu.rs tests),
+// after the Skin and Title bar choices; `omarchyOnly` rows stay hidden until
+// renderSkinMenu() knows Omarchy is there.
+const moreActionsSep = h("div", { class: "menu-sep", hidden: "" });
+menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
   const r = anchor.getBoundingClientRect();
@@ -983,7 +976,7 @@ function applyTitleBar(info: StartupInfo) {
   void syncMax();
 }
 
-// ---- actions: the native menu bar (src/menu.json) and the More menu run these ----------
+// ---- actions: the native menu bar and More (src/menu.json), and the palette, run these -
 const ACTIONS: Record<string, () => unknown> = {
   "open-folder": () => pickFolder(),
   "run-elsewhere": () => controls.startElsewhere(),
@@ -1011,12 +1004,12 @@ const ACTIONS: Record<string, () => unknown> = {
   omarchy: () => openOmarchyPanel(status),
 };
 
-/** `view:<rail item or More view>`: the rail item's own behaviour (a group opens its last view). */
+/** `view:<rail item or off-rail view>`: the rail item's own behaviour (a group opens its last view). */
 function viewAction(id: string): (() => unknown) | null {
   const v = id.slice("view:".length);
   const r = RAIL.find((x) => x.id === v && x.views.length);
   if (r) return () => (workspace ? openRail(r) : status("Open a folder first"));
-  if (MORE_VIEWS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
+  if (OFF_RAIL_VIEWS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
   return null;
 }
 
@@ -1045,9 +1038,14 @@ async function closeWindow() {
   await getCurrentWindow().close();
 }
 
+/** Every action item of src/menu.json: the menu bar in menu order, then More. */
+const menuItems = () => [
+  ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
+  ...menuSpec.more.map((i) => ({ id: i.id, label: i.label, where: "More (rail)", bar: false, omarchyOnly: !!i.omarchyOnly })),
+];
 /** Every item id of the native menu bar, in menu order. */
-const menuIds = () => menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [i.id] : [])));
-const unbound = menuIds().filter((id) => !actionFor(id));
+const menuIds = () => menuItems().flatMap((i) => (i.bar ? [i.id] : []));
+const unbound = menuItems().filter((i) => !actionFor(i.id)).map((i) => i.id);
 if (unbound.length) console.error(`colony: menu items without an action: ${unbound.join(", ")}`);
 void listen<string>("colony-menu", (ev) => {
   menu.hidden = true;
@@ -1063,7 +1061,12 @@ function showEngine() {
 }
 $("st-engine").addEventListener("click", showEngine);
 
-// ---- command palette (Ctrl+Shift+P, More → Commands) -----------------------------------
+// ---- command palette (Ctrl+Shift+P, View → Commands) -----------------------------------
+/** Every menu action the menus show here (menu bar, then More) as a palette row; not Commands… itself. */
+const paletteActions = (): ColonyAction[] =>
+  menuItems()
+    .filter((i) => i.id !== "commands" && (!i.omarchyOnly || omarchyDetected()))
+    .map((i) => ({ id: i.id, name: i.label, description: i.where }));
 const palette = new CommandPalette({
   status,
   hasFolder: () => !!workspace,
@@ -1079,13 +1082,15 @@ const palette = new CommandPalette({
       status(`Open Claude: ${errText(e)}`);
     }
   },
+  actions: paletteActions,
+  runAction: (id) => void runAction(id),
 });
 document.body.append(palette.el);
 
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
-  const integration = menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]');
-  if (integration) integration.hidden = !omarchyDetected();
+  for (const b of menu.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
+  moreActionsSep.hidden = ![...menu.querySelectorAll<HTMLElement>("button[data-cmd]")].some((b) => !b.hidden);
   for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
@@ -1429,7 +1434,7 @@ window.addEventListener(
       // Ctrl+1..6: the rail (5 toggles the terminal); Ctrl+7..9: Plans, Flight Log, Activity.
       const n = Number(key) - 1;
       if (n < RAIL.length) openRail(RAIL[n]);
-      else showTab(MORE_VIEWS[n - RAIL.length]);
+      else showTab(OFF_RAIL_VIEWS[n - RAIL.length]);
     }
     else handled = false;
     if (handled) {
@@ -1522,7 +1527,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
-    // click) runs the same action as the More menu.
+    // click) runs the action; More holds only its menu.json `more` rows (settings).
     // A custom title bar has no GTK menu bar: its own File / View / Run / Help buttons open
     // the same menus as popups (menu_popup, by index; a popup needs a real click).
     const bar = await api.menuState();
@@ -1535,14 +1540,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("menu-installed", menuOk && !unbound.length, { titleBar: info.titleBar, menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), topMenus, unbound });
     const fire = (id: string) => api.smokeMenuClick(id);
     const termOn = () => !shell.classList.contains("no-bottom");
-    const moreClick = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-cmd="${id}"]`)?.click();
     const m: Record<string, unknown> = {};
     showTab("mission");
     await fire("view:plans");
     m.plans = await until(() => activeTab === "plans", 2000);
-    showTab("mission");
-    moreClick("view:plans");
-    m.morePlans = activeTab === "plans";
+    m.moreSettingsOnly = JSON.stringify([...menu.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd)) === JSON.stringify(menuSpec.more.map((i) => i.id));
     await fire("view:inbox");
     m.inbox = await until(() => activeTab === "inbox", 2000);
     await fire("view:pipelines");
@@ -1563,9 +1565,6 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     document.getElementById("about-panel")?.click();
     await fire("engine");
     m.engine = await until(() => !!document.getElementById("engine-panel"), 2000);
-    closeEnginePanel();
-    moreClick("engine");
-    m.moreEngine = await until(() => !!document.getElementById("engine-panel"), 2000);
     closeEnginePanel();
     await fire("run-plan");
     m.runPlan = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
@@ -1781,7 +1780,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
     }
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
-    // The web panel stays reachable as a fallback (More), with its allowlisted host actions.
+    // The web panel stays reachable as a fallback (View), with its allowlisted host actions.
     const cases: [McRecord, string][] = [
       [{ kind: "copy", text: "README.md", subject: "path", destination: "filePicker" }, "open-file"],
       [{ kind: "copy", text: "../etc/passwd", subject: "path", destination: "filePicker" }, "copy"],
@@ -1821,7 +1820,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Claude Code section: the static cited list, shown with or without the engine gate,
     // every row copy-only, the source URL on screen, and the search reaching it.
     const builtins = [...palette.el.querySelectorAll<HTMLElement>(".palette-builtin")];
-    const section = palette.el.querySelector(".palette-section")?.textContent ?? "";
+    const section = palette.el.querySelector(".palette-claude")?.textContent ?? "";
     const pInput = palette.el.querySelector<HTMLInputElement>("#palette-input")!;
     pInput.value = "compact";
     pInput.dispatchEvent(new Event("input"));
@@ -1833,6 +1832,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       found[0] === "compact" &&
       palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));
     await log("claude-builtins", builtinsOk, { rendered: builtins.length, listed: palette.builtins().length, section, compactSearch: found });
+    // Colony section: every menu action (menu bar and More, not Commands… itself), Run.
+    pInput.value = "";
+    pInput.dispatchEvent(new Event("input"));
+    const actionRows = [...palette.el.querySelectorAll<HTMLElement>(".palette-action")].map((el) => el.dataset.action);
+    const wantActions = paletteActions().map((a) => a.id);
+    await log("palette-actions", JSON.stringify(actionRows) === JSON.stringify(wantActions), { rendered: actionRows, want: wantActions });
     palette.hide();
     const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
     openWebPanel();
@@ -1908,6 +1913,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
+      // More's row (menu.json `more`) opens the same panel; it only lists, nothing runs.
+      menu.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
+      const panelOpen = await until(() => !!document.getElementById("omarchy-panel"), 2000);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await log("omarchy-more-row", panelOpen, { panelOpen });
     } else {
       await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
@@ -2217,7 +2227,7 @@ api
     // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
     $("st-env").textContent = `v${info.version}`;
     $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("No Agent Kit engine: install one from More → Engine (Mission Control and agent runs need it)");
+    if (!info.agentKit) status("No Agent Kit engine: install one from Run → Engine… (Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {
       focusPolicy.enabled = false;
