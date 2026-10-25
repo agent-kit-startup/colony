@@ -1,5 +1,5 @@
 {
-  "$comment": "The native menu bar (src-tauri/src/menu.rs builds it) and the More menu run the same actions: each id here is a key of the action map in src/main.ts (runAction). No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File, View (the views and panels), Run, Help. `more` is the action rows of the rail's More menu, which holds settings only (src/main.ts renders them after its Skin and Title bar choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -54,5 +54,8 @@
         { "id": "about", "label": "About Colony…" }
       ]
     }
+  ],
+  "more": [
+    { "id": "omarchy", "label": "Omarchy integration…", "title": "Bar widget and menu entries for omarchy-shell (opt-in, removable)", "omarchyOnly": true }
   ]
 }

@@ -208,8 +208,8 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 #palette-input { width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; font-size: 14px; background: var(--bg-secondary); outline: none; }
 #palette-list { max-height: 55vh; overflow: auto; }
 .palette-head { padding: 4px 12px; border-bottom: 1px solid var(--border); }
-.palette-item, .palette-builtin { padding: 6px 12px; font-family: inherit; display: flex; flex-direction: column; gap: 2px; }
-.palette-item .row, .palette-builtin .row, .palette-section .row { gap: var(--mc-space-xs); }
+.palette-item, .palette-action, .palette-builtin { padding: 6px 12px; font-family: inherit; display: flex; flex-direction: column; gap: 2px; }
+.palette-item .row, .palette-action .row, .palette-builtin .row, .palette-section .row { gap: var(--mc-space-xs); }
 .palette-section { padding: 6px 12px 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg-secondary); font-size: var(--mc-chrome-meta-size); }
 .palette-act { font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); min-width: 34px; text-align: right; }
 .palette-act.run { color: var(--blue); font-weight: 600; }

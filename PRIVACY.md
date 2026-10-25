@@ -4,7 +4,7 @@ Colony collects no telemetry. It sends no usage events, crash reports, identifie
 
 ## Network calls Colony makes itself
 
-Colony opens a network connection on its own only when you ask for one of these actions in `More → Engine…` or `More → About Colony…`:
+Colony opens a network connection on its own only when you ask for one of these actions in `Run → Engine…` or `Help → About Colony…`:
 
 | Action | Request | Code |
 |--------|---------|------|
