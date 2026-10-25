@@ -240,11 +240,14 @@ mod tests {
         }
     }
 
+    /// The settings More may hold as action rows (Skin and Title bar are markup in main.ts).
+    /// Views, commands, About and Engine live in the menu bar: a new id here is a decision.
+    const MORE_SETTINGS: &[&str] = &["omarchy"];
+
     #[test]
     fn more_holds_settings_only() {
-        // No views, commands, About or Engine in More: those live in the menu bar.
         for id in more_ids() {
-            assert!(!id.starts_with("view:") && !["commands", "about", "engine", "web", "refresh", "new-terminal", "run-elsewhere"].contains(&id.as_str()), "{id} in More");
+            assert!(MORE_SETTINGS.contains(&id.as_str()), "{id} in More: More holds settings only (MORE_SETTINGS)");
         }
         // More's action rows come from menu.json, not from markup in main.ts.
         let markup = main_ts_block("<div id=\"more-menu\"", "</div>\n<div id=\"quick\"");

@@ -845,7 +845,7 @@ const menu = $("more-menu");
 // after the Skin and Title bar choices; `omarchyOnly` rows stay hidden until
 // renderSkinMenu() knows Omarchy is there.
 const moreActionsSep = h("div", { class: "menu-sep", hidden: "" });
-menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, title: i.title, ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
+menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
   const r = anchor.getBoundingClientRect();
@@ -998,9 +998,14 @@ async function closeWindow() {
   await getCurrentWindow().close();
 }
 
+/** Every action item of src/menu.json: the menu bar in menu order, then More. */
+const menuItems = () => [
+  ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
+  ...menuSpec.more.map((i) => ({ id: i.id, label: i.label, where: "More (rail)", bar: false, omarchyOnly: !!i.omarchyOnly })),
+];
 /** Every item id of the native menu bar, in menu order. */
-const menuIds = () => menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [i.id] : [])));
-const unbound = [...menuIds(), ...menuSpec.more.map((i) => i.id)].filter((id) => !actionFor(id));
+const menuIds = () => menuItems().flatMap((i) => (i.bar ? [i.id] : []));
+const unbound = menuItems().filter((i) => !actionFor(i.id)).map((i) => i.id);
 if (unbound.length) console.error(`colony: menu items without an action: ${unbound.join(", ")}`);
 void listen<string>("colony-menu", (ev) => {
   menu.hidden = true;
@@ -1017,11 +1022,11 @@ function showEngine() {
 $("st-engine").addEventListener("click", showEngine);
 
 // ---- command palette (Ctrl+Shift+P, View → Commands) -----------------------------------
-/** Every menu action (menu bar, then More) as a palette row; not Commands… itself. */
-const paletteActions: ColonyAction[] = [
-  ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, name: i.label, description: `${m.label} menu` }] : []))),
-  ...menuSpec.more.map((i) => ({ id: i.id, name: i.label, description: "More (rail)" })),
-].filter((a) => a.id !== "commands");
+/** Every menu action the menus show here (menu bar, then More) as a palette row; not Commands… itself. */
+const paletteActions = (): ColonyAction[] =>
+  menuItems()
+    .filter((i) => i.id !== "commands" && (!i.omarchyOnly || omarchyDetected()))
+    .map((i) => ({ id: i.id, name: i.label, description: i.where }));
 const palette = new CommandPalette({
   status,
   hasFolder: () => !!workspace,
@@ -1037,7 +1042,7 @@ const palette = new CommandPalette({
       status(`Open Claude: ${errText(e)}`);
     }
   },
-  actions: () => paletteActions,
+  actions: paletteActions,
   runAction: (id) => void runAction(id),
 });
 document.body.append(palette.el);
@@ -1747,7 +1752,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     pInput.value = "";
     pInput.dispatchEvent(new Event("input"));
     const actionRows = [...palette.el.querySelectorAll<HTMLElement>(".palette-action")].map((el) => el.dataset.action);
-    const wantActions = [...menuIds(), ...menuSpec.more.map((i) => i.id)].filter((id) => id !== "commands");
+    const wantActions = paletteActions().map((a) => a.id);
     await log("palette-actions", JSON.stringify(actionRows) === JSON.stringify(wantActions), { rendered: actionRows, want: wantActions });
     palette.hide();
     const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
@@ -1824,6 +1829,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
+      // More's row (menu.json `more`) opens the same panel; it only lists, nothing runs.
+      menu.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
+      const panelOpen = await until(() => !!document.getElementById("omarchy-panel"), 2000);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await log("omarchy-more-row", panelOpen, { panelOpen });
     } else {
       await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
