@@ -44,6 +44,9 @@ const PATHS = {
   // Colony: run / hold marks, in place of the unicode ▶ and ⏸ on buttons and rows
   play: '<path d="M5 3.25l7.5 4.75L5 12.75z"/>',
   pause: '<path d="M5.75 3.5v9M10.25 3.5v9"/>',
+  // Colony: Back / Forward in the main pane's history
+  back: '<path d="M10 3.5L5.5 8l4.5 4.5"/>',
+  forward: '<path d="M6 3.5L10.5 8 6 12.5"/>',
   // Colony: More (three dots)
   more: '<circle cx="3.5" cy="8" r="0.9" fill="currentColor"/><circle cx="8" cy="8" r="0.9" fill="currentColor"/><circle cx="12.5" cy="8" r="0.9" fill="currentColor"/>',
   engine: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 2v2M9.5 2v2M6.5 12v2M9.5 12v2M2 6.5h2M2 9.5h2M12 6.5h2M12 9.5h2"/>',
