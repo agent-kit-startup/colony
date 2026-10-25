@@ -39,9 +39,12 @@ pub fn focus_commands(address: &str) -> [Vec<String>; 2] {
     ]
 }
 
-/// `hyprctl dispatch` prints `ok` when Hyprland took the dispatch.
+/// `hyprctl dispatch` answers `ok` when Hyprland took the dispatch; under a Lua config it
+/// answers what `hl.dispatch(...)` returned, `ok` first (Hyprland 0.56 HyprCtl.cpp
+/// `dispatchRequest`). Taken is not focused: Hyprland may still refuse the focus itself
+/// (an exclusive layer surface such as the Omarchy menu holding the keyboard).
 pub fn dispatch_ok(reply: &str) -> bool {
-    reply.trim() == "ok"
+    reply.trim_start().starts_with("ok")
 }
 
 /// Focus the window of `pid`. `hyprctl(args)` runs the tool and returns its stdout, or
@@ -122,6 +125,7 @@ mod tests {
         assert_eq!(lua, vec!["dispatch", r#"hl.dsp.focus({ window = "address:0x55b0aebe9dd0" })"#]);
         assert_eq!(classic, vec!["dispatch", "focuswindow", "address:0x55b0aebe9dd0"]);
         assert!(dispatch_ok("ok\n"));
+        assert!(dispatch_ok("ok (lua)"));
         assert!(!dispatch_ok("Invalid dispatcher"));
     }
 
