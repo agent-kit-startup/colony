@@ -202,14 +202,14 @@ function renderRail() {
   }
   if (!railEls.size) {
     const items = RAIL.map((r) => {
-      const el = h("button", { class: "tab rail-item", title: r.tip, "aria-label": r.label }, h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon")), h("span", { class: "lbl" }, r.label));
+      const el = h("button", { class: "tab rail-item", title: r.tip }, h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon")), h("span", { class: "lbl" }, r.label));
       el.dataset.tab = r.id;
       el.addEventListener("click", () => openRail(r));
       railEls.set(r.id, el);
       return el;
     });
     // Settings only: never the current view, so never "active".
-    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar, rail and other settings", "aria-label": "More", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
+    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar, rail and other settings", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
     more.dataset.tab = "more";
     more.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -486,15 +486,11 @@ const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "righ
 const railLabels = () => !shell.classList.contains("rail-icons");
 
 function renderRailMenu() {
-  for (const b of menu.querySelectorAll<HTMLElement>("button[data-more=rail-position]")) {
-    const on = b.dataset.pos === railPosition();
+  for (const b of menu.querySelectorAll<HTMLElement>("button[data-more=rail-position], button[data-more=rail-labels]")) {
+    const on = b.dataset.pos ? b.dataset.pos === railPosition() : (b.dataset.labels === "on") === railLabels();
+    b.dataset.label ??= b.textContent ?? "";
     b.classList.toggle("on", on);
-    b.textContent = `${on ? "✓ " : ""}${b.dataset.pos === "right" ? "Right" : "Left"}`;
-  }
-  for (const b of menu.querySelectorAll<HTMLElement>("button[data-more=rail-labels]")) {
-    const on = (b.dataset.labels === "on") === railLabels();
-    b.classList.toggle("on", on);
-    b.textContent = `${on ? "✓ " : ""}${b.dataset.labels === "on" ? "Labels under icons" : "Icons only"}`;
+    b.textContent = `${on ? "✓ " : ""}${b.dataset.label}`;
   }
 }
 
@@ -504,7 +500,7 @@ function setRail(p: { position?: RailPosition; labels?: boolean }) {
   renderRailMenu();
   relayout();
   layoutChanged();
-  status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"} (saved in settings.json)`);
+  status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
 }
 
 // Layout persistence (settings.json ui.layout): saved after every panel change (debounced),
@@ -1827,9 +1823,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const r = box("rail");
       const c = box("center");
       const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
-      const edge = pos === "left" ? Math.round(r.left) === 0 && r.right <= c.left + 1 : Math.round(r.right) === window.innerWidth && r.left >= c.right - 1;
-      const lbls = items.every((el) => (el.querySelector<HTMLElement>(".lbl")!.offsetParent !== null) === labels);
-      const named = items.every((el) => !!el.getAttribute("aria-label") && !!el.title);
+      // Every other panel (centre, Explorer, terminal, splitters) on the window's side of the rail.
+      const panels = [c, ...["side", "side-resizer", "resizer", "bottom"].map((id) => $(id)).filter((el) => el.offsetParent !== null).map((el) => el.getBoundingClientRect())];
+      const edge = pos === "left" ? Math.round(r.left) === 0 && panels.every((b) => b.left >= r.right - 1) : Math.round(r.right) === window.innerWidth && panels.every((b) => b.right <= r.left + 1);
+      // Icons only hides the label visually; it stays the button's accessible name.
+      const lbls = items.every((el) => (el.querySelector<HTMLElement>(".lbl")!.getBoundingClientRect().width > 1) === labels);
+      const named = items.every((el) => !!el.querySelector(".lbl")?.textContent && !!el.title);
       return { edge, lbls, named, width: Math.round(r.width) };
     };
     const rail: Record<string, unknown> = {};
@@ -1858,10 +1857,16 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     moreRow("rail-labels][data-labels=on");
     await api.smokeMenuClick("dock:bottom");
     await until(() => dock() === "bottom", 2000);
-    await wait(600);
-    await layoutSaved;
+    // Back to the default rail on disk too (layout-boot reads it on the next start).
+    let rRestored: LayoutSettings = {};
+    for (let i = 0; i < 20; i++) {
+      await wait(200);
+      await layoutSaved;
+      rRestored = await savedLayout();
+      if (rRestored.railPosition === "left" && rRestored.railLabels === true && rRestored.terminalDock === "bottom") break;
+    }
     const railOk = Object.values(rail).every((v) => Object.entries(v as Record<string, unknown>).every(([k, x]) => k === "width" || x === true));
-    await log("rail-options", railOk && rOnDisk.railPosition === "right" && rOnDisk.railLabels === false && railPosition() === "left" && railLabels(), { rail, rOnDisk });
+    await log("rail-options", railOk && rOnDisk.railPosition === "right" && rOnDisk.railLabels === false && rRestored.railPosition === "left" && rRestored.railLabels === true && railPosition() === "left" && railLabels(), { rail, rOnDisk, rRestored });
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {

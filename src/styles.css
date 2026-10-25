@@ -90,8 +90,8 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
   grid-template-columns: var(--sw) var(--sr) minmax(0, 1fr) var(--tr) var(--tw) var(--rail-w);
   grid-template-areas: "top top top top top top" "side side-resizer center resizer bottom rail" "status status status status status status";
 }
-/* Icons only (ui.layout.railLabels false): a narrower rail; each item keeps its tooltip
-   and aria-label. */
+/* Icons only (ui.layout.railLabels false): a narrower rail; each item keeps its tooltip,
+   and its label stays the accessible name (visually hidden, with the badge counts). */
 #shell.rail-icons { --rail-w: 48px; }
 #shell.no-bottom { --th: 0px; --tw: 0px; --tr: 0px; }
 #shell.no-bottom #bottom, #shell.no-bottom #resizer { display: none; }
@@ -118,11 +118,14 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls svg { width: 14px; height: 14px; }
 
 /* Rail: the primary views and More at the bottom. Labels under the icons by default,
-   icons only on request (More → Rail); every item keeps its tooltip and aria-label. */
+   icons only on request (More → Rail); every item keeps its tooltip and accessible name. */
 #rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
 #shell[data-rail="right"] #rail { border-right: 0; border-left: 1px solid var(--border); }
-#shell.rail-icons .rail-item .lbl { display: none; }
+#shell.rail-icons .rail-item .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #shell.rail-icons .rail-item { padding: 9px 2px; }
+/* The 40px item: the count badges sit closer to the icon so they stay inside it. */
+#shell.rail-icons .rail-icon-wrap .badge { left: 9px; }
+#shell.rail-icons .rail-icon-wrap .badge + .badge { left: auto; right: 9px; }
 #shell.no-folder #rail { visibility: hidden; }
 .rail-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
 .rail-item:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: transparent; }
