@@ -229,7 +229,9 @@ export class GitView {
       this.lastSig = sig;
       if (this.visible) void this.panel.refresh();
     });
-    // Back from a terminal or an editor: what changed there shows on return.
+    // Back from another window (an outside terminal or editor): what changed there shows on
+    // return. Colony's own terminal is this window; its changes come through the snapshot
+    // signature above, which Mission Control recomputes on its periodic refresh (<=15 s).
     window.addEventListener("focus", () => {
       if (this.visible) void this.panel.refresh();
     });

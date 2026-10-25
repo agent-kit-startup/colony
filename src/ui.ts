@@ -21,7 +21,8 @@ export function iconBtn(kind: IconKind, text: string, onClick: () => void, attrs
 }
 
 /** Show that `b` started `work`: disabled and aria-busy until it settles. A `label` replaces
- *  the button text with a spinner and that label; with none (icon buttons) the icon spins. */
+ *  the button text with a spinner and that label; with none (icon buttons) the icon spins.
+ *  It re-enables the button when done: a caller with its own disabled rule re-applies it after. */
 export async function busy<T>(b: HTMLButtonElement, label: string, work: () => Promise<T>): Promise<T> {
   const kids = [...b.childNodes];
   b.disabled = true;
