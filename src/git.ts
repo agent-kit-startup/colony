@@ -3,73 +3,134 @@ import { icon } from "./icons";
 import { api, errText, h, type GitStatus } from "./api";
 import { obj, snapshot, str } from "./snapshot";
 import { type ShipHost, ShipLaneTile } from "./shiplane";
-import { btn, card, chip, empty, iconBtn } from "./ui";
+import { btn, busy, card, chip, empty, iconBtn } from "./ui";
+
+const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 export class GitPanel {
   private branch = h("strong");
   private header = h("span", { class: "dim" });
+  private checked = h("span", { class: "dim small" });
+  private refreshBtn: HTMLButtonElement;
   private files = h("div", { class: "git-files" });
+  // The clicked file's diff, right under the list; the commit / push result, right under the buttons.
+  private diffTitle = h("div", { class: "git-diff-title mono small ellipsis" });
+  private diffOut = h("pre", { class: "git-out" });
+  private diffBox = h("div", { class: "git-diff", hidden: "" }, this.diffTitle, this.diffOut);
   private msg = h("textarea", { rows: "3", placeholder: "Commit message (Conventional Commits)" });
   private stageAll = h("input", { type: "checkbox", checked: "" });
   private commitBtn = h("button", { class: "primary" }, "Commit");
   private pushBtn = h("button", {}, "Push");
   private prodBox = h("div", { class: "prod-confirm", hidden: "" });
   private yes = h("input", { type: "text", placeholder: "type yes" });
+  private resultTitle = h("div", { class: "git-result-title" });
   private out = h("pre", { class: "git-out" });
+  private result = h("div", { class: "git-result", hidden: "", role: "status" }, this.resultTitle, this.out);
   private last: GitStatus | null = null;
+  private shown = "";
+  private selected = "";
+  private loading: Promise<void> | null = null;
+  private again = false;
 
   constructor(root: HTMLElement, private status: (msg: string) => void, private onCommitted: () => void) {
-    const refresh = iconBtn("refresh", "", () => void this.refresh(), { title: "Refresh", "aria-label": "Refresh git status" });
+    this.refreshBtn = iconBtn("refresh", "", () => void this.refresh(), { title: "Refresh git status", "aria-label": "Refresh git status" });
     this.prodBox.append(h("span", {}, "Production push: "), this.yes);
     root.append(
-      h("div", { class: "panel-row" }, this.branch, this.header, h("span", { class: "spacer" }), refresh),
+      h("div", { class: "panel-row" }, this.branch, this.header, h("span", { class: "spacer" }), this.checked, this.refreshBtn),
       this.files,
+      this.diffBox,
       this.msg,
       h("label", { class: "check" }, this.stageAll, " Stage all changes (git add -A)"),
       h("div", { class: "panel-row" }, this.commitBtn, this.pushBtn),
       this.prodBox,
-      this.out,
+      this.result,
     );
     this.commitBtn.addEventListener("click", () => void this.commit());
     this.pushBtn.addEventListener("click", () => void this.push());
   }
 
-  async refresh() {
+  /** Reload git status. Calls made while one runs fold into a single reload after it. */
+  refresh(): Promise<void> {
+    if (this.loading) {
+      this.again = true;
+      return this.loading;
+    }
+    this.loading = busy(this.refreshBtn, "", () => this.load()).finally(() => {
+      this.loading = null;
+      if (this.again) {
+        this.again = false;
+        void this.refresh();
+      }
+    });
+    return this.loading;
+  }
+
+  private async load() {
     try {
       const s = await api.gitStatus();
       this.last = s;
+      this.checked.textContent = `checked ${clock()}`;
       if (!s.isRepo) {
         this.branch.textContent = "Not a git repository";
         this.header.textContent = "";
         this.files.replaceChildren();
+        this.shown = "";
         return;
       }
       this.branch.textContent = s.branch;
       this.header.textContent = s.header.replace(/^[^.]+(\.\.\.)?/, "").trim();
       this.prodBox.hidden = !s.prodBranch;
-      this.pushBtn.textContent = s.prodBranch ? `Push ${s.branch} (production)` : "Push";
+      // A push in flight owns its button label (spinner); the next reload sets it.
+      if (!this.pushBtn.classList.contains("is-busy")) this.pushBtn.textContent = s.prodBranch ? `Push ${s.branch} (production)` : "Push";
+      // Same list as on screen: keep the rows (hover, selection, scroll) instead of rebuilding them.
+      const key = JSON.stringify(s.files);
+      if (key === this.shown) return;
+      this.shown = key;
+      const target = (p: string) => (p.includes(" -> ") ? p.split(" -> ")[1] : p);
+      if (this.selected && !s.files.some((f) => target(f.path) === this.selected)) this.closeDiff();
       const rows = s.files.map((f) => {
-        const r = h("div", { class: "git-file", title: f.path }, h("code", { class: "xy" }, f.xy.replace(/ /g, "·")), h("span", {}, f.path));
-        r.addEventListener("click", () => void this.showDiff(f.path.includes(" -> ") ? f.path.split(" -> ")[1] : f.path));
+        const path = target(f.path);
+        const r = h("div", { class: `git-file${path === this.selected ? " is-selected" : ""}`, title: f.path }, h("code", { class: "xy" }, f.xy.replace(/ /g, "·")), h("span", {}, f.path));
+        r.dataset.path = path;
+        r.addEventListener("click", () => void this.showDiff(path));
         return r;
       });
       this.files.replaceChildren(...(rows.length ? rows : [h("div", { class: "dim" }, "Working tree clean")]));
     } catch (e) {
-      this.out.textContent = errText(e);
+      this.show("Could not read git status", errText(e), "err", false);
     }
   }
 
+  private markSelected() {
+    for (const r of this.files.querySelectorAll<HTMLElement>(".git-file")) r.classList.toggle("is-selected", r.dataset.path === this.selected);
+  }
+
+  private closeDiff() {
+    this.selected = "";
+    this.diffBox.hidden = true;
+    this.markSelected();
+  }
+
   private async showDiff(path: string) {
+    if (this.selected === path && !this.diffBox.hidden) return this.closeDiff();
+    this.selected = path;
+    this.markSelected();
+    this.diffTitle.textContent = `${path} · loading diff…`;
+    this.diffOut.replaceChildren();
+    this.diffBox.hidden = false;
+    this.diffBox.scrollIntoView({ block: "nearest" });
     try {
       const diff = await api.gitDiff(path);
+      if (this.selected !== path) return;
+      this.diffTitle.textContent = `${path} · click the file again to close`;
       this.renderDiff(diff || "(no diff against HEAD: new or untracked file)");
     } catch (e) {
-      this.out.textContent = errText(e);
+      if (this.selected === path) this.diffOut.textContent = errText(e);
     }
   }
 
   private renderDiff(text: string) {
-    this.out.replaceChildren(
+    this.diffOut.replaceChildren(
       ...text.split("\n").map((line) => {
         const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
         return h("div", { class: cls }, line);
@@ -77,44 +138,60 @@ export class GitPanel {
     );
   }
 
+  /** The last action's outcome under the buttons, in view: a title line, then git's own output. */
+  private show(title: string, text: string, tone: "ok" | "err" | "", scroll = true) {
+    this.result.className = `git-result${tone ? ` is-${tone}` : ""}`;
+    this.resultTitle.textContent = `${title} · ${clock()}`;
+    this.out.textContent = text.trim();
+    this.result.hidden = false;
+    if (scroll) this.result.scrollIntoView({ block: "nearest" });
+  }
+
   private async commit() {
     const message = this.msg.value.trim();
     if (!message) {
-      this.out.textContent = "Write a commit message first.";
+      this.show("Nothing committed", "Write a commit message first.", "err");
+      this.msg.focus();
       return;
     }
-    this.commitBtn.disabled = true;
-    try {
-      this.out.textContent = await api.gitCommit(message, this.stageAll.checked);
-      this.msg.value = "";
-      this.status("Committed");
-      this.onCommitted();
-    } catch (e) {
-      this.out.textContent = errText(e);
-    } finally {
-      this.commitBtn.disabled = false;
-      await this.refresh();
-    }
+    this.show("Committing… (hooks run)", "", "");
+    await busy(this.commitBtn, "Committing…", async () => {
+      try {
+        const out = await api.gitCommit(message, this.stageAll.checked);
+        this.msg.value = "";
+        this.show("Committed", out, "ok");
+        this.status("Committed");
+        this.onCommitted();
+      } catch (e) {
+        this.show("Commit failed", errText(e), "err");
+        this.status("Commit failed: see the Working tree card");
+      }
+    });
+    await this.refresh();
   }
 
   private async push() {
     const prod = this.last?.prodBranch ?? false;
     if (prod && this.yes.value.trim() !== "yes") {
-      this.out.textContent = `Pushing ${this.last?.branch} is a production promotion. Type yes in the box to confirm.`;
+      this.show("Not pushed", `Pushing ${this.last?.branch} is a production promotion. Type yes in the box to confirm.`, "err");
       this.yes.focus();
       return;
     }
-    this.pushBtn.disabled = true;
-    try {
-      this.out.textContent = (await api.gitPush(prod ? this.yes.value.trim() : undefined)) || "Pushed.";
-      this.status("Pushed");
-    } catch (e) {
-      this.out.textContent = errText(e);
-    } finally {
-      this.yes.value = "";
-      this.pushBtn.disabled = false;
-      await this.refresh();
-    }
+    const branch = this.last?.branch ?? "";
+    this.show(`Pushing ${branch}… (pre-push hooks run)`, "", "");
+    await busy(this.pushBtn, prod ? "Pushing (production)…" : "Pushing…", async () => {
+      try {
+        const out = await api.gitPush(prod ? this.yes.value.trim() : undefined);
+        this.show(`Pushed ${branch}`, out || "Pushed.", "ok");
+        this.status(`Pushed ${branch}`);
+      } catch (e) {
+        this.show("Push failed", errText(e), "err");
+        this.status("Push failed: see the Working tree card");
+      } finally {
+        this.yes.value = "";
+      }
+    });
+    await this.refresh();
   }
 }
 
@@ -145,7 +222,24 @@ export class GitView {
       if (why !== "data") return;
       this.dirty = true;
       if (this.visible) this.renderRepo();
+      // The snapshot carries the repo's git state: when it moved (a commit, a checkout, an
+      // edit from a terminal or an agent) the Working tree reloads without a click.
+      const sig = this.gitSig();
+      if (sig === this.lastSig) return;
+      this.lastSig = sig;
+      if (this.visible) void this.panel.refresh();
     });
+    // Back from a terminal or an editor: what changed there shows on return.
+    window.addEventListener("focus", () => {
+      if (this.visible) void this.panel.refresh();
+    });
+  }
+
+  private lastSig = "";
+
+  private gitSig(): string {
+    const g = snapshot.git;
+    return JSON.stringify([g.branch, g.dirty, g.dirtyCount, g.lastCommit, g.ahead, g.behind]);
   }
 
   /** Extra tiles right after the Ship lane (host requests, pull requests), refreshed on show. */

@@ -13,7 +13,11 @@
 .hostreq-checks { margin: 0; font-family: var(--mc-font-mono); font-size: 11px; color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px; max-height: 160px; overflow: auto; white-space: pre; }
 .hostreq-out { min-height: 0; max-height: 300px; flex: none; }
 .hostreq-recent:empty { display: none; }
-.hostreq-recent { border-top: 1px solid var(--border); padding-top: 4px; }
+.hostreq-recent { border-top: 1px solid var(--border); padding-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+/* A decided request: the row is the <summary>, git / gh output under it (open for a failure). */
+.hostreq-done > summary { cursor: pointer; list-style: none; }
+.hostreq-done > summary::-webkit-details-marker { display: none; }
+.hostreq-done-out { min-height: 0; max-height: 200px; flex: none; margin: 2px 0 6px; font-size: 11px; }
 .pr-row { border-top: 1px solid var(--border); padding: 6px 0; display: flex; flex-direction: column; gap: 2px; }
 .pr-row:first-child { border-top: 0; }
 .cicd-run { border-top: 1px solid var(--border); padding: 4px 0; }
