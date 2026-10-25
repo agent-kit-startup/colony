@@ -88,7 +88,7 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="term-linked" role="group" aria-label="Terminals in the centre tabs" hidden></span><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-hide" data-act="hide-terminal" title="Hide the terminal drawer (Ctrl+5)" aria-label="Hide the terminal drawer"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="term-linked" role="group" aria-label="Terminals in the centre tabs" hidden></span><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-hide" data-act="hide-terminal" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
@@ -232,9 +232,15 @@ function renderRail() {
     el.classList.toggle("active", r.id !== "terminal" && on);
     if (r.id === "terminal") el.setAttribute("aria-pressed", String(on));
     else el.setAttribute("aria-current", on ? "page" : "false");
-    const wrap = el.querySelector<HTMLElement>(".rail-icon-wrap")!;
-    for (const b of wrap.querySelectorAll(".badge")) b.remove();
-    wrap.append(...r.views.flatMap((v) => badges(tabs.get(v))));
+    // Badges are replaced only when they change (a press on one that is replaced is lost too).
+    const b = r.views.flatMap((v) => badges(tabs.get(v)));
+    const sig = b.map((x) => `${x.className}|${x.textContent}|${x.title}`).join("/");
+    if (el.dataset.badges !== sig) {
+      el.dataset.badges = sig;
+      const wrap = el.querySelector<HTMLElement>(".rail-icon-wrap")!;
+      for (const old of wrap.querySelectorAll(".badge")) old.remove();
+      wrap.append(...b);
+    }
   }
   railEls.get("more")!.classList.toggle("active", MORE_VIEWS.includes(activeTab));
 }
@@ -426,6 +432,11 @@ function toggleTerminal(force?: boolean) {
   if (show) {
     if (workspace && terminals.count === 0) void terminals.create();
     requestAnimationFrame(() => terminals.focus());
+  } else if ($("bottom").contains(document.activeElement)) {
+    // Keys must not go on to a hidden shell (and Ctrl+` must show the drawer again).
+    const centre = centerTerms.get(activeTab);
+    if (centre) centre.focus();
+    else (document.activeElement as HTMLElement).blur();
   }
   relayout();
   layoutChanged();
@@ -2093,7 +2104,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && qView?.exitCode === 0 && qOut.length > 0, { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
       // The terminal drawer lists the queue terminal (a centre tab), dimmed once it exited.
       const qLink = $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${qTab}"]`);
-      await log("terminal-drawer-list", !!qLink && qLink.classList.contains("exited") && !$("term-tabs").querySelector<HTMLElement>(".term-linked")?.hidden, { listed: terminals.linkedIds(), exited: qLink?.classList.contains("exited") ?? null });
+      await log("terminal-drawer-queue", !!qLink && qLink.classList.contains("exited") && !$("term-tabs").querySelector<HTMLElement>(".term-linked")?.hidden, { listed: terminals.linkedIds(), exited: qLink?.classList.contains("exited") ?? null });
     }
     smokeDryRun = false;
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
@@ -2128,6 +2139,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const p = (await host.interactive(`/run-plan ${planFile}`, "smoke")) as { id: string; view: TermView } | undefined;
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
       const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
+      // Its drawer link carries the gate badge once the tab shows its gate.
+      if (p) await until(() => !!$("term-tabs").querySelector(`.term-link[data-tab="${p.id}"] .badge.warn`), 4000);
+      const pLink = p ? $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${p.id}"]`) : null;
+      await log("terminal-drawer-list", listOk && pLink?.querySelector(".badge.warn")?.textContent === "gate", { listed: iListed, linkedAfterShells, focused: iFocused, dropped: iDropped, gateLink: pLink?.textContent ?? null, runTab: `run:${run.id}` });
       // A terminal tab that printed a HITL_GATE line: gate marker on its tab, a card in the
       // Inbox's Live gates, the title counter and a (recorded) notification.
       if (p) {
@@ -2136,8 +2151,6 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         const tabBtn = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
         const tCard = inbox.el.querySelector<HTMLElement>(`.inbox-card[data-tab="${p.id}"]`);
         const n = pendingGates().length;
-        const pLink = $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${p.id}"]`);
-        await log("terminal-drawer-list", listOk && pLink?.querySelector(".badge.warn")?.textContent === "gate", { listed: iListed, linkedAfterShells, focused: iFocused, dropped: iDropped, gateLink: pLink?.textContent ?? null, runTab: `run:${run.id}` });
         await log("terminal-gate", n === 1 && !!tabBtn?.classList.contains("run-gate") && tabBtn.querySelector(".badge")?.textContent === "gate" && tCard?.dataset.key === key && !!tCard.querySelector(".inbox-line")?.textContent?.includes("Go | Wait") && Number($("inbox-badge")?.textContent) === 1 && document.title.startsWith("(1) ") && alerts.log.some((x) => x.key === key && !x.sent), {
           gates: pendingGates().map((g) => g.key),
           tab: tabBtn?.className ?? null,
