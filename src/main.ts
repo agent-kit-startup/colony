@@ -34,6 +34,7 @@ import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
+import { linkedTerms } from "./termlist";
 import { TermView } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
@@ -87,7 +88,7 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="term-linked" role="group" aria-label="Terminals in the centre tabs" hidden></span><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-hide" data-act="hide-terminal" title="Hide the terminal drawer (Ctrl+5)" aria-label="Hide the terminal drawer"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
@@ -167,7 +168,7 @@ const RAIL: RailItem[] = [
   { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+2)", views: ["inbox"] },
   { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+3)", views: ["review"] },
   { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push (Ctrl+4)", views: ["git"] },
-  { id: "terminal", label: "Terminal", icon: "terminals", tip: "Show or hide the shell terminals (Ctrl+5 or Ctrl+`)", views: [] },
+  { id: "terminal", label: "Terminal", icon: "terminals", tip: "Terminal drawer: show or hide it. It lists every live terminal: your shells, then the agent CLIs and queue runners open in the centre tabs (Ctrl+5 or Ctrl+`)", views: [] },
   { id: "pipelines", label: "Pipelines", icon: "devops", tip: "Pipelines: the run-plan-all queue and the CI/CD runs of this branch (Ctrl+6)", views: ["queue", "cicd"] },
 ];
 /** Views under More, after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
@@ -194,30 +195,48 @@ function badges(t: Tab | undefined): HTMLElement[] {
   ];
 }
 
+/** The rail's buttons, built once per folder. renderRail runs on every snapshot, run and
+ *  launch change: replacing the buttons then would drop a click whose press landed on the
+ *  old node and whose release on the new one (WebKitGTK fires no click), so it updates them
+ *  in place. */
+const railEls = new Map<string, HTMLElement>();
 function renderRail() {
   const rail = $("rail");
-  if (!workspace) return rail.replaceChildren();
+  if (!workspace) {
+    railEls.clear();
+    return rail.replaceChildren();
+  }
+  if (!railEls.size) {
+    const items = RAIL.map((r) => {
+      const el = h("button", { class: "tab rail-item", title: r.tip }, h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon")), h("span", { class: "lbl" }, r.label));
+      el.dataset.tab = r.id;
+      el.addEventListener("click", () => openRail(r));
+      railEls.set(r.id, el);
+      return el;
+    });
+    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: Plans, Flight Log, Activity, commands, engine, skin", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
+    more.dataset.tab = "more";
+    more.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      toggleMore(more);
+    });
+    railEls.set("more", more);
+    rail.replaceChildren(...items, h("span", { class: "spacer" }), more);
+  }
   const terminalOn = !shell.classList.contains("no-bottom");
-  const items = RAIL.map((r) => {
+  for (const r of RAIL) {
+    const el = railEls.get(r.id)!;
     const on = r.id === "terminal" ? terminalOn : r.views.includes(activeTab);
-    const el = h(
-      "button",
-      // Terminal is a toggle (the bottom panel), not a view: "on", never "active".
-      { class: `tab rail-item ${on ? (r.id === "terminal" ? "on" : "active") : ""}`, title: r.tip, ...(r.id === "terminal" ? { "aria-pressed": String(on) } : { "aria-current": on ? "page" : "false" }) },
-      h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon"), ...r.views.flatMap((v) => badges(tabs.get(v)))),
-      h("span", { class: "lbl" }, r.label),
-    );
-    el.dataset.tab = r.id;
-    el.addEventListener("click", () => openRail(r));
-    return el;
-  });
-  const more = h("button", { id: "btn-more", class: `tab rail-item ${MORE_VIEWS.includes(activeTab) ? "active" : ""}`, title: "More: Plans, Flight Log, Activity, commands, engine, skin", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
-  more.dataset.tab = "more";
-  more.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    toggleMore(more);
-  });
-  rail.replaceChildren(...items, h("span", { class: "spacer" }), more);
+    // Terminal is a toggle (the drawer), not a view: "on", never "active".
+    el.classList.toggle("on", r.id === "terminal" && on);
+    el.classList.toggle("active", r.id !== "terminal" && on);
+    if (r.id === "terminal") el.setAttribute("aria-pressed", String(on));
+    else el.setAttribute("aria-current", on ? "page" : "false");
+    const wrap = el.querySelector<HTMLElement>(".rail-icon-wrap")!;
+    for (const b of wrap.querySelectorAll(".badge")) b.remove();
+    wrap.append(...r.views.flatMap((v) => badges(tabs.get(v))));
+  }
+  railEls.get("more")!.classList.toggle("active", MORE_VIEWS.includes(activeTab));
 }
 
 function openRail(r: RailItem) {
@@ -229,6 +248,7 @@ function openRail(r: RailItem) {
  *  a rail group with more than one view (Pipelines: Queue | CI/CD). */
 function renderTabs() {
   renderRail();
+  renderDrawerLinks();
   const bar = $("tabs");
   if (!workspace) return bar.replaceChildren();
   const docs = order
@@ -305,6 +325,13 @@ async function closeTab(id: string) {
     const rest = order.filter((x) => !tabs.get(x)?.pinned);
     showTab(rest.length ? rest[rest.length - 1] : "mission");
   } else renderTabs();
+}
+
+/** The terminal drawer lists the centre terminal tabs after its own shells (links: a click
+ *  shows the centre tab). Driver runs have no PTY and are not listed. */
+function renderDrawerLinks() {
+  const list = workspace ? linkedTerms(order, (id) => tabs.get(id), (id) => centerTerms.get(id), (id) => launches.termGate(id), activeTab) : [];
+  terminals.setLinked(list, showTab);
 }
 
 // ---- editor ----------------------------------------------------------------------------
@@ -496,6 +523,9 @@ $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
   if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
+// Hide, next to the dock buttons: the same action as the rail's Terminal and View > Show or
+// hide the terminal (the title bar stays native under Hyprland).
+$("term-tabs").querySelector(".term-hide")!.addEventListener("click", () => runAction("terminal"));
 
 /** A splitter drag: `size(dx, dy)` sets the panel size from the pointer offset. */
 function splitter(el: HTMLElement, size: (dx: number, dy: number) => void) {
@@ -1661,6 +1691,50 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(500);
     const termH2 = box("bottom").height;
     await log("dock-terminal", Object.values(docked).every((x) => x.placed && x.fitted && x.button) && explorerHidden && explorerBack && Math.abs(sideW2 - sideW - 60) <= 1 && Math.abs(termH2 - termH - 50) <= 1 && fitted(), { ...docked, explorerHidden, explorerBack, explorerWidth: `${sideW} -> ${sideW2}`, terminalHeight: `${termH} -> ${termH2}`, fittedAfterDrag: fitted() });
+    // Terminal drawer: the rail's Terminal and the drawer's Hide button hide it in every dock,
+    // with the Explorer shown or hidden, and the centre takes the freed space; the rail item
+    // shows it again. The rail buttons survive the re-render that every snapshot, run and
+    // launch change makes (a replaced button lost a click pressed on the old one).
+    const railTerm = () => $("rail").querySelector<HTMLButtonElement>('[data-tab="terminal"]');
+    const railBtn = railTerm();
+    renderTabs();
+    renderTabs();
+    const drawer: Record<string, unknown> = { railStable: !!railBtn && railBtn.isConnected && railTerm() === railBtn };
+    const hideBtn = $("term-tabs").querySelector<HTMLButtonElement>(".drawer-ctl .term-hide");
+    const freed = (d: Dock) => {
+      const c = box("center");
+      const edge = d === "side" ? Math.abs(c.right - box("status").right) : d === "top" ? Math.abs(c.top - box("top").bottom) : Math.abs(c.bottom - box("status").top);
+      return box("bottom").width === 0 && box("resizer").width === 0 && edge <= 1;
+    };
+    const flip = async (click: () => void, want: boolean) => {
+      click();
+      const ok = await until(() => termOn() === want, 2000);
+      await wait(250);
+      return ok && railTerm()?.getAttribute("aria-pressed") === String(want);
+    };
+    for (const withExplorer of [true, false]) {
+      toggleExplorer(withExplorer);
+      for (const d of ["bottom", "top", "side"] as const) {
+        await api.smokeMenuClick(`dock:${d}`);
+        await until(() => dock() === d, 2000);
+        await wait(300);
+        const railHides = await flip(() => railTerm()?.click(), false);
+        const railFreed = freed(d);
+        if (withExplorer && d !== "top") await shot(`drawer-hidden-${d}`);
+        const railShows = await flip(() => railTerm()?.click(), true);
+        const shown = box("bottom").width > 100 && box("bottom").height > 60;
+        const hideHides = await flip(() => hideBtn?.click(), false);
+        const hideFreed = freed(d);
+        const shownAgain = await flip(() => railTerm()?.click(), true);
+        drawer[`${d}${withExplorer ? "" : " (no Explorer)"}`] = { railHides, railFreed, railShows, shown, hideHides, hideFreed, shownAgain };
+      }
+    }
+    toggleExplorer(true);
+    await api.smokeMenuClick("dock:bottom");
+    await until(() => dock() === "bottom" && termOn(), 2000);
+    await wait(300);
+    const drawerOk = drawer.railStable === true && Object.values(drawer).every((v) => v === true || (typeof v === "object" && !!v && Object.values(v).every((x) => x === true)));
+    await log("terminal-drawer-toggle", drawerOk && !!hideBtn && !$("top").contains(hideBtn), drawer);
     // Layout persistence: the panel changes above are in settings.json (debounced save);
     // then the window is reset to the defaults and the layout read back from the file, as
     // the next start does (layout-boot checks a real restart).
@@ -2017,6 +2091,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => !!qView?.exited, 30000);
       const qOut = (qView?.output ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
       await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && qView?.exitCode === 0 && qOut.length > 0, { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
+      // The terminal drawer lists the queue terminal (a centre tab), dimmed once it exited.
+      const qLink = $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${qTab}"]`);
+      await log("terminal-drawer-list", !!qLink && qLink.classList.contains("exited") && !$("term-tabs").querySelector<HTMLElement>(".term-linked")?.hidden, { listed: terminals.linkedIds(), exited: qLink?.classList.contains("exited") ?? null });
     }
     smokeDryRun = false;
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
@@ -2035,7 +2112,18 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => (iView?.output ?? "").includes("fake claude ready"), 8000);
       const iProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
       await shot("interactive");
+      // The terminal drawer lists the interactive tab after its shells (not the driver run
+      // tab: no PTY); its link shows the centre tab; closing the tab drops the link.
+      const drawerKids = [...$("term-tabs").children];
+      const linkedAfterShells = drawerKids.indexOf($("term-tabs").querySelector(".tab-add")!) < drawerKids.indexOf($("term-tabs").querySelector(".term-linked")!) && terminals.count > 0;
+      const iListed = terminals.linkedIds();
+      showTab("mission");
+      $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${iTab}"]`)?.click();
+      const iFocused = activeTab === iTab && !!$("term-tabs").querySelector(`.term-link.current[data-tab="${iTab}"]`);
+      await shot("terminal-drawer");
       await closeTab(iTab);
+      const iDropped = !terminals.linkedIds().includes(iTab);
+      const listOk = iListed.includes(iTab) && iListed.every((id) => centerTerms.has(id)) && !iListed.includes(`run:${run.id}`) && tabs.has(`run:${run.id}`) && linkedAfterShells && iFocused && iDropped;
       confirmed = "";
       const p = (await host.interactive(`/run-plan ${planFile}`, "smoke")) as { id: string; view: TermView } | undefined;
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
@@ -2048,6 +2136,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         const tabBtn = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
         const tCard = inbox.el.querySelector<HTMLElement>(`.inbox-card[data-tab="${p.id}"]`);
         const n = pendingGates().length;
+        const pLink = $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${p.id}"]`);
+        await log("terminal-drawer-list", listOk && pLink?.querySelector(".badge.warn")?.textContent === "gate", { listed: iListed, linkedAfterShells, focused: iFocused, dropped: iDropped, gateLink: pLink?.textContent ?? null, runTab: `run:${run.id}` });
         await log("terminal-gate", n === 1 && !!tabBtn?.classList.contains("run-gate") && tabBtn.querySelector(".badge")?.textContent === "gate" && tCard?.dataset.key === key && !!tCard.querySelector(".inbox-line")?.textContent?.includes("Go | Wait") && Number($("inbox-badge")?.textContent) === 1 && document.title.startsWith("(1) ") && alerts.log.some((x) => x.key === key && !x.sent), {
           gates: pendingGates().map((g) => g.key),
           tab: tabBtn?.className ?? null,

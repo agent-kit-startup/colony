@@ -185,7 +185,28 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 #bottom { grid-area: bottom; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-primary); }
 /* Where the terminal panel sits: three buttons at the right of its tab strip; the current
    place has the active border only. */
-.dock-group { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; padding: 0 6px; flex: none; }
+/* The dock buttons and Hide stay in view when the tab strip scrolls (the narrow side dock). */
+.drawer-ctl { display: inline-flex; align-items: center; margin-left: auto; flex: none; position: sticky; right: 0; background: var(--bg-secondary); }
+.dock-group { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; flex: none; }
+/* Hide: a chevron toward the edge the drawer folds into. */
+.term-hide { display: inline-flex; align-items: center; padding: 2px 5px; margin-right: 6px; background: transparent; border-color: transparent; color: var(--text-muted); }
+.term-hide:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
+.term-hide svg { width: 14px; height: 14px; }
+#shell[data-dock="top"] .term-hide svg { transform: rotate(180deg); }
+#shell[data-dock="side"] .term-hide svg { transform: rotate(-90deg); }
+/* The centre terminal tabs, listed after the shells and the + (links, not drawer tabs):
+   bordered chips; the one shown in the centre has the active border only. */
+.term-linked { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px 0 0; flex: none; }
+.term-linked::before { content: ""; align-self: stretch; width: 1px; margin: 6px 4px 6px 0; background: var(--border); }
+.term-link { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: transparent; border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); color: var(--text-secondary); white-space: nowrap; flex: none; }
+.term-link:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
+.term-link.current { border-color: var(--blue); color: var(--text-primary); }
+.term-link.exited { opacity: 0.6; }
+.term-link .lbl { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+.term-link .badge { margin-left: -2px; }
+/* At the side the strip is narrow: it wraps, so every terminal stays listed and in view. */
+#shell[data-dock="side"] #term-tabs { flex-wrap: wrap; row-gap: 2px; padding-bottom: 2px; }
+#shell[data-dock="side"] .term-linked { flex-wrap: wrap; row-gap: 4px; min-height: 30px; }
 .dock-group button { display: inline-flex; align-items: center; padding: 2px 5px; background: transparent; border-color: transparent; color: var(--text-muted); }
 .dock-group button:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
 .dock-group button.on { border-color: var(--border-active); color: var(--text-primary); }
