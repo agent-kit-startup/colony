@@ -103,7 +103,11 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
    their size (the agent actions and the Plans dropdown live here, Terminal and More in the rail). */
 #top { grid-area: top; display: flex; white-space: nowrap; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); min-width: 0; }
 #top > button { flex: none; }
-#top-actions { display: inline-flex; flex: none; align-items: center; gap: 6px; padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--border); }
+/* The folder path gives way first; if the agent actions still do not fit, they scroll
+   sideways so Go to file, Open in editor, settings and the window controls stay reachable. */
+#ws-name { flex-shrink: 100; }
+#top-actions { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; align-items: center; gap: 6px; padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--border); }
+#top-actions > button { flex: none; }
 #btn-plans { display: inline-flex; align-items: center; gap: 4px; }
 #btn-plans svg { width: 12px; height: 12px; }
 #btn-plans[aria-expanded="true"] { border-color: var(--border-active); }

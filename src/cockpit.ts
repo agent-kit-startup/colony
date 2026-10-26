@@ -285,7 +285,7 @@ function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
   return note;
 }
 
-const RUN_QUEUE_TIP = "agent-kit run-plan-all: resumes the HANDOFF queue, or proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm). An agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
+export const RUN_QUEUE_TIP = "agent-kit run-plan-all: resumes the HANDOFF queue, or proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm). An agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
 
 function runQueueBtn(host: CockpitHost, cls: string, title = RUN_QUEUE_TIP): HTMLButtonElement {
   return iconBtn("queue", "Run queue", () => void host.runQueue(), { class: cls, "data-act": "run-queue", title });
@@ -333,13 +333,15 @@ function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string):
 // these open the agent interactively with one of them, after a confirmation.
 export const NEW_PLAN_WHY = "/start-project turns what you tell it into a plan with to-dos, with two confirmations before it writes the plan and makes it active.";
 export const BACKLOG_ADD_WHY = "/backlog-add writes a new plan with to-dos and lists it under the HANDOFF backlog, without activating it.";
+export const NEW_PLAN_TIP = "/start-project in your agent, interactively: a new active plan";
+export const BACKLOG_ADD_TIP = "/backlog-add in your agent, interactively: a new plan in the backlog, not activated";
 
 function newPlanBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: "/start-project in your agent, interactively: a new active plan" });
+  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
 }
 
 function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" });
+  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
 }
 
 /**
@@ -567,7 +569,7 @@ export class MissionView extends View {
       { icon: "folder", text: str(sys.name), title: `Folder: ${str(sys.name)}` },
       { icon: "git", text: str(snapshot.git.branch), mono: true, title: `Branch: ${str(snapshot.git.branch)}` },
       { icon: "mode", text: mode, title: `Mode: ${mode}`, live: status === "executing" },
-      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive in the top bar). Change it in the Run plan dialog.` } : null,
+      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive in the top bar). Change it in the top bar's Run plan dialog.` } : null,
       pend ? { icon: "elapsed", text: `${clock(pend.startedAt)} · ${elapsed(pend.startedAt)}`, mono: true, title: `Started ${pend.startedAt}` } : null,
       !pend && str(now.modifiedAt) ? { icon: "updated", text: ago(now.modifiedAt), mono: true, title: `Updated ${str(now.modifiedAt)}` } : null,
       !pend ? { icon: "elapsed", text: timing(now), mono: true, title: "Elapsed on this plan" } : null,
