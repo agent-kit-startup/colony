@@ -18,6 +18,8 @@ import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutS
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, type CockpitHost, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { type DocTodo, renderDoc } from "./docpreview";
+import { planActions } from "./plancrud";
+import { closePlanMenu } from "./planmenu";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
@@ -1112,6 +1114,7 @@ menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd"
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
   setPlansMenu(false);
+  closePlanMenu();
   const r = anchor.getBoundingClientRect();
   // Next to the rail, on the window's side of it.
   menu.style.left = railPosition() === "right" ? "auto" : `${r.right + 6}px`;
@@ -1174,6 +1177,7 @@ function setPlansMenu(open: boolean, focus = false) {
   plansBtn.setAttribute("aria-expanded", String(open));
   if (!open) return;
   menu.hidden = true;
+  closePlanMenu();
   const r = plansBtn.getBoundingClientRect();
   plansMenu.style.top = `${r.bottom + 4}px`;
   plansMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
@@ -1191,6 +1195,12 @@ $("top-actions").addEventListener("click", (ev) => {
 // Closed by any click outside, a resize or the window losing focus (a native menu popup
 // takes it), and by Escape wherever the focus is.
 for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, () => setPlansMenu(false));
+// A plan CRUD dropdown opened (src/planmenu.ts; its click does not reach the window): one
+// popover at a time.
+window.addEventListener("colony:popover", () => {
+  setPlansMenu(false);
+  menu.hidden = true;
+});
 window.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape" || plansMenu.hidden) return;
   ev.preventDefault();
@@ -1880,6 +1890,40 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(200);
     const rowsBefore = view("plans").querySelectorAll(".plan-row").length;
     await log("view-plans", rowsBefore === snapshot.plans().length, { rows: rowsBefore, snapshot: snapshot.plans().length });
+    // Plan CRUD dropdown: every Plans row offers what src/plancrud.ts allows for its lifecycle
+    // (the HANDOFF plan: Edit only), keyboard-opened with the focus on its first item; the
+    // Mission hero carries one for the active plan. A pick only opens the agent (not run here).
+    {
+      const crud: Record<string, string> = {};
+      let ok = true;
+      for (const b of view("plans").querySelectorAll<HTMLButtonElement>('.plan-row [data-act="plan-crud"]')) {
+        const p = snapshot.plans().find((x) => x.file === b.dataset.plan);
+        // A file name valid_prompt would refuse gets no action: the button is disabled.
+        if (b.disabled) {
+          crud[`${b.dataset.plan}`] = "disabled";
+          ok &&= !!p && !planActions(p.file, p, false).length;
+          continue;
+        }
+        b.click();
+        const m = document.getElementById("plan-crud-menu") ?? h("div", { hidden: "" });
+        const got = [...m.querySelectorAll<HTMLElement>("[data-crud]")].map((x) => x.dataset.crud).join(",");
+        const want = p ? planActions(p.file, p, p.file === snapshot.activePlanFile).map((x) => x.id).join(",") : "?";
+        ok &&= !m.hidden && got === want && document.activeElement === m.querySelector("button");
+        crud[`${b.dataset.plan}:${p?.lifecycle}`] = got;
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        ok &&= m.hidden;
+      }
+      showTab("mission");
+      await wait(100);
+      const heroCrud = view("mission").querySelector<HTMLButtonElement>('.hero [data-act="plan-crud"]');
+      heroCrud?.click();
+      const heroItems = [...(document.getElementById("plan-crud-menu")?.querySelectorAll<HTMLElement>("[data-crud]") ?? [])].map((x) => x.dataset.crud).join(",");
+      await shot("plan-crud-hero");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      const heroOk = !snapshot.activePlanFile || (!!heroCrud && heroItems === "edit");
+      await log("plan-crud", ok && heroOk && Object.keys(crud).length === rowsBefore, { rows: crud, hero: heroItems });
+      showTab("plans");
+    }
     const rendered: Record<string, number> = {};
     for (const id of ["queue", "inbox", "git", "flight"]) {
       showTab(id);

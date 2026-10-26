@@ -14,6 +14,7 @@ import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from 
 import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "./readiness";
 import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
+import { planCrudButton } from "./planmenu";
 import { inlineMd, plainMd, prose } from "./transcript";
 import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, emptyCta, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
 
@@ -530,7 +531,9 @@ export class MissionView extends View {
     const done = Number(pr.completed) || 0;
     const planDone = total > 0 && done >= total;
     // Run plan, Run queue, Open interactive, Start a project and Create plan live in the
-    // top bar (main.ts #top-actions); the hero keeps the plan's own documents.
+    // top bar (main.ts #top-actions); the hero keeps the plan's own documents and its CRUD
+    // dropdown (Edit only: the plan it shows is the active or the running one).
+    const heroPlan = pend ? pend.plan : plan;
     const actions = h(
       "div",
       { class: "actions now-actions" },
@@ -540,6 +543,11 @@ export class MissionView extends View {
           ? [btn("Open plan", () => this.host.openRepoFile(str(now.planPath) || `.cursor/plans/${plan}`), { class: "status-bar-btn" })]
           : []),
       ...(snapshot.data && str(now.sourcePath) ? [btn("Open HANDOFF", () => this.host.openRepoFile(str(now.sourcePath)), { class: "status-bar-btn" })] : []),
+      ...(heroPlan
+        ? [
+            planCrudButton(heroPlan, snapshot.plans().find((x) => x.file === heroPlan) ?? { parked: false, backlog: false }, true, (prompt, why) => this.host.interactive(prompt, why), pend ? "Colony is running this plan: archive, cancel and delete wait until the run ends and HANDOFF names it." : "Archive, cancel and delete stop on the active plan: park or finish it first."),
+          ]
+        : []),
     );
     const title = pend ? pp?.id || planName(pend.plan) : plan ? str(now.planId) || plan : snapshot.data ? "No active plan" : "Mission";
     const todo = (t: J | null | undefined): Todo => (t && obj(t).id ? { id: str(t.id), content: str(t.content) } : null);
@@ -853,17 +861,10 @@ export class PlansView extends View {
         }),
       );
     }
-    // /backlog-edit edits any plan file without activating it (a plan off the backlog list
-    // gets the kit's own warning and question first); a completed plan stays as it is.
-    if (p.lifecycle !== "completed")
-      acts.push(
-        btn("Edit…", () => void this.host.interactive(`/backlog-edit ${p.file}`, p.lifecycle === "backlog" ? "" : `${p.file} is not a backlog plan: /backlog-edit warns once and asks before it edits it.`), {
-          class: "status-bar-btn",
-          "data-act": "backlog-edit",
-          title: "/backlog-edit in your agent, interactively: change to-dos, overview or phases without activating the plan",
-        }),
-      );
     if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => void this.host.interactive(`/continue-plan ${p.file}`), { class: "status-bar-btn", title: "/continue-plan in your agent, interactively" }));
+    // Edit, then the remove commands its HANDOFF list allows (Archive: parked; Cancel, Delete:
+    // backlog); the HANDOFF plan offers Edit only (src/plancrud.ts).
+    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive, cancel and delete stop on the active plan: park or finish it first."));
     const inProgress = p.todos.filter((t) => t.status === "in_progress").length;
     const pct = p.progress.total ? Math.round((100 * p.progress.completed) / p.progress.total) : 0;
     const head = h(

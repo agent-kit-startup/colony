@@ -16,7 +16,11 @@ import { type J, obj, snapshot, str } from "./snapshot";
 import { ago, btn, card, chip, empty, pill, rerender } from "./ui";
 
 /** Kit commands the Inbox may hand to an interactive agent: a subset of src-tauri vendor.rs PROMPT_SLASH (pinned by its tests). */
-const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit|agent-kit-onboard|start-project|backlog-add)( [A-Za-z0-9._:/-]{1,240})?$/;
+const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit|archive-plan|backlog-cancel|backlog-delete|agent-kit-onboard|start-project|backlog-add)( [A-Za-z0-9._:/-]{1,240})?$/;
+
+/** The plan remove commands (also in the plan CRUD dropdown): they archive or drop a plan. */
+const REMOVES = /^\/(archive-plan|backlog-cancel|backlog-delete) /;
+const REMOVE_WHY = "This kit command takes the plan off its HANDOFF list (archive and delete also move the file to .cursor/plans/archive/). It asks before it changes anything; it stops on the active plan.";
 
 export class InboxView {
   readonly el = h("div", { class: "cv cv-inbox" });
@@ -130,7 +134,7 @@ export class InboxView {
       [rcmd, str(resolve.label).replace(/^Copy /, "") || "resolve"],
     ]) {
       if (!c) continue;
-      if (ASKABLE.test(c)) acts.push(btn(`Ask agent: ${label}`, () => void this.host.interactive(c), { class: "status-bar-btn", title: `${c} in your agent, interactively` }));
+      if (ASKABLE.test(c)) acts.push(btn(`Ask agent: ${label}`, () => void this.host.interactive(c, REMOVES.test(c) ? REMOVE_WHY : undefined), { class: "status-bar-btn", title: `${c} in your agent, interactively` }));
       else acts.push(btn(`Copy ${label}`, () => this.host.copy(c, label), { class: "status-bar-btn" }));
     }
     const el = h(

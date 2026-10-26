@@ -23,8 +23,26 @@ use crate::{agent, chats, tools};
 /// `agent-kit-onboard`, `start-project` and `backlog-add` are the first-run path: they run
 /// only as an interactive agent in a terminal tab, so their own Asks (CI/CD config, hooks,
 /// remotes, scaffold: onboard Hard Stop 3; the plan and backlog write gates) are answered
-/// there by the user. Colony never answers or auto-applies them.
-const PROMPT_SLASH: &[&str] = &["run-plan", "continue-plan", "backlog-edit", "archive-plan", "plan-review-triage", "field-report-resolve", "run-plan-all", "handoff", "summary", "agent-kit-onboard", "start-project", "backlog-add"];
+/// there by the user. Colony never answers or auto-applies them. `backlog-edit`,
+/// `archive-plan`, `backlog-cancel` and `backlog-delete` are the plan CRUD dropdown
+/// (src/plancrud.ts; commands-catalog ADR 2026-10-22 point 4, amend 2026-10-26): each asks
+/// its own confirmation before it writes and stops on the active plan.
+const PROMPT_SLASH: &[&str] = &[
+    "run-plan",
+    "continue-plan",
+    "backlog-edit",
+    "archive-plan",
+    "backlog-cancel",
+    "backlog-delete",
+    "plan-review-triage",
+    "field-report-resolve",
+    "run-plan-all",
+    "handoff",
+    "summary",
+    "agent-kit-onboard",
+    "start-project",
+    "backlog-add",
+];
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -226,6 +244,25 @@ mod tests {
         }
         for name in FIRST_RUN {
             assert!(inbox.iter().any(|n| n == name), "{name} is not in ASKABLE");
+        }
+    }
+
+    /// The plan CRUD dropdown (src/plancrud.ts; ADR 2026-10-24 amend 2026-10-26, Ask B =
+    /// Edit, Archive, Cancel, Delete) hands `/<command> <plan file>` to the interactive agent:
+    /// each of its commands is allowlisted, takes the plan file, and the Inbox may ask it too.
+    #[test]
+    fn plan_crud_commands_runnable() {
+        let src = include_str!("../../src/plancrud.ts");
+        let names: Vec<&str> = src.split("prompt: `/").skip(1).map(|r| r.split(' ').next().unwrap()).collect();
+        assert_eq!(names, ["backlog-edit", "archive-plan", "backlog-cancel", "backlog-delete"]);
+        let inbox = regex_names(include_str!("../../src/inbox.ts"), "ASKABLE");
+        for name in names {
+            assert!(super::runnable(name), "{name}");
+            assert!(valid_prompt(&format!("/{name} old-idea-2026-10-01.plan.md")), "{name}");
+            assert!(!valid_prompt(&format!("/{name} ../HANDOFF.md")) && !valid_prompt(&format!("/{name} a.plan.md --yes")), "{name}");
+            assert!(inbox.iter().any(|n| n == name), "{name} is not in ASKABLE");
+            let t = plan("interactive", "claude", None, Some(&format!("/{name} x.plan.md")), None, false, &find).unwrap();
+            assert_eq!(t.argv, ["/bin/claude", &format!("/{name} x.plan.md")]);
         }
     }
 
