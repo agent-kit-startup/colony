@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "node scripts/gen-tokens.mjs --check && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "node --test scripts/*.test.mjs",
     "tokens": "node scripts/gen-tokens.mjs",
     "tokens:check": "node scripts/gen-tokens.mjs --check",
     "tauri": "tauri"

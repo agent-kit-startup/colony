@@ -36,6 +36,7 @@ import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
 import { linkedTerms } from "./termlist";
+import { NavHistory } from "./nav-history";
 import { TermView } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
@@ -75,7 +76,7 @@ document.getElementById("app")!.innerHTML = `
   </aside>
   <div id="side-resizer" title="Drag to resize the Explorer"></div>
   <main id="center">
-    <div id="tabs" class="tabbar"></div>
+    <div id="tabs" class="tabbar"><span class="tab-nav" role="group" aria-label="History"><button class="nav-back" data-nav="back" title="Back (Alt+Left)" aria-label="Back" disabled></button><button class="nav-forward" data-nav="forward" title="Forward (Alt+Right)" aria-label="Forward" disabled></button></span><span id="tabs-rest"></span></div>
     <div id="views">
       <div id="welcome" class="view">
         <h1><img src="./colony-icon.svg" alt="" width="40" height="40" /> Colony</h1>
@@ -149,6 +150,9 @@ interface Tab {
 const tabs = new Map<string, Tab>();
 const order: string[] = [];
 let activeTab = "mission";
+/** Back / Forward through the views and documents shown in the main pane (ADR 2026-10-24
+ *  point 4): the strip holds documents only, so this is the way back to a view. */
+const nav = new NavHistory();
 
 /**
  * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git, Terminal and
@@ -250,7 +254,11 @@ function renderTabs() {
   renderRail();
   renderDrawerLinks();
   const bar = $("tabs");
-  if (!workspace) return bar.replaceChildren();
+  const rest = $("tabs-rest");
+  // No folder: no strip. With one, the strip stays (Back / Forward head it).
+  bar.classList.toggle("tabbar-empty", !workspace);
+  renderNav();
+  if (!workspace) return rest.replaceChildren();
   const docs = order
     .map((id) => tabs.get(id))
     .filter((t): t is Tab => !!t && !t.pinned)
@@ -290,9 +298,8 @@ function renderTabs() {
     : [];
   // Only the document tabs scroll.
   const docBar = h("div", { class: "tabs-docs" }, ...docs);
-  bar.replaceChildren(...sw, ...(sw.length && docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
-  // No document and no switch: the strip takes no room.
-  bar.classList.toggle("tabbar-empty", !docs.length && !sw.length);
+  const sep = () => h("span", { class: "tab-sep" });
+  rest.replaceChildren(...(sw.length ? [sep(), ...sw] : []), ...(docs.length ? [sep()] : []), docBar);
   docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
@@ -306,6 +313,8 @@ function showTab(id: string) {
   }
   for (const other of tabs.values()) if (other !== t && other.el !== t.el) other.el.hidden = true;
   activeTab = id;
+  // A Back / Forward move has already set the history on `id`: this records nothing then.
+  nav.visit(id);
   const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
   if (group) lastInGroup.set(group.id, id);
   t.el.hidden = false;
@@ -321,10 +330,29 @@ async function closeTab(id: string) {
   tabs.delete(id);
   order.splice(order.indexOf(id), 1);
   if (t.el !== $("view-editor")) t.el.remove();
+  nav.forget(id);
   if (activeTab === id) {
+    // Back to what was shown before it; else the last document, else Mission.
+    const back = nav.current();
     const rest = order.filter((x) => !tabs.get(x)?.pinned);
-    showTab(rest.length ? rest[rest.length - 1] : "mission");
+    showTab(back && tabs.has(back) ? back : rest.length ? rest[rest.length - 1] : "mission");
   } else renderTabs();
+}
+
+/** The Back / Forward buttons are built once in the markup (renderTabs replaces only
+ *  #tabs-rest, so a press on them is never lost to a re-render); this sets their state. */
+const navOpen = (id: string) => tabs.has(id);
+function renderNav() {
+  for (const [sel, can] of [[".nav-back", nav.canBack(navOpen)], [".nav-forward", nav.canForward(navOpen)]] as const) {
+    const b = $("tabs").querySelector<HTMLButtonElement>(sel)!;
+    if (b.disabled === can) b.disabled = !can;
+  }
+}
+
+function navigate(step: "back" | "forward") {
+  if (!workspace) return;
+  const id = step === "back" ? nav.back(navOpen) : nav.forward(navOpen);
+  if (id) showTab(id);
 }
 
 /** The terminal drawer lists the centre terminal tabs after its own shells (links: a click
@@ -1283,6 +1311,22 @@ $("welcome-open").addEventListener("click", () => void pickFolder());
 $("tree-refresh").replaceChildren(icon("refresh", "btn-icon"));
 $("tree-refresh").setAttribute("aria-label", "Refresh the Explorer");
 $("tree-refresh").addEventListener("click", () => void tree.refresh());
+for (const b of $("tabs").querySelectorAll<HTMLButtonElement>("[data-nav]")) {
+  const step = b.dataset.nav as "back" | "forward";
+  b.replaceChildren(icon(step, "tab-svg"));
+  b.addEventListener("click", () => navigate(step));
+}
+// The mouse's back and forward buttons, anywhere in the window (not inside the web panel
+// frame, whose events stay in the frame). The press is swallowed so WebKit runs no history
+// navigation of its own.
+window.addEventListener("mousedown", (ev) => {
+  if (ev.button === 3 || ev.button === 4) ev.preventDefault();
+}, true);
+window.addEventListener("mouseup", (ev) => {
+  if (ev.button !== 3 && ev.button !== 4) return;
+  ev.preventDefault();
+  navigate(ev.button === 3 ? "back" : "forward");
+}, true);
 
 async function openWorkspace(path: string) {
   if (workspace) {
@@ -1306,6 +1350,8 @@ async function openWorkspace(path: string) {
     order.splice(order.indexOf(id), 1);
     if (t.el !== $("view-editor")) t.el.remove();
   }
+  // The history belongs to the folder (its tabs just left): Mission becomes its first entry.
+  nav.reset();
   document.getElementById("run-dialog")?.remove();
   editors.closeAll();
   terminals.closeAll();
@@ -1460,8 +1506,19 @@ function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
 window.addEventListener(
   "keydown",
   (ev) => {
+    const termFocus = () => terminals.hasFocus() || !!centerTerms.get(activeTab)?.hasFocus();
+    // Alt+Left / Alt+Right: Back / Forward, except where the key edits text: a terminal (the
+    // shell moves by word), the editor, a text field.
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && (ev.key === "ArrowLeft" || ev.key === "ArrowRight") && workspace) {
+      const t = ev.target;
+      if (termFocus() || (t instanceof Element && t.closest("input, textarea, select, [contenteditable='true'], .monaco-editor"))) return;
+      navigate(ev.key === "ArrowLeft" ? "back" : "forward");
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
     if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    const inTerm = terminals.hasFocus() || !!centerTerms.get(activeTab)?.hasFocus();
+    const inTerm = termFocus();
     const key = ev.key.toLowerCase();
     let handled = true;
     if (ev.code === "Backquote") toggleTerminal(!terminals.hasFocus());
@@ -1867,6 +1924,41 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     }
     const railOk = Object.values(rail).every((v) => Object.entries(v as Record<string, unknown>).every(([k, x]) => k === "width" || x === true));
     await log("rail-options", railOk && rOnDisk.railPosition === "right" && rOnDisk.railLabels === false && rRestored.railPosition === "left" && rRestored.railLabels === true && railPosition() === "left" && railLabels(), { rail, rOnDisk, rRestored });
+    // Back / Forward (u4): views and a document, the buttons' state, Alt+Left / Alt+Right
+    // (dispatched in the page: whether WebKitGTK itself reacts to the real keys is a manual check),
+    // and a closed tab leaving the history.
+    const navBtn = (step: string) => $("tabs").querySelector<HTMLButtonElement>(`.nav-${step}`)!;
+    // On the focused element, as a real key press is (the handler reads its target).
+    const altKey = (key: string) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }));
+    const navDoc = `${root}/smoke-nav.txt`;
+    await api.writeTextFile(navDoc, "Back / Forward smoke\n");
+    const navSteps: Record<string, unknown> = {};
+    const navAt = (k: string, want: string) => (navSteps[k] = activeTab === want ? true : activeTab);
+    nav.reset();
+    showTab("mission");
+    showTab("inbox");
+    showTab("git");
+    navBtn("back").click();
+    navAt("back-button", "inbox");
+    altKey("ArrowLeft");
+    navAt("alt-left", "mission");
+    navSteps["back-disabled-at-start"] = navBtn("back").disabled && !navBtn("forward").disabled;
+    altKey("ArrowRight");
+    navAt("alt-right", "inbox");
+    navBtn("forward").click();
+    navAt("forward-button", "git");
+    navSteps["forward-disabled-at-end"] = navBtn("forward").disabled && !navBtn("back").disabled;
+    await openFile(navDoc);
+    navAt("open-doc", navDoc);
+    await closeTab(navDoc);
+    navAt("close-returns", "git");
+    navSteps["closed-left-history"] = navBtn("forward").disabled;
+    navBtn("back").click();
+    navAt("back-after-close", "inbox");
+    await log("inner-nav", Object.values(navSteps).every((v) => v === true), navSteps);
+    // Leave the history as a fresh folder has it, for the steps after this one.
+    nav.reset();
+    showTab("mission");
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
