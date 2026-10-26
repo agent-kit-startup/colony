@@ -116,6 +116,12 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #btn-plans { display: inline-flex; align-items: center; gap: 4px; }
 #btn-plans svg { width: 12px; height: 12px; }
 #btn-plans[aria-expanded="true"] { border-color: var(--border-active); }
+/* The plan CRUD dropdown (Mission card, Plans rows): the same shape as the Plans button. */
+.plan-crud-btn { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.plan-crud-btn svg { width: 12px; height: 12px; flex: none; }
+.plan-crud-btn[aria-expanded="true"] { border-color: var(--border-active); }
+#plan-crud-menu { min-width: 200px; }
+#plan-crud-menu .menu-label { max-width: 260px; white-space: normal; }
 .brand { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
 #ws-name { display: inline-flex; min-width: 0; max-width: 50vw; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); }
 #ws-name .ws-parent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
