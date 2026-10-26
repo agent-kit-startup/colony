@@ -15,6 +15,8 @@ export type Align = "left" | "center" | "right" | "";
 export interface ListItem {
   depth: number;
   ordered: boolean;
+  /** An ordered item's own number (a list may start at 3). */
+  n?: number;
   text: string;
 }
 
@@ -27,7 +29,8 @@ export type Block =
   | { t: "quote"; text: string }
   | { t: "rule" };
 
-const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\s]+\))/g;
+// A link target may hold one level of balanced parentheses: [a](x(y).md).
+const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\((?:[^()\s]|\([^()\s]*\))+\))/g;
 
 /** Inline code, bold and links; everything else is text. */
 export function parseInline(text: string): Inline[] {
@@ -54,7 +57,8 @@ export function parseInline(text: string): Inline[] {
 export function linkKind(href: string): "repo" | "web" | null {
   const h = href.trim();
   if (/^https?:\/\//i.test(h)) return "web";
-  if (!h || h.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(h) || h.startsWith("//")) return null;
+  // A scheme has no dot: `README.md:10` is a path with a line, `javascript:` is refused.
+  if (!h || h.startsWith("#") || /^[a-z][a-z0-9+-]*:/i.test(h) || h.startsWith("//")) return null;
   return "repo";
 }
 
@@ -75,7 +79,7 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 const BULLET = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
-const ALIGN_ROW = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const ALIGN_ROW = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 /** Cells of a table row: split on `|` outside inline code, `\|` is a literal pipe. */
 function cells(line: string): string[] {
@@ -128,12 +132,24 @@ export function parseBlocks(text: string): Block[] {
     if (fence) {
       flush();
       const mark = fence[1];
+      // Only a bare fence of the same character, at least as long, closes it.
+      const closes = (l: string) => {
+        const t = l.trim();
+        return t.length >= mark.length && t === mark[0].repeat(t.length);
+      };
       const body: string[] = [];
-      for (i++; i < lines.length && !lines[i].trimStart().startsWith(mark); i++) body.push(lines[i]);
+      for (i++; i < lines.length && !closes(lines[i]); i++) body.push(lines[i]);
       out.push({ t: "code", lang: fence[2], text: body.join("\n") });
       continue;
     }
     if (!line.trim()) {
+      // A blank line inside a list keeps it when the next text is another item or an
+      // indented continuation (a loose list); otherwise it ends the block.
+      if (list) {
+        let j = i + 1;
+        while (j < lines.length && !lines[j].trim()) j++;
+        if (j < lines.length && (BULLET.test(lines[j]) || /^\s/.test(lines[j]))) continue;
+      }
       flush();
       continue;
     }
@@ -181,7 +197,8 @@ export function parseBlocks(text: string): Block[] {
         list = [];
         out.push({ t: "list", items: list });
       }
-      list.push({ depth: Math.floor(b[1].replace(/\t/g, "  ").length / 2), ordered: /\d/.test(b[2]), text: b[3].trim() });
+      const depth = Math.floor(b[1].replace(/\t/g, "  ").length / 2);
+      list.push(/\d/.test(b[2]) ? { depth, ordered: true, n: Number.parseInt(b[2], 10), text: b[3].trim() } : { depth, ordered: false, text: b[3].trim() });
       continue;
     }
     // An indented line right after a list item continues that item.

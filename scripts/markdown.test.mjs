@@ -30,8 +30,8 @@ test("lists: bullets, numbers, nesting depth and continuation lines", () => {
       items: [
         { depth: 0, ordered: false, text: "one more of one" },
         { depth: 1, ordered: false, text: "nested" },
-        { depth: 0, ordered: true, text: "first" },
-        { depth: 0, ordered: true, text: "second" },
+        { depth: 0, ordered: true, n: 1, text: "first" },
+        { depth: 0, ordered: true, n: 2, text: "second" },
         { depth: 0, ordered: false, text: "star" },
       ],
     },
@@ -106,4 +106,41 @@ test("link kinds: repo paths, web links; script and data URLs are refused", () =
   assert.equal(linkKind("data:text/html,<b>x</b>"), null);
   assert.equal(linkKind("file:///etc/passwd"), null);
   assert.equal(linkKind("#anchor"), null);
+});
+
+test("short alignment rows make a table", () => {
+  const [t] = parseBlocks("|a|b|\n|--|-:|\n|1|2|");
+  assert.equal(t.t, "table");
+  assert.deepEqual(t.align, ["", "right"]);
+  assert.deepEqual(t.rows, [["1", "2"]]);
+});
+
+test("ordered lists keep their numbers across blank lines; loose items stay one list", () => {
+  const b = parseBlocks("3. c\n\n4. d\n\n- a\n\n  more of a");
+  assert.equal(b.length, 1);
+  assert.deepEqual(b[0].items, [
+    { depth: 0, ordered: true, n: 3, text: "c" },
+    { depth: 0, ordered: true, n: 4, text: "d" },
+    { depth: 0, ordered: false, text: "a more of a" },
+  ]);
+});
+
+test("a fence closes only on a bare fence line", () => {
+  assert.deepEqual(parseBlocks("```\ncode\n```python\nmore\n```\nafter"), [
+    { t: "code", lang: "", text: "code\n```python\nmore" },
+    { t: "para", text: "after" },
+  ]);
+});
+
+test("links: balanced parentheses in the target", () => {
+  assert.deepEqual(parseInline("see [a](x(y).md) now"), [
+    { t: "text", text: "see " },
+    { t: "link", text: "a", href: "x(y).md" },
+    { t: "text", text: " now" },
+  ]);
+});
+
+test("path:line references are repo links", () => {
+  assert.equal(linkKind("README.md:10"), "repo");
+  assert.equal(linkKind("src/main.ts:42:7"), "repo");
 });

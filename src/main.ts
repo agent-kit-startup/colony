@@ -395,19 +395,26 @@ function docTodos(path: string): DocTodo[] | null {
   return p ? p.todos : null;
 }
 
-/** A link in a preview: a repo file opens in Colony (resolved from the file's folder, or
- *  from the folder root for `.cursor/...`), a web address is copied (no browser here). */
+/** A link in a preview: a repo file opens in Colony, a web address is copied (no browser
+ *  here). `./` and `../` resolve from the file's folder; any other path (kit docs cite
+ *  repo-root paths: `.cursor/...`, `src/main.ts:42`) from the folder root. A `:line` suffix
+ *  and a `#anchor` are dropped. */
 function docLink(from: string, href: string, kind: "repo" | "web") {
   if (kind === "web") {
     void copyText(href).then((ok) => status(ok ? `Copied ${href}` : `Copy failed: ${href}`));
     return;
   }
   if (!workspace) return;
-  const target = href.split("#")[0];
+  let target = href.trim().split("#")[0].replace(/:\d+(?::\d+)?$/, "");
+  try {
+    target = decodeURIComponent(target);
+  } catch {
+    // A stray % (reports/100%.md): the path as written.
+  }
   if (!target) return;
-  const base = target.startsWith(".cursor/") ? workspace.root : from.slice(0, from.lastIndexOf("/"));
+  const base = /^\.\.?\//.test(target) ? from.slice(0, from.lastIndexOf("/")) : workspace.root;
   const parts: string[] = [];
-  for (const seg of `${base}/${decodeURIComponent(target)}`.split("/")) {
+  for (const seg of `${base}/${target}`.split("/")) {
     if (seg === "..") parts.pop();
     else if (seg && seg !== ".") parts.push(seg);
   }
@@ -416,16 +423,19 @@ function docLink(from: string, href: string, kind: "repo" | "web") {
   host.openRepoFile(abs);
 }
 
-/** Preview scroll positions by file (kept across tab switches and mode changes). */
+/** Preview scroll positions by file (kept across tab switches and mode changes), recorded
+ *  as the preview scrolls: by the time a tab's hide() runs its view has no layout box left. */
 const docScroll = new Map<string, number>();
-function saveDocScroll() {
-  const t = tabs.get(activeTab);
-  if (t?.mode === "preview" && !$("doc-preview").hidden) docScroll.set(t.id, $("doc-preview").scrollTop);
-}
+$("doc-preview").addEventListener("scroll", () => {
+  const pv = $("doc-preview");
+  if (pv.dataset.path && !pv.hidden) docScroll.set(pv.dataset.path, pv.scrollTop);
+});
+/** The rendered document per file, reused while its text and to-dos are unchanged. */
+const docCache = new Map<string, { sig: string; el: HTMLElement; ms: string }>();
 
 /** Show the file tab `path` in its mode: the Preview | Editor switch for Markdown, then the
  *  rendered document or Monaco. */
-function renderDocMode(path: string) {
+function renderDocMode(path: string, focus = true) {
   const t = tabs.get(path);
   const mode = t?.mode;
   const bar = $("doc-bar");
@@ -444,20 +454,27 @@ function renderDocMode(path: string) {
     requestAnimationFrame(() => editors.layout());
     return;
   }
-  const started = performance.now();
-  const doc = renderDoc(editors.text(path) ?? "", docTodos(path), (href, kind) => docLink(path, href, kind));
-  pv.replaceChildren(doc);
-  pv.dataset.renderMs = (performance.now() - started).toFixed(1);
+  const todos = docTodos(path);
+  const sig = `${editors.version(path)}|${JSON.stringify(todos)}`;
+  let c = docCache.get(path);
+  if (!c || c.sig !== sig) {
+    const started = performance.now();
+    const el = renderDoc(editors.text(path) ?? "", todos, (href, kind) => docLink(path, href, kind));
+    c = { sig, el, ms: (performance.now() - started).toFixed(1) };
+    docCache.set(path, c);
+  }
   pv.dataset.path = path;
+  pv.dataset.renderMs = c.ms;
+  if (pv.firstElementChild !== c.el) pv.replaceChildren(c.el);
   pv.scrollTop = docScroll.get(path) ?? 0;
-  // Keys scroll the document (Monaco, hidden, must not take them).
-  if (focusPolicy.enabled) pv.focus({ preventScroll: true });
+  // Keys scroll the document (Monaco, hidden, must not take them). A refresh from the
+  // snapshot leaves the focus where it is (a shell in the drawer, a field).
+  if (focus && focusPolicy.enabled) pv.focus({ preventScroll: true });
 }
 
 function setDocMode(mode: DocMode) {
   const t = tabs.get(activeTab);
   if (!t?.mode || t.mode === mode) return;
-  saveDocScroll();
   t.mode = mode;
   renderDocMode(t.id);
   if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => editors.editor.focus());
@@ -491,11 +508,11 @@ async function openFile(path: string, mode?: DocMode) {
           tree.setActive(path);
           renderDocMode(path);
         },
-        hide: () => saveDocScroll(),
         close: async () => {
           if (editors.isDirty(path) && !(await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" }))) return false;
           editors.close(path);
           docScroll.delete(path);
+          docCache.delete(path);
           return true;
         },
       },
@@ -1431,7 +1448,11 @@ function renderFeed() {
 snapshot.on((why) => {
   renderFeed();
   renderTopActions();
-  if (why === "data") renderTabs();
+  if (why === "data") {
+    renderTabs();
+    // A plan shown rendered: its to-do table follows the snapshot (rebuilt only on a change).
+    if (tabs.get(activeTab)?.mode === "preview") renderDocMode(activeTab, false);
+  }
 });
 setInterval(renderFeed, 5000);
 // Back from the agent or a terminal elsewhere: the readiness report may have changed.

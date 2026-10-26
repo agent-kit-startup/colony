@@ -54,13 +54,15 @@ export function plainMd(text: string): string {
 
 /** Nested ul / ol from the flat list items (depth from the indentation). */
 function listEl(items: ListItem[], onLink?: MdLinkHandler): HTMLElement {
-  const root = h(items[0]?.ordered ? "ol" : "ul");
+  // An ordered list starts at its first item's number (a list may start at 3).
+  const make = (it: ListItem) => (it.ordered ? h("ol", it.n && it.n !== 1 ? { start: String(it.n) } : {}) : h("ul"));
+  const root = make(items[0] ?? { depth: 0, ordered: false, text: "" });
   const stack: { depth: number; el: HTMLElement }[] = [{ depth: items[0]?.depth ?? 0, el: root }];
   for (const it of items) {
     while (stack.length > 1 && stack[stack.length - 1].depth > it.depth) stack.pop();
     const top = stack[stack.length - 1];
     if (it.depth > top.depth) {
-      const sub = h(it.ordered ? "ol" : "ul");
+      const sub = make(it);
       (top.el.lastElementChild ?? top.el).append(sub);
       stack.push({ depth: it.depth, el: sub });
     }
