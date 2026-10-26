@@ -61,7 +61,8 @@ export class Terminals {
     }
     requestAnimationFrame(() => {
       this.fitActive();
-      t.view.focus();
+      // A closed drawer keeps its bar: a shell closed there must not focus a hidden pane.
+      if (this.host.clientHeight >= 20) t.view.focus();
     });
   }
 

@@ -97,6 +97,8 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
    the track sizes to the bar, a row at the bottom or the top, a column at the side. */
 #shell.no-bottom { --th: auto; --tw: auto; --tr: 0px; }
 #shell.no-bottom #terms, #shell.no-bottom #resizer { display: none; }
+/* No folder open: no shells to control, so no bar either (the welcome screen). */
+#shell.no-folder.no-bottom #bottom { display: none; }
 #shell.no-side { --sw: 0px; --sr: 0px; }
 #shell.no-side #side, #shell.no-side #side-resizer { display: none; }
 @media (max-width: 1100px) { #shell { --side-w: 190px; } }
@@ -261,7 +263,8 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 /* Closed at the side: a narrow column, controls first, then the shell tabs (vertical
    labels) and +. */
 #shell.no-bottom[data-dock="side"] #term-tabs { flex: 1; flex-direction: column; flex-wrap: nowrap; align-items: stretch; overflow-x: hidden; overflow-y: auto; border-bottom: 0; padding: 4px 2px; gap: 2px; }
-#shell.no-bottom[data-dock="side"] #term-tabs > .tab { writing-mode: vertical-rl; padding: 10px 6px; }
+#shell.no-bottom[data-dock="side"] #term-tabs > .tab { writing-mode: vertical-rl; padding: 10px 5px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); }
+#shell.no-bottom[data-dock="side"] #term-tabs > .tab.active { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
 #shell.no-bottom[data-dock="side"] #term-tabs > .tab-add { padding: 6px 0; }
 #shell.no-bottom[data-dock="side"] .drawer-ctl { order: -1; flex-direction: column-reverse; margin: 0 0 4px; position: static; gap: 2px; }
 #shell.no-bottom[data-dock="side"] .dock-group { flex-direction: column; padding: 0; }

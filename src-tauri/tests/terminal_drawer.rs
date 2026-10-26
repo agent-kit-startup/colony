@@ -7,15 +7,47 @@ const STYLES: &str = include_str!("../../src/styles.css");
 const MAIN: &str = include_str!("../../src/main.ts");
 const TERMINAL: &str = include_str!("../../src/terminal.ts");
 
-/// (selector list, declarations) of every top-level rule in `css`.
-fn all_rules(css: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+/// `css` without its comments.
+fn strip_comments(css: &str) -> String {
+    let mut out = String::new();
     let mut rest = css;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        rest = rest[i..].find("*/").map_or("", |j| &rest[i + j + 2..]);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// (selector list, declarations) of every flat rule in `css` (comments stripped). An
+/// at-rule block (@media, @keyframes, ...) is skipped whole: the drawer rules are flat.
+fn all_rules(css: &str) -> Vec<(String, String)> {
+    let css = strip_comments(css);
+    let mut out = Vec::new();
+    let mut rest = css.as_str();
     while let Some(open) = rest.find('{') {
-        let head = &rest[..open];
+        let sel = rest[..open].trim().to_string();
+        if sel.starts_with('@') {
+            // Skip to the brace that closes the at-rule.
+            let mut depth = 0usize;
+            let mut end = rest.len();
+            for (i, c) in rest[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            rest = &rest[end.min(rest.len())..];
+            continue;
+        }
         let close = rest[open..].find('}').expect("unclosed rule") + open;
-        // A selector is what follows the last comment or rule end before the brace.
-        let sel = head.rsplit("*/").next().unwrap_or(head).trim().to_string();
         out.push((sel, rest[open + 1..close].to_string()));
         rest = &rest[close + 1..];
     }
@@ -24,7 +56,8 @@ fn all_rules(css: &str) -> Vec<(String, String)> {
 
 #[test]
 fn a_closed_drawer_keeps_its_bar() {
-    let closed: Vec<_> = all_rules(STYLES).into_iter().filter(|(s, _)| s.contains(".no-bottom")).collect();
+    // With a folder open (no-folder: the welcome screen has no shells, so no bar).
+    let closed: Vec<_> = all_rules(STYLES).into_iter().filter(|(s, _)| s.contains(".no-bottom") && !s.contains(".no-folder")).collect();
     assert!(!closed.is_empty(), "no rule for the closed drawer");
     for (sel, body) in &closed {
         let hides = body.contains("display: none") || body.contains("visibility: hidden");
@@ -59,4 +92,22 @@ fn the_drawer_bar_has_the_toggle_and_lists_shells_only() {
         assert!(!TERMINAL.contains(gone), "{gone}: the drawer no longer repeats the centre terminal tabs");
     }
     assert!(MAIN.contains("terminal: () => toggleTerminal()"), "View → Show or hide the terminal keeps its action");
+}
+
+#[test]
+fn ctrl_digits_match_the_rail_tooltips() {
+    let start = MAIN.find("const CTRL_DIGITS = [").expect("CTRL_DIGITS") + "const CTRL_DIGITS = [".len();
+    let list: Vec<&str> = MAIN[start..start + MAIN[start..].find(']').unwrap()].split(',').map(|x| x.trim().trim_matches('"')).collect();
+    assert_eq!(list.get(4), Some(&"terminal"), "Ctrl+5 toggles the terminal drawer: {list:?}");
+    let rail_start = MAIN.find("const RAIL: RailItem[] = [").expect("RAIL");
+    let rail = &MAIN[rail_start..rail_start + MAIN[rail_start..].find("\n];").unwrap()];
+    for line in rail.lines().filter(|l| l.contains("id: \"")) {
+        let id = line.split("id: \"").nth(1).unwrap().split('"').next().unwrap();
+        let n = list.iter().position(|x| *x == id).unwrap_or_else(|| panic!("{id} has no Ctrl+<n>")) + 1;
+        assert!(line.contains(&format!("(Ctrl+{n})")), "{id}: its tooltip must name Ctrl+{n}");
+    }
+    let off = MAIN.find("const OFF_RAIL_VIEWS = [").expect("OFF_RAIL_VIEWS");
+    for v in ["plans", "flight", "activity"] {
+        assert!(MAIN[off..off + 60].contains(v) && list.contains(&v), "{v} keeps its Ctrl+<n>");
+    }
 }

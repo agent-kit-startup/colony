@@ -99,7 +99,7 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-toggle" data-act="toggle-terminal" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-toggle" data-act="toggle-terminal" aria-controls="terms" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
@@ -179,9 +179,10 @@ const RAIL: RailItem[] = [
 ];
 /** Views off the rail (View menu, palette), after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
 const OFF_RAIL_VIEWS = ["plans", "flight", "activity"];
-/** Ctrl+1..9: the rail in order with the terminal drawer's toggle in slot 5 (where the rail's
- *  Terminal item used to be, so the keys did not move), then the off-rail views. */
-const CTRL_DIGITS: string[] = [...RAIL.slice(0, 4).map((r) => r.id), "terminal", ...RAIL.slice(4).map((r) => r.id), ...OFF_RAIL_VIEWS];
+/** Ctrl+1..9: the rail items, the terminal drawer's toggle in slot 5 (where the rail's
+ *  Terminal item used to be, so the keys did not move), then the off-rail views. The rail
+ *  tooltips name these keys (cargo test terminal_drawer checks both). */
+const CTRL_DIGITS = ["mission", "inbox", "review", "git", "terminal", "pipelines", "plans", "flight", "activity"];
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
@@ -460,12 +461,17 @@ $("term-tabs").addEventListener(
   true,
 );
 
-function toggleTerminal(force?: boolean) {
+/** Show or hide the drawer; true when showing it started its first shell. */
+function toggleTerminal(force?: boolean): boolean {
   const show = force ?? shell.classList.contains("no-bottom");
   shell.classList.toggle("no-bottom", !show);
   renderDrawerToggle();
+  let spawned = false;
   if (show) {
-    if (workspace && terminals.count === 0) void terminals.create();
+    if (workspace && terminals.count === 0) {
+      void terminals.create();
+      spawned = true;
+    }
     requestAnimationFrame(() => terminals.focus());
   } else if ($("terms").contains(document.activeElement)) {
     // Keys must not go on to a hidden shell (and Ctrl+` must show the drawer again). The
@@ -476,6 +482,7 @@ function toggleTerminal(force?: boolean) {
   }
   relayout();
   layoutChanged();
+  return spawned;
 }
 
 /** What the drawer bar lists (COLONY_SMOKE): its shell tabs, and anything in it that names a
@@ -520,16 +527,14 @@ function renderDock() {
   }
 }
 
-/** Put the terminal panel at the bottom, the top or the side (and show it). */
+/** Put the terminal panel at the bottom, the top or the side. A closed drawer stays closed:
+ *  its bar moves there (the toggle or a shell tab opens it). */
 function setDock(d: Dock) {
   shell.dataset.dock = d;
   renderDock();
-  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
-  else {
-    relayout();
-    layoutChanged();
-  }
-  status(`Terminal ${DOCK_LABEL[d]}`);
+  relayout();
+  layoutChanged();
+  status(`Terminal ${DOCK_LABEL[d]}${shell.classList.contains("no-bottom") ? " (closed)" : ""}`);
 }
 
 function toggleExplorer(force?: boolean) {
@@ -1181,9 +1186,8 @@ const ACTIONS: Record<string, () => unknown> = {
   "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
   "new-terminal": () => {
     // Opening an empty drawer starts its first shell: that one is the new terminal.
-    const had = terminals.count;
-    toggleTerminal(true);
-    return terminals.count > had ? undefined : terminals.create();
+    if (shell.classList.contains("no-bottom") && toggleTerminal(true)) return;
+    return terminals.create();
   },
   engine: () => showEngine(),
   about: () => openAboutPanel(status),
@@ -1904,6 +1908,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const sz = terminals.activeSize();
       return !!sz?.fits && sz.fits.cols === sz.cols && sz.fits.rows === sz.rows;
     };
+    // A dock button moves a closed drawer's bar without opening it: open it first.
+    toggleTerminal(true);
     const docked: Record<string, { placed: boolean; fitted: boolean; button: boolean; size: unknown }> = {};
     showTab("mission");
     for (const d of ["top", "side", "bottom"] as const) {
