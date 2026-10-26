@@ -8,6 +8,7 @@ import { errText, h, type TickReview } from "./api";
 import { gateControls } from "./agent";
 import { ContextStrip } from "./contextstrip";
 import { icon } from "./icons";
+import { type Align, type Block, type ListItem, linkKind, parseBlocks, parseInline } from "./markdown";
 import { type Ev, type Run, type RunItem, runLabel, runs } from "./runs";
 
 const RESULT_MAX = 6000;
@@ -20,73 +21,92 @@ export interface TranscriptHost {
   openInEditor(path: string): void;
 }
 
-/** Inline markdown subset (code, bold) as DOM nodes; never innerHTML. */
-export function inlineMd(text: string): Node[] {
-  const out: Node[] = [];
-  const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
-    const tok = m[0];
-    out.push(tok.startsWith("`") ? h("code", {}, tok.slice(1, -1)) : h("strong", {}, tok.slice(2, -2)));
-    last = m.index + tok.length;
-  }
-  if (last < text.length) out.push(document.createTextNode(text.slice(last)));
-  return out;
+/** A link in rendered markdown: `kind` from linkKind ("repo" or "web"). Without a handler
+ *  (transcripts) a link shows its text with the address as its tooltip. */
+export type MdLinkHandler = (href: string, kind: "repo" | "web") => void;
+
+function linkNode(text: string, href: string, onLink?: MdLinkHandler): HTMLElement {
+  const kind = linkKind(href);
+  if (!onLink || !kind) return h("span", { class: "md-link-text", title: href }, ...inlineMd(text));
+  // No href: the webview never navigates; a repo file opens in Colony, a web address is copied.
+  const a = h("a", { class: "md-link", role: "link", tabindex: "0", title: kind === "web" ? `${href}\nClick to copy the address` : href }, ...inlineMd(text));
+  a.addEventListener("click", () => onLink(href, kind));
+  a.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") onLink(href, kind);
+  });
+  return a;
+}
+
+/** Inline markdown subset (code, bold, links) as DOM nodes: text nodes and h() elements only. */
+export function inlineMd(text: string, onLink?: MdLinkHandler): Node[] {
+  return parseInline(text).map((x) =>
+    x.t === "code" ? h("code", {}, x.text) : x.t === "strong" ? h("strong", {}, ...inlineMd(x.text, onLink)) : x.t === "link" ? linkNode(x.text, x.href, onLink) : document.createTextNode(x.text),
+  );
 }
 
 /** The same text without the inline markers, for a `title` tooltip. */
 export function plainMd(text: string): string {
-  return text.replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/`([^`\n]+)`/g, "$1");
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1");
 }
 
-/** Prose block: paragraphs, bullet lists, headings, fenced code. */
-export function prose(text: string): HTMLElement {
-  const root = h("div", { class: "prose" });
-  const lines = text.replace(/\r/g, "").split("\n");
-  let para: string[] = [];
-  let list: HTMLElement | null = null;
-  const flushPara = () => {
-    if (para.length) root.append(h("p", {}, ...inlineMd(para.join(" "))));
-    para = [];
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("```")) {
-      flushPara();
-      list = null;
-      const body: string[] = [];
-      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) body.push(lines[i]);
-      root.append(h("pre", {}, body.join("\n")));
-      continue;
+/** Nested ul / ol from the flat list items (depth from the indentation). */
+function listEl(items: ListItem[], onLink?: MdLinkHandler): HTMLElement {
+  // An ordered list starts at its first item's number (a list may start at 3).
+  const make = (it: ListItem) => (it.ordered ? h("ol", it.n && it.n !== 1 ? { start: String(it.n) } : {}) : h("ul"));
+  const root = make(items[0] ?? { depth: 0, ordered: false, text: "" });
+  const stack: { depth: number; el: HTMLElement }[] = [{ depth: items[0]?.depth ?? 0, el: root }];
+  for (const it of items) {
+    while (stack.length > 1 && stack[stack.length - 1].depth > it.depth) stack.pop();
+    const top = stack[stack.length - 1];
+    if (it.depth > top.depth) {
+      const sub = make(it);
+      (top.el.lastElementChild ?? top.el).append(sub);
+      stack.push({ depth: it.depth, el: sub });
     }
-    const bullet = /^\s*(?:[-*]|\d+\.)\s+(.*)$/.exec(line);
-    if (bullet) {
-      flushPara();
-      if (!list) {
-        list = h("ul");
-        root.append(list);
-      }
-      list.append(h("li", {}, ...inlineMd(bullet[1])));
-      continue;
-    }
-    const head = /^#{1,4}\s+(.*)$/.exec(line);
-    if (head) {
-      flushPara();
-      list = null;
-      root.append(h("h4", {}, ...inlineMd(head[1])));
-      continue;
-    }
-    if (!line.trim()) {
-      flushPara();
-      list = null;
-      continue;
-    }
-    list = null;
-    para.push(line.trim());
+    stack[stack.length - 1].el.append(h("li", {}, ...inlineMd(it.text, onLink)));
   }
-  flushPara();
   return root;
+}
+
+function tableEl(head: string[], align: Align[], rows: string[][], onLink?: MdLinkHandler): HTMLElement {
+  const cell = (tag: "th" | "td", text: string, k: number) => h(tag, align[k] ? { class: `al-${align[k]}` } : {}, ...inlineMd(text, onLink));
+  return h(
+    "div",
+    { class: "md-table-wrap" },
+    h("table", { class: "md-table" }, h("thead", {}, h("tr", {}, ...head.map((c, k) => cell("th", c, k)))), h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c, k) => cell("td", c, k)))))),
+  );
+}
+
+/** Render parsed blocks. `doc`: a document (plan, HANDOFF) keeps its heading levels; a
+ *  transcript shows every heading as a small h4. */
+export function renderBlocks(blocks: Block[], opts: { doc?: boolean; onLink?: MdLinkHandler } = {}): HTMLElement[] {
+  const { onLink } = opts;
+  return blocks.map((b) => {
+    switch (b.t) {
+      case "heading":
+        return h(opts.doc ? (`h${b.level}` as "h1") : "h4", {}, ...inlineMd(b.text, onLink));
+      case "para":
+        return h("p", {}, ...inlineMd(b.text, onLink));
+      case "list":
+        return listEl(b.items, onLink);
+      case "code":
+        return h("pre", b.lang ? { "data-lang": b.lang } : {}, b.text);
+      case "table":
+        return tableEl(b.head, b.align, b.rows, onLink);
+      case "quote":
+        return h("blockquote", {}, ...inlineMd(b.text, onLink));
+      case "rule":
+        return h("hr");
+    }
+  });
+}
+
+/** Prose block: paragraphs, lists, headings, tables, quotes, fenced code (./markdown.ts). */
+export function prose(text: string, opts: { doc?: boolean; onLink?: MdLinkHandler } = {}): HTMLElement {
+  return h("div", { class: "prose" }, ...renderBlocks(parseBlocks(text), opts));
 }
 
 function toolArg(input: Ev | undefined): string {

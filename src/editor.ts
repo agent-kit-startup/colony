@@ -59,6 +59,18 @@ export class Editors {
     return [...this.docs.keys()];
   }
 
+  /** Changes with every edit of the file's model, and with a new model for the same path
+   *  ("": not open). */
+  version(path: string): string {
+    const m = this.docs.get(path)?.model;
+    return m ? `${m.id}:${m.getAlternativeVersionId()}` : "";
+  }
+
+  /** The file's current text in its model (unsaved edits included). */
+  text(path: string): string | null {
+    return this.docs.get(path)?.model.getValue() ?? null;
+  }
+
   isDirty(path: string): boolean {
     const d = this.docs.get(path);
     return !!d && d.model.getAlternativeVersionId() !== d.saved;

@@ -673,6 +673,50 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .prose h4 { margin: 8px 0 2px; font-size: 13px; }
 .prose code { font-family: var(--mc-font-mono); font-size: 12px; background: var(--bg-card-hover); padding: 0 4px; border-radius: var(--mc-radius-sm); }
 .prose pre { font-family: var(--mc-font-mono); font-size: 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 8px; overflow: auto; margin: 6px 0; }
+.prose ol { margin: 4px 0; padding-left: 24px; }
+.prose li > ul, .prose li > ol { margin: 2px 0; }
+.prose hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+/* A quote: dimmer text, no bar at its side. */
+.prose blockquote { margin: 6px 0; padding: 0 12px; color: var(--text-secondary); font-style: italic; }
+.md-table-wrap { overflow-x: auto; margin: 8px 0; }
+.md-table { border-collapse: collapse; font-size: 12.5px; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md-table th { color: var(--text-primary); font-weight: 600; background: var(--bg-secondary); }
+.md-table .al-center { text-align: center; }
+.md-table .al-right { text-align: right; }
+.md-link { color: var(--blue); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.md-link:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.md-link-text { text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* ---- Markdown file tabs: Preview | Editor (plans and HANDOFF open rendered) ------------ */
+#view-editor { display: flex; flex-direction: column; }
+#monaco-host { flex: 1; min-height: 0; position: relative; }
+#doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+#doc-bar button { padding: 2px 10px; background: transparent; }
+/* The shown mode: its border colour only. */
+#doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
+#doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.md-doc { max-width: 980px; margin: 0 auto; padding: 16px 24px 40px; }
+.md-doc.prose, .md-doc .prose { font-size: 14px; }
+.md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4, .md-doc h5, .md-doc h6 { margin: 18px 0 6px; line-height: 1.3; color: var(--text-primary); }
+.md-doc h1 { font-size: 22px; }
+.md-doc h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.md-doc h3 { font-size: 15.5px; }
+.md-doc h4, .md-doc h5, .md-doc h6 { font-size: 14px; }
+.md-doc .prose li { margin: 3px 0; }
+.md-todos { margin: 0 0 12px; }
+.md-todos-head { display: flex; gap: 10px; align-items: baseline; }
+.md-todos .md-table { width: 100%; }
+.md-todos td:nth-child(1), .md-todos td:nth-child(2) { white-space: nowrap; }
+.md-todo-content { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.md-status { display: inline-block; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); }
+.md-status.st-completed { color: var(--green); }
+/* The to-do in progress: its label's border colour only. */
+.md-status.st-in_progress { color: var(--text-primary); border-color: var(--blue); }
+.md-status.st-cancelled { text-decoration: line-through; }
+.md-front { margin: 0 0 12px; font-size: 12px; color: var(--text-secondary); }
+.md-front > summary { cursor: pointer; }
+.md-front pre { font-family: var(--mc-font-mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 8px; }
 .tr-tool, .tr-think, .tr-stderr { border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); background: var(--bg-card); font-size: 12px; }
 .tr-tool > summary, .tr-think > summary, .tr-stderr > summary { cursor: pointer; padding: 4px 8px; display: flex; gap: 8px; align-items: baseline; min-width: 0; list-style: none; }
 .tr-tool > summary::before, .tr-think > summary::before, .tr-stderr > summary::before { content: "▸"; color: var(--text-secondary); font-size: 10px; }
