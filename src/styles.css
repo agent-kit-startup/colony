@@ -52,7 +52,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 
 /* Panels: the Explorer (#side, its own splitter) and the terminal panel (#bottom, docked
    at the bottom, the top or the side by data-dock; #resizer is its splitter). A hidden
-   panel's tracks collapse to 0. */
+   Explorer's tracks collapse to 0; a closed terminal drawer keeps its bar (no-bottom). */
 #shell {
   --rail-w: 68px;
   --side-w: 240px;
@@ -93,14 +93,19 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 /* Icons only (ui.layout.railLabels false): a narrower rail; each item keeps its tooltip,
    and its label stays the accessible name (visually hidden, with the badge counts). */
 #shell.rail-icons { --rail-w: 48px; }
-#shell.no-bottom { --th: 0px; --tw: 0px; --tr: 0px; }
-#shell.no-bottom #bottom, #shell.no-bottom #resizer { display: none; }
+/* Closed drawer: its terminals and splitter go, its bar stays (shell tabs, +, dock, show):
+   the track sizes to the bar, a row at the bottom or the top, a column at the side. */
+#shell.no-bottom { --th: auto; --tw: auto; --tr: 0px; }
+#shell.no-bottom #terms, #shell.no-bottom #resizer { display: none; }
+/* No folder open: no shells to control, so no bar either (the welcome screen). */
+#shell.no-folder.no-bottom #bottom { display: none; }
 #shell.no-side { --sw: 0px; --sr: 0px; }
 #shell.no-side #side, #shell.no-side #side-resizer { display: none; }
 @media (max-width: 1100px) { #shell { --side-w: 190px; } }
 
 /* No overflow clipping: the folder path is the one flexible field and the buttons keep
-   their size (the agent actions and the Plans dropdown live here, Terminal and More in the rail). */
+   their size (the agent actions and the Plans dropdown live here, More in the rail, the
+   terminal controls in the drawer bar). */
 #top { grid-area: top; display: flex; white-space: nowrap; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); min-width: 0; }
 #top > button { flex: none; }
 /* The folder path gives way first; if the agent actions still do not fit, they scroll
@@ -232,30 +237,38 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 #bottom { grid-area: bottom; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-primary); }
 /* Where the terminal panel sits: three buttons at the right of its tab strip; the current
    place has the active border only. */
-/* The dock buttons and Hide stay in view when the tab strip scrolls (the narrow side dock). */
+/* The dock buttons and the show / hide toggle stay in view when the tab strip scrolls (the
+   narrow side dock). */
 .drawer-ctl { display: inline-flex; align-items: center; margin-left: auto; flex: none; position: sticky; right: 0; background: var(--bg-secondary); }
 .dock-group { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; flex: none; }
-/* Hide: a chevron toward the edge the drawer folds into. */
-.term-hide { display: inline-flex; align-items: center; padding: 2px 5px; margin-right: 6px; background: transparent; border-color: transparent; color: var(--text-muted); }
-.term-hide:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
-.term-hide svg { width: 14px; height: 14px; }
-#shell[data-dock="top"] .term-hide svg { transform: rotate(180deg); }
-#shell[data-dock="side"] .term-hide svg { transform: rotate(-90deg); }
-/* The centre terminal tabs, listed after the shells and the + (links, not drawer tabs):
-   bordered chips; the one shown in the centre has the active border only. */
-.term-linked { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px 0 0; flex: none; }
-.term-linked::before { content: ""; align-self: stretch; width: 1px; margin: 6px 4px 6px 0; background: var(--border); }
-.term-link { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: transparent; border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); color: var(--text-secondary); white-space: nowrap; flex: none; }
-.term-link:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
-.term-link.current { border-color: var(--blue); color: var(--text-primary); }
-.term-link.exited { opacity: 0.6; }
-.term-link .lbl { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
-.term-link .badge { margin-left: -2px; }
+/* Show / hide: a chevron toward the edge the drawer folds into while it is open, away
+   from it while it is closed. */
+.term-toggle { display: inline-flex; align-items: center; padding: 2px 5px; margin-right: 6px; background: transparent; border-color: transparent; color: var(--text-muted); }
+.term-toggle:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
+.term-toggle svg { width: 14px; height: 14px; }
+#shell[data-dock="top"] .term-toggle svg { transform: rotate(180deg); }
+#shell[data-dock="side"] .term-toggle svg { transform: rotate(-90deg); }
+#shell.no-bottom .term-toggle svg { transform: rotate(180deg); }
+#shell.no-bottom[data-dock="top"] .term-toggle svg { transform: none; }
+#shell.no-bottom[data-dock="side"] .term-toggle svg { transform: rotate(90deg); }
 /* A press always lands on the button itself: its children may be replaced mid-click. */
-.term-link > *, .rail-item .rail-icon, .rail-item .lbl { pointer-events: none; }
-/* At the side the strip is narrow: it wraps, so every terminal stays listed and in view. */
+.rail-item .rail-icon, .rail-item .lbl { pointer-events: none; }
+/* At the side the strip is narrow: it wraps, so every shell stays listed and in view. */
 #shell[data-dock="side"] #term-tabs { flex-wrap: wrap; row-gap: 2px; padding-bottom: 2px; }
-#shell[data-dock="side"] .term-linked { flex-wrap: wrap; row-gap: 4px; min-height: 30px; }
+/* The closed bar's edge toward the centre (the splitter is gone with the terminals). */
+#shell.no-bottom #bottom { border-top: 1px solid var(--border); }
+#shell.no-bottom #term-tabs { border-bottom: 0; }
+#shell.no-bottom[data-dock="top"] #bottom { border-top: 0; border-bottom: 1px solid var(--border); }
+#shell.no-bottom[data-dock="side"] #bottom { border-top: 0; border-left: 1px solid var(--border); }
+/* Closed at the side: a narrow column, controls first, then the shell tabs (vertical
+   labels) and +. */
+#shell.no-bottom[data-dock="side"] #term-tabs { flex: 1; flex-direction: column; flex-wrap: nowrap; align-items: stretch; overflow-x: hidden; overflow-y: auto; border-bottom: 0; padding: 4px 2px; gap: 2px; }
+#shell.no-bottom[data-dock="side"] #term-tabs > .tab { writing-mode: vertical-rl; padding: 10px 5px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); }
+#shell.no-bottom[data-dock="side"] #term-tabs > .tab.active { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
+#shell.no-bottom[data-dock="side"] #term-tabs > .tab-add { padding: 6px 0; }
+#shell.no-bottom[data-dock="side"] .drawer-ctl { order: -1; flex-direction: column-reverse; margin: 0 0 4px; position: static; gap: 2px; }
+#shell.no-bottom[data-dock="side"] .dock-group { flex-direction: column; padding: 0; }
+#shell.no-bottom[data-dock="side"] .term-toggle { margin: 0; justify-content: center; }
 .dock-group button { display: inline-flex; align-items: center; padding: 2px 5px; background: transparent; border-color: transparent; color: var(--text-muted); }
 .dock-group button:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
 .dock-group button.on { border-color: var(--border-active); color: var(--text-primary); }

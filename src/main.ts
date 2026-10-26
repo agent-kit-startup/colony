@@ -1,11 +1,12 @@
 // Colony window: the cockpit. A vertical rail holds the primary views (Mission, Inbox,
-// Review, Git, Terminal, Pipelines) and More (settings: skin, title bar); the other views
+// Review, Git, Pipelines) and More (settings: skin, title bar); the other views
 // (Plans, Flight Log, Activity) and every command live in the menu bar (src/menu.json). The
 // top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a project,
 // a Plans dropdown) next to Go to file and Open in editor; Mission keeps the plan's own
 // documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
-// (a fallback under View). Explorer next to the rail, shell terminals at the bottom.
+// (a fallback under View). Explorer next to the rail; the terminal drawer holds the user's
+// shells and every terminal control, and its bar stays on screen while the drawer is closed.
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
@@ -37,7 +38,6 @@ import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
-import { linkedTerms } from "./termlist";
 import { NavHistory } from "./nav-history";
 import { TermView } from "./termview";
 import { AgentTab } from "./transcript";
@@ -99,7 +99,7 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="term-linked" role="group" aria-label="Terminals in the centre tabs" hidden></span><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-hide" data-act="hide-terminal" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-toggle" data-act="toggle-terminal" aria-controls="terms" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
@@ -164,10 +164,10 @@ let activeTab = "mission";
 const nav = new NavHistory();
 
 /**
- * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git, Terminal and
- * Pipelines; the other views in the View menu, settings under More). A rail item shows one
- * view, or a group of views with a switch at the head of the tab strip; Terminal toggles
- * the bottom panel.
+ * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git and Pipelines; the
+ * other views in the View menu, settings under More). A rail item shows one view, or a group
+ * of views with a switch at the head of the tab strip. The terminal drawer is not a rail
+ * item: its own bar (always on screen) shows and hides it (ADR 2026-10-24, amend 2026-10-26).
  */
 interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[] }
 const RAIL: RailItem[] = [
@@ -175,11 +175,14 @@ const RAIL: RailItem[] = [
   { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+2)", views: ["inbox"] },
   { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+3)", views: ["review"] },
   { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push (Ctrl+4)", views: ["git"] },
-  { id: "terminal", label: "Terminal", icon: "terminals", tip: "Terminal drawer: show or hide it. It lists every live terminal: your shells, then the agent CLIs and queue runners open in the centre tabs (Ctrl+5 or Ctrl+`)", views: [] },
   { id: "pipelines", label: "Pipelines", icon: "devops", tip: "Pipelines: the run-plan-all queue and the CI/CD runs of this branch (Ctrl+6)", views: ["queue", "cicd"] },
 ];
 /** Views off the rail (View menu, palette), after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
 const OFF_RAIL_VIEWS = ["plans", "flight", "activity"];
+/** Ctrl+1..9: the rail items, the terminal drawer's toggle in slot 5 (where the rail's
+ *  Terminal item used to be, so the keys did not move), then the off-rail views. The rail
+ *  tooltips name these keys (cargo test terminal_drawer checks both). */
+const CTRL_DIGITS = ["mission", "inbox", "review", "git", "terminal", "pipelines", "plans", "flight", "activity"];
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
@@ -231,15 +234,11 @@ function renderRail() {
     railEls.set("more", more);
     rail.replaceChildren(...items, h("span", { class: "spacer" }), more);
   }
-  const terminalOn = !shell.classList.contains("no-bottom");
   for (const r of RAIL) {
     const el = railEls.get(r.id)!;
-    const on = r.id === "terminal" ? terminalOn : r.views.includes(activeTab);
-    // Terminal is a toggle (the drawer), not a view: "on", never "active".
-    el.classList.toggle("on", r.id === "terminal" && on);
-    el.classList.toggle("active", r.id !== "terminal" && on);
-    if (r.id === "terminal") el.setAttribute("aria-pressed", String(on));
-    else el.setAttribute("aria-current", on ? "page" : "false");
+    const on = r.views.includes(activeTab);
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-current", on ? "page" : "false");
     // Badges are replaced only when they change (a press on one that is replaced is lost too).
     const b = r.views.flatMap((v) => badges(tabs.get(v)));
     const sig = b.map((x) => `${x.className}|${x.textContent}|${x.title}`).join("/");
@@ -253,7 +252,6 @@ function renderRail() {
 }
 
 function openRail(r: RailItem) {
-  if (r.id === "terminal") return toggleTerminal();
   showTab(lastInGroup.get(r.id) ?? r.views[0]);
 }
 
@@ -262,7 +260,6 @@ function openRail(r: RailItem) {
 function renderTabs() {
   renderRail();
   renderTopActions();
-  renderDrawerLinks();
   const bar = $("tabs");
   const rest = $("tabs-rest");
   // No folder: no strip. With one, the strip stays (Back / Forward head it).
@@ -365,13 +362,6 @@ function navigate(step: "back" | "forward") {
   if (id) showTab(id);
 }
 
-/** The terminal drawer lists the centre terminal tabs after its own shells (links: a click
- *  shows the centre tab). Driver runs have no PTY and are not listed. */
-function renderDrawerLinks() {
-  const list = workspace ? linkedTerms(order, (id) => tabs.get(id), (id) => centerTerms.get(id), (id) => launches.termGate(id), activeTab) : [];
-  terminals.setLinked(list, showTab);
-}
-
 // ---- editor ----------------------------------------------------------------------------
 const editors = new Editors($("view-editor"), () => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (p) => void openInEditor(p));
@@ -453,25 +443,63 @@ async function openSettings() {
 }
 $("btn-settings").addEventListener("click", () => void openSettings());
 
-// ---- terminals (bottom) ----------------------------------------------------------------
+// ---- terminals (the drawer) -----------------------------------------------------------
+// The drawer holds the user's shells only; the interactive vendor CLIs and the queue runners
+// stay centre tabs (context strip, gate badge, Agent runs) and are not repeated here. Its bar
+// (shell tabs, +, dock, show / hide) stays on screen while the drawer is closed: a shell tab
+// or the toggle opens it again.
 const terminals = new Terminals($("term-tabs"), $("terms"), status);
-$("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => void terminals.create());
+$("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => runAction("new-terminal"));
+// A shell tab clicked while the drawer is closed opens it (capture: before the tab shows its
+// shell, so that shell gets the focus). Its close button only closes it.
+$("term-tabs").addEventListener(
+  "click",
+  (ev) => {
+    const t = ev.target as HTMLElement;
+    if (shell.classList.contains("no-bottom") && t.closest(".tab") && !t.closest(".tab-close")) toggleTerminal(true);
+  },
+  true,
+);
 
-function toggleTerminal(force?: boolean) {
+/** Show or hide the drawer; true when showing it started its first shell. */
+function toggleTerminal(force?: boolean): boolean {
   const show = force ?? shell.classList.contains("no-bottom");
   shell.classList.toggle("no-bottom", !show);
-  renderRail();
+  renderDrawerToggle();
+  let spawned = false;
   if (show) {
-    if (workspace && terminals.count === 0) void terminals.create();
+    if (workspace && terminals.count === 0) {
+      void terminals.create();
+      spawned = true;
+    }
     requestAnimationFrame(() => terminals.focus());
-  } else if ($("bottom").contains(document.activeElement)) {
-    // Keys must not go on to a hidden shell (and Ctrl+` must show the drawer again).
+  } else if ($("terms").contains(document.activeElement)) {
+    // Keys must not go on to a hidden shell (and Ctrl+` must show the drawer again). The
+    // bar stays on screen, so a press on its toggle keeps the focus there.
     const centre = centerTerms.get(activeTab);
     if (centre) centre.focus();
     else (document.activeElement as HTMLElement).blur();
   }
   relayout();
   layoutChanged();
+  return spawned;
+}
+
+/** What the drawer bar lists (COLONY_SMOKE): its shell tabs, and anything in it that names a
+ *  centre tab (none: the centre terminal tabs are not repeated there). */
+function drawerListing() {
+  const bar = $("term-tabs");
+  return { shells: bar.querySelectorAll(":scope > .tab").length, named: [...bar.querySelectorAll<HTMLElement>("[data-tab]")].map((el) => el.dataset.tab ?? "") };
+}
+
+/** The bar's toggle: Hide while the drawer is open, Show while it is closed. */
+function renderDrawerToggle() {
+  const on = !shell.classList.contains("no-bottom");
+  const b = $("term-tabs").querySelector<HTMLButtonElement>(".term-toggle")!;
+  const label = `${on ? "Hide" : "Show"} the terminal drawer`;
+  b.title = `${label} (Ctrl+5 or Ctrl+\`)`;
+  b.setAttribute("aria-label", label);
+  b.setAttribute("aria-expanded", String(on));
 }
 
 // ---- panels: the Explorer and the terminal dock ---------------------------------------
@@ -499,16 +527,14 @@ function renderDock() {
   }
 }
 
-/** Put the terminal panel at the bottom, the top or the side (and show it). */
+/** Put the terminal panel at the bottom, the top or the side. A closed drawer stays closed:
+ *  its bar moves there (the toggle or a shell tab opens it). */
 function setDock(d: Dock) {
   shell.dataset.dock = d;
   renderDock();
-  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
-  else {
-    relayout();
-    layoutChanged();
-  }
-  status(`Terminal ${DOCK_LABEL[d]}`);
+  relayout();
+  layoutChanged();
+  status(`Terminal ${DOCK_LABEL[d]}${shell.classList.contains("no-bottom") ? " (closed)" : ""}`);
 }
 
 function toggleExplorer(force?: boolean) {
@@ -571,6 +597,7 @@ function applyLayout(l: LayoutSettings) {
   size("--bottom-h", l.terminalHeight);
   size("--term-w", l.terminalWidth);
   renderDock();
+  renderDrawerToggle();
   renderRailMenu();
   renderRail();
   relayout();
@@ -594,9 +621,9 @@ $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
   if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
-// Hide, next to the dock buttons: the same action as the rail's Terminal and View > Show or
-// hide the terminal (the title bar stays native under Hyprland).
-$("term-tabs").querySelector(".term-hide")!.addEventListener("click", () => runAction("terminal"));
+// Show / hide, next to the dock buttons: the same action as View > Show or hide the terminal,
+// Ctrl+5 and Ctrl+` (the title bar stays native under Hyprland).
+$("term-tabs").querySelector(".term-toggle")!.addEventListener("click", () => runAction("terminal"));
 
 /** A splitter drag: `size(dx, dy)` sets the panel size from the pointer offset. */
 function splitter(el: HTMLElement, size: (dx: number, dy: number) => void) {
@@ -1158,7 +1185,8 @@ const ACTIONS: Record<string, () => unknown> = {
   "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
   "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
   "new-terminal": () => {
-    toggleTerminal(true);
+    // Opening an empty drawer starts its first shell: that one is the new terminal.
+    if (shell.classList.contains("no-bottom") && toggleTerminal(true)) return;
     return terminals.create();
   },
   engine: () => showEngine(),
@@ -1623,10 +1651,12 @@ window.addEventListener(
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
     else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
-      // Ctrl+1..6: the rail (5 toggles the terminal); Ctrl+7..9: Plans, Flight Log, Activity.
-      const n = Number(key) - 1;
-      if (n < RAIL.length) openRail(RAIL[n]);
-      else showTab(OFF_RAIL_VIEWS[n - RAIL.length]);
+      // Ctrl+1..6: the rail, 5 toggles the terminal drawer; Ctrl+7..9: Plans, Flight Log, Activity.
+      const id = CTRL_DIGITS[Number(key) - 1];
+      const r = RAIL.find((x) => x.id === id);
+      if (id === "terminal") toggleTerminal();
+      else if (r) openRail(r);
+      else if (id) showTab(id);
     }
     else handled = false;
     if (handled) {
@@ -1878,6 +1908,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const sz = terminals.activeSize();
       return !!sz?.fits && sz.fits.cols === sz.cols && sz.fits.rows === sz.rows;
     };
+    // A dock button moves a closed drawer's bar without opening it: open it first.
+    toggleTerminal(true);
     const docked: Record<string, { placed: boolean; fitted: boolean; button: boolean; size: unknown }> = {};
     showTab("mission");
     for (const d of ["top", "side", "bottom"] as const) {
@@ -1911,26 +1943,29 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(500);
     const termH2 = box("bottom").height;
     await log("dock-terminal", Object.values(docked).every((x) => x.placed && x.fitted && x.button) && explorerHidden && explorerBack && Math.abs(sideW2 - sideW - 60) <= 1 && Math.abs(termH2 - termH - 50) <= 1 && fitted(), { ...docked, explorerHidden, explorerBack, explorerWidth: `${sideW} -> ${sideW2}`, terminalHeight: `${termH} -> ${termH2}`, fittedAfterDrag: fitted() });
-    // Terminal drawer: the rail's Terminal and the drawer's Hide button hide it in every dock,
-    // with the Explorer shown or hidden, and the centre takes the freed space; the rail item
-    // shows it again. The rail buttons survive the re-render that every snapshot, run and
-    // launch change makes (a replaced button lost a click pressed on the old one).
-    const railTerm = () => $("rail").querySelector<HTMLButtonElement>('[data-tab="terminal"]');
-    const railBtn = railTerm();
+    // Terminal drawer: no rail Terminal item; the bar's toggle hides the drawer in every dock,
+    // with the Explorer shown or hidden. Closed, the bar (shell tabs, +, dock buttons, toggle)
+    // stays on screen and the centre takes the rest; the toggle shows it again, and so does a
+    // shell tab clicked while it is closed. The toggle survives the re-render that every
+    // snapshot, run and launch change makes (a replaced button lost a click pressed on it).
+    const toggleBtn = () => $("term-tabs").querySelector<HTMLButtonElement>(".drawer-ctl .term-toggle");
+    const tBtn = toggleBtn();
     renderTabs();
     renderTabs();
-    const drawer: Record<string, unknown> = { railStable: !!railBtn && railBtn.isConnected && railTerm() === railBtn };
-    const hideBtn = $("term-tabs").querySelector<HTMLButtonElement>(".drawer-ctl .term-hide");
-    const freed = (d: Dock) => {
+    const drawer: Record<string, unknown> = { noRailItem: !$("rail").querySelector('[data-tab="terminal"]'), toggleStable: !!tBtn && tBtn.isConnected && toggleBtn() === tBtn };
+    const collapsed = (d: Dock) => {
       const c = box("center");
-      const edge = d === "side" ? Math.abs(c.right - box("status").right) : d === "top" ? Math.abs(c.top - box("top").bottom) : Math.abs(c.bottom - box("status").top);
-      return box("bottom").width === 0 && box("resizer").width === 0 && edge <= 1;
+      const b = box("bottom");
+      const bar = box("term-tabs");
+      const edge = d === "side" ? Math.abs(c.right - b.left) : d === "top" ? Math.abs(c.top - b.bottom) : Math.abs(c.bottom - b.top);
+      const thin = d === "side" ? b.width > 16 && b.width <= 56 : b.height > 16 && b.height <= 44;
+      return box("terms").width === 0 && box("resizer").width === 0 && bar.width > 0 && bar.height > 0 && thin && edge <= 1 && !!toggleBtn()?.offsetParent;
     };
     const flip = async (click: () => void, want: boolean) => {
       click();
       const ok = await until(() => termOn() === want, 2000);
       await wait(250);
-      return ok && railTerm()?.getAttribute("aria-pressed") === String(want);
+      return ok && toggleBtn()?.getAttribute("aria-expanded") === String(want);
     };
     for (const withExplorer of [true, false]) {
       toggleExplorer(withExplorer);
@@ -1938,23 +1973,23 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         await api.smokeMenuClick(`dock:${d}`);
         await until(() => dock() === d, 2000);
         await wait(300);
-        const railHides = await flip(() => railTerm()?.click(), false);
-        const railFreed = freed(d);
-        if (withExplorer && d !== "top") await shot(`drawer-hidden-${d}`);
-        const railShows = await flip(() => railTerm()?.click(), true);
-        const shown = box("bottom").width > 100 && box("bottom").height > 60;
-        const hideHides = await flip(() => hideBtn?.click(), false);
-        const hideFreed = freed(d);
-        const shownAgain = await flip(() => railTerm()?.click(), true);
-        drawer[`${d}${withExplorer ? "" : " (no Explorer)"}`] = { railHides, railFreed, railShows, shown, hideHides, hideFreed, shownAgain };
+        const hides = await flip(() => toggleBtn()?.click(), false);
+        const barStays = collapsed(d);
+        if (withExplorer) await shot(`drawer-closed-${d}`);
+        const shows = await flip(() => toggleBtn()?.click(), true);
+        const shown = box("terms").width > 100 && box("terms").height > 40;
+        await flip(() => toggleBtn()?.click(), false);
+        const shellTab = $("term-tabs").querySelector<HTMLElement>(":scope > .tab");
+        const tabShows = await flip(() => shellTab?.click(), true);
+        drawer[`${d}${withExplorer ? "" : " (no Explorer)"}`] = { hides, barStays, shows, shown, tabShows, fitted: fitted() };
       }
     }
     toggleExplorer(true);
     await api.smokeMenuClick("dock:bottom");
     await until(() => dock() === "bottom" && termOn(), 2000);
     await wait(300);
-    const drawerOk = drawer.railStable === true && Object.values(drawer).every((v) => v === true || (typeof v === "object" && !!v && Object.values(v).every((x) => x === true)));
-    await log("terminal-drawer-toggle", drawerOk && !!hideBtn && !$("top").contains(hideBtn), drawer);
+    const drawerOk = drawer.noRailItem === true && drawer.toggleStable === true && Object.values(drawer).every((v) => v === true || (typeof v === "object" && !!v && Object.values(v).every((x) => x === true)));
+    await log("terminal-drawer-toggle", drawerOk && !!tBtn && !$("top").contains(tBtn), drawer);
     // Layout persistence: the panel changes above are in settings.json (debounced save);
     // then the window is reset to the defaults and the layout read back from the file, as
     // the next start does (layout-boot checks a real restart).
@@ -2408,9 +2443,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => !!qView?.exited, 30000);
       const qOut = (qView?.output ?? "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
       await log("queue-tab", !!qBtn && qTab.startsWith("term:") && confirmed.includes("run-plan-all") && qView?.exitCode === 0 && qOut.length > 0, { tab: tabs.get(qTab)?.tip, exit: qView?.exitCode, out: qOut.slice(0, 200) });
-      // The terminal drawer lists the queue terminal (a centre tab), dimmed once it exited.
-      const qLink = $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${qTab}"]`);
-      await log("terminal-drawer-queue", !!qLink && qLink.classList.contains("exited") && !$("term-tabs").querySelector<HTMLElement>(".term-linked")?.hidden, { listed: terminals.linkedIds(), exited: qLink?.classList.contains("exited") ?? null });
+      // The queue terminal stays a centre tab (dimmed once it exited); the drawer lists the
+      // user's shells only and does not repeat it.
+      const qListed = drawerListing();
+      const qCentre = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${qTab}"]`);
+      await log("terminal-drawer-queue", !qListed.named.length && qListed.shells === terminals.count && !!qCentre?.classList.contains("exited"), { ...qListed, centreTab: qCentre?.className ?? null });
     }
     smokeDryRun = false;
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
@@ -2429,26 +2466,22 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => (iView?.output ?? "").includes("fake claude ready"), 8000);
       const iProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
       await shot("interactive");
-      // The terminal drawer lists the interactive tab after its shells (not the driver run
-      // tab: no PTY); its link shows the centre tab; closing the tab drops the link.
-      const drawerKids = [...$("term-tabs").children];
-      const linkedAfterShells = drawerKids.indexOf($("term-tabs").querySelector(".tab-add")!) < drawerKids.indexOf($("term-tabs").querySelector(".term-linked")!) && terminals.count > 0;
-      const iListed = terminals.linkedIds();
-      showTab("mission");
-      $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${iTab}"]`)?.click();
-      const iFocused = activeTab === iTab && !!$("term-tabs").querySelector(`.term-link.current[data-tab="${iTab}"]`);
+      // Mixed sessions: the interactive CLI is a centre tab next to the driver run tab, the
+      // drawer holds the user's shells only (no repeat of the centre terminal tabs).
+      const iListed = drawerListing();
+      const iCentre = activeTab === iTab && !!$("tabs").querySelector(`.tab.active[data-tab="${iTab}"]`);
       await shot("terminal-drawer");
       await closeTab(iTab);
-      const iDropped = !terminals.linkedIds().includes(iTab);
-      const listOk = iListed.includes(iTab) && iListed.every((id) => centerTerms.has(id)) && !iListed.includes(`run:${run.id}`) && tabs.has(`run:${run.id}`) && linkedAfterShells && iFocused && iDropped;
+      const listOk = !iListed.named.length && iListed.shells === terminals.count && terminals.count > 0 && iCentre && tabs.has(`run:${run.id}`) && !centerTerms.has(iTab);
       confirmed = "";
       const p = (await host.interactive(`/run-plan ${planFile}`, "smoke")) as { id: string; view: TermView } | undefined;
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
       const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
-      // Its drawer link carries the gate badge once the tab shows its gate.
-      if (p) await until(() => !!$("term-tabs").querySelector(`.term-link[data-tab="${p.id}"] .badge.warn`), 4000);
-      const pLink = p ? $("term-tabs").querySelector<HTMLElement>(`.term-linked .term-link[data-tab="${p.id}"]`) : null;
-      await log("terminal-drawer-list", listOk && pLink?.querySelector(".badge.warn")?.textContent === "gate", { listed: iListed, linkedAfterShells, focused: iFocused, dropped: iDropped, gateLink: pLink?.textContent ?? null, runTab: `run:${run.id}` });
+      // Its gate badge sits on its centre tab; the drawer still lists the shells only.
+      if (p) await until(() => !!$("tabs").querySelector(`.tab[data-tab="${p.id}"] .badge.warn`), 4000);
+      const pBadge = p ? $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"] .badge.warn`) : null;
+      const pListed = drawerListing();
+      await log("terminal-drawer-list", listOk && pBadge?.textContent === "gate" && !pListed.named.length && pListed.shells === terminals.count, { withInteractive: iListed, withGateTab: pListed, centreTab: iCentre, gateBadge: pBadge?.textContent ?? null, runTab: `run:${run.id}` });
       // A terminal tab that printed a HITL_GATE line: gate marker on its tab, a card in the
       // Inbox's Live gates, the title counter and a (recorded) notification.
       if (p) {
