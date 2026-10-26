@@ -19,6 +19,7 @@ import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, type CockpitHost, Fligh
 import { ContextStrip } from "./contextstrip";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
+import { closePlanMenu } from "./planmenu";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
@@ -1113,6 +1114,7 @@ menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd"
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
   setPlansMenu(false);
+  closePlanMenu();
   const r = anchor.getBoundingClientRect();
   // Next to the rail, on the window's side of it.
   menu.style.left = railPosition() === "right" ? "auto" : `${r.right + 6}px`;
@@ -1175,6 +1177,7 @@ function setPlansMenu(open: boolean, focus = false) {
   plansBtn.setAttribute("aria-expanded", String(open));
   if (!open) return;
   menu.hidden = true;
+  closePlanMenu();
   const r = plansBtn.getBoundingClientRect();
   plansMenu.style.top = `${r.bottom + 4}px`;
   plansMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
@@ -1192,6 +1195,12 @@ $("top-actions").addEventListener("click", (ev) => {
 // Closed by any click outside, a resize or the window losing focus (a native menu popup
 // takes it), and by Escape wherever the focus is.
 for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, () => setPlansMenu(false));
+// A plan CRUD dropdown opened (src/planmenu.ts; its click does not reach the window): one
+// popover at a time.
+window.addEventListener("colony:popover", () => {
+  setPlansMenu(false);
+  menu.hidden = true;
+});
 window.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape" || plansMenu.hidden) return;
   ev.preventDefault();
@@ -1889,10 +1898,16 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       let ok = true;
       for (const b of view("plans").querySelectorAll<HTMLButtonElement>('.plan-row [data-act="plan-crud"]')) {
         const p = snapshot.plans().find((x) => x.file === b.dataset.plan);
+        // A file name valid_prompt would refuse gets no action: the button is disabled.
+        if (b.disabled) {
+          crud[`${b.dataset.plan}`] = "disabled";
+          ok &&= !!p && !planActions(p.file, p, false).length;
+          continue;
+        }
         b.click();
-        const m = $("plan-crud-menu");
+        const m = document.getElementById("plan-crud-menu") ?? h("div", { hidden: "" });
         const got = [...m.querySelectorAll<HTMLElement>("[data-crud]")].map((x) => x.dataset.crud).join(",");
-        const want = p ? planActions(p.file, p.lifecycle, p.file === snapshot.activePlanFile).map((x) => x.id).join(",") : "?";
+        const want = p ? planActions(p.file, p, p.file === snapshot.activePlanFile).map((x) => x.id).join(",") : "?";
         ok &&= !m.hidden && got === want && document.activeElement === m.querySelector("button");
         crud[`${b.dataset.plan}:${p?.lifecycle}`] = got;
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));

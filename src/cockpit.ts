@@ -543,7 +543,11 @@ export class MissionView extends View {
           ? [btn("Open plan", () => this.host.openRepoFile(str(now.planPath) || `.cursor/plans/${plan}`), { class: "status-bar-btn" })]
           : []),
       ...(snapshot.data && str(now.sourcePath) ? [btn("Open HANDOFF", () => this.host.openRepoFile(str(now.sourcePath)), { class: "status-bar-btn" })] : []),
-      ...(heroPlan ? [planCrudButton(heroPlan, pend ? (pp?.lifecycle ?? "") : str(now.lifecycle), true, (prompt, why) => this.host.interactive(prompt, why))] : []),
+      ...(heroPlan
+        ? [
+            planCrudButton(heroPlan, snapshot.plans().find((x) => x.file === heroPlan) ?? { parked: false, backlog: false }, true, (prompt, why) => this.host.interactive(prompt, why), pend ? "Colony is running this plan: archive, cancel and delete wait until the run ends and HANDOFF names it." : "Archive, cancel and delete stop on the active plan: park or finish it first."),
+          ]
+        : []),
     );
     const title = pend ? pp?.id || planName(pend.plan) : plan ? str(now.planId) || plan : snapshot.data ? "No active plan" : "Mission";
     const todo = (t: J | null | undefined): Todo => (t && obj(t).id ? { id: str(t.id), content: str(t.content) } : null);
@@ -858,9 +862,9 @@ export class PlansView extends View {
       );
     }
     if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => void this.host.interactive(`/continue-plan ${p.file}`), { class: "status-bar-btn", title: "/continue-plan in your agent, interactively" }));
-    // Edit, then the remove commands its lifecycle allows (Archive: parked; Cancel, Delete:
+    // Edit, then the remove commands its HANDOFF list allows (Archive: parked; Cancel, Delete:
     // backlog); the HANDOFF plan offers Edit only (src/plancrud.ts).
-    acts.push(planCrudButton(p.file, p.lifecycle, active, (prompt, why) => this.host.interactive(prompt, why)));
+    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive, cancel and delete stop on the active plan: park or finish it first."));
     const inProgress = p.todos.filter((t) => t.status === "in_progress").length;
     const pct = p.progress.total ? Math.round((100 * p.progress.completed) / p.progress.total) : 0;
     const head = h(

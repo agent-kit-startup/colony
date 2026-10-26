@@ -7,26 +7,28 @@ import { planActions } from "../src/plancrud.ts";
 
 const ids = (xs) => xs.map((x) => x.id);
 
-test("the active plan offers Edit only, whatever its lifecycle", () => {
-  for (const lc of ["executing", "incomplete", "awaiting_user", "backlog", "parked", "completed"]) {
-    assert.deepEqual(ids(planActions("a.plan.md", lc, true)), ["edit"], lc);
-  }
+const none = { parked: false, backlog: false };
+const parked = { parked: true, backlog: false };
+const backlog = { parked: false, backlog: true };
+
+test("the active plan offers Edit only, whatever list names it", () => {
+  for (const l of [none, parked, backlog]) assert.deepEqual(ids(planActions("a.plan.md", l, true)), ["edit"], JSON.stringify(l));
 });
 
-test("backlog rows: Edit, Cancel, Delete", () => {
-  assert.deepEqual(ids(planActions("b.plan.md", "backlog", false)), ["edit", "cancel", "delete"]);
+test("a plan on the Backlog: Edit, Cancel, Delete (also once all its to-dos are done)", () => {
+  assert.deepEqual(ids(planActions("b.plan.md", backlog, false)), ["edit", "cancel", "delete"]);
 });
 
-test("parked rows: Edit, Archive", () => {
-  assert.deepEqual(ids(planActions("p.plan.md", "parked", false)), ["edit", "archive"]);
+test("a parked plan: Edit, Archive (also once all its to-dos are done)", () => {
+  assert.deepEqual(ids(planActions("p.plan.md", parked, false)), ["edit", "archive"]);
 });
 
-test("other rows: Edit only", () => {
-  for (const lc of ["incomplete", "completed", "executing", "unknown"]) assert.deepEqual(ids(planActions("x.plan.md", lc, false)), ["edit"], lc);
+test("a plan on no list: Edit only", () => {
+  assert.deepEqual(ids(planActions("x.plan.md", none, false)), ["edit"]);
 });
 
 test("each action is one allowlisted command with the plan file", () => {
-  const all = [...planActions("b.plan.md", "backlog", false), ...planActions("p.plan.md", "parked", false)];
+  const all = [...planActions("b.plan.md", backlog, false), ...planActions("p.plan.md", parked, false)];
   const prompts = Object.fromEntries(all.map((a) => [a.id, a.prompt]));
   assert.deepEqual(prompts, { edit: "/backlog-edit p.plan.md", cancel: "/backlog-cancel b.plan.md", delete: "/backlog-delete b.plan.md", archive: "/archive-plan p.plan.md" });
   for (const a of all) {
@@ -36,5 +38,5 @@ test("each action is one allowlisted command with the plan file", () => {
 });
 
 test("a file name that is not one plain token gets no action", () => {
-  for (const bad of ["", "a b.plan.md", "../x.plan.md", "-x.plan.md", "x;rm.plan.md"]) assert.deepEqual(planActions(bad, "backlog", false), [], bad);
+  for (const bad of ["", "a b.plan.md", "../x.plan.md", "-x.plan.md", "x;rm.plan.md"]) assert.deepEqual(planActions(bad, backlog, false), [], bad);
 });
