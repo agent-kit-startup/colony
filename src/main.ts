@@ -4,7 +4,8 @@
 // top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a project,
 // a Plans dropdown) next to Go to file and Open in editor; Mission keeps the plan's own
 // documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
-// the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
+// the interactive vendor CLI and the queue runner, the editor files (a plan or HANDOFF opened
+// from the cockpit shows rendered first, with a Preview | Editor switch) and the kit's web panel
 // (a fallback under View). Explorer next to the rail; the terminal drawer holds the user's
 // shells and every terminal control, and its bar stays on screen while the drawer is closed.
 import { listen } from "@tauri-apps/api/event";
@@ -16,6 +17,7 @@ import { chatSmoke } from "./chatsmoke";
 import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, type CockpitHost, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
+import { type DocTodo, renderDoc } from "./docpreview";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
@@ -93,7 +95,11 @@ document.getElementById("app")!.innerHTML = `
         <button id="welcome-open" class="primary">Open folder</button>
         <div id="recents"></div>
       </div>
-      <div id="view-editor" class="view" hidden></div>
+      <div id="view-editor" class="view" hidden>
+        <div id="doc-bar" role="tablist" aria-label="Show this file as" hidden><button data-mode="preview" role="tab" title="The rendered document (plan to-dos as a table)">Preview</button><button data-mode="editor" role="tab" title="Edit the Markdown source (Ctrl+S saves)">Editor</button></div>
+        <div id="doc-preview" tabindex="-1" hidden></div>
+        <div id="monaco-host"></div>
+      </div>
       <div id="view-review" class="view" hidden></div>
     </div>
   </main>
@@ -155,7 +161,10 @@ interface Tab {
   hide?: () => void;
   /** Return false to keep the tab open. */
   close?: () => Promise<boolean> | boolean;
+  /** A Markdown file: shown rendered (preview) or in Monaco (editor). Unset: not Markdown. */
+  mode?: DocMode;
 }
+type DocMode = "preview" | "editor";
 const tabs = new Map<string, Tab>();
 const order: string[] = [];
 let activeTab = "mission";
@@ -363,7 +372,7 @@ function navigate(step: "back" | "forward") {
 }
 
 // ---- editor ----------------------------------------------------------------------------
-const editors = new Editors($("view-editor"), () => renderTabs());
+const editors = new Editors($("monaco-host"), () => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (p) => void openInEditor(p));
 const isFile = (id: string) => id.startsWith("/");
 
@@ -371,7 +380,96 @@ function relPath(p: string) {
   return workspace && p.startsWith(`${workspace.root}/`) ? p.slice(workspace.root.length + 1) : p;
 }
 
-async function openFile(path: string) {
+/** Plan files and the HANDOFF open rendered from the cockpit (ADR 2026-10-24 amend
+ *  2026-10-26 point 5); every other file opens in the editor. */
+function isPreviewDoc(path: string): boolean {
+  const rel = relPath(path);
+  return /^\.cursor\/plans\/.+\.md$/.test(rel) || rel.split("/").pop() === "HANDOFF.md";
+}
+
+/** The to-dos the snapshot parsed for the plan at `path` (null: not a plan it knows). */
+function docTodos(path: string): DocTodo[] | null {
+  if (!workspace) return null;
+  const root = workspace.root;
+  const p = snapshot.plans().find((x) => (x.path && (x.path.startsWith("/") ? x.path : `${root}/${x.path}`) === path) || `${root}/.cursor/plans/${x.file}` === path);
+  return p ? p.todos : null;
+}
+
+/** A link in a preview: a repo file opens in Colony (resolved from the file's folder, or
+ *  from the folder root for `.cursor/...`), a web address is copied (no browser here). */
+function docLink(from: string, href: string, kind: "repo" | "web") {
+  if (kind === "web") {
+    void copyText(href).then((ok) => status(ok ? `Copied ${href}` : `Copy failed: ${href}`));
+    return;
+  }
+  if (!workspace) return;
+  const target = href.split("#")[0];
+  if (!target) return;
+  const base = target.startsWith(".cursor/") ? workspace.root : from.slice(0, from.lastIndexOf("/"));
+  const parts: string[] = [];
+  for (const seg of `${base}/${decodeURIComponent(target)}`.split("/")) {
+    if (seg === "..") parts.pop();
+    else if (seg && seg !== ".") parts.push(seg);
+  }
+  const abs = `/${parts.join("/")}`;
+  if (!abs.startsWith(`${workspace.root}/`)) return status(`Not in this folder: ${href}`);
+  host.openRepoFile(abs);
+}
+
+/** Preview scroll positions by file (kept across tab switches and mode changes). */
+const docScroll = new Map<string, number>();
+function saveDocScroll() {
+  const t = tabs.get(activeTab);
+  if (t?.mode === "preview" && !$("doc-preview").hidden) docScroll.set(t.id, $("doc-preview").scrollTop);
+}
+
+/** Show the file tab `path` in its mode: the Preview | Editor switch for Markdown, then the
+ *  rendered document or Monaco. */
+function renderDocMode(path: string) {
+  const t = tabs.get(path);
+  const mode = t?.mode;
+  const bar = $("doc-bar");
+  bar.hidden = !mode;
+  for (const b of bar.querySelectorAll<HTMLElement>("button[data-mode]")) {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  }
+  const pv = $("doc-preview");
+  const preview = mode === "preview";
+  pv.hidden = !preview;
+  $("monaco-host").hidden = preview;
+  if (!preview) {
+    pv.replaceChildren();
+    requestAnimationFrame(() => editors.layout());
+    return;
+  }
+  const started = performance.now();
+  const doc = renderDoc(editors.text(path) ?? "", docTodos(path), (href, kind) => docLink(path, href, kind));
+  pv.replaceChildren(doc);
+  pv.dataset.renderMs = (performance.now() - started).toFixed(1);
+  pv.dataset.path = path;
+  pv.scrollTop = docScroll.get(path) ?? 0;
+  // Keys scroll the document (Monaco, hidden, must not take them).
+  if (focusPolicy.enabled) pv.focus({ preventScroll: true });
+}
+
+function setDocMode(mode: DocMode) {
+  const t = tabs.get(activeTab);
+  if (!t?.mode || t.mode === mode) return;
+  saveDocScroll();
+  t.mode = mode;
+  renderDocMode(t.id);
+  if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => editors.editor.focus());
+}
+$("doc-bar").addEventListener("click", (ev) => {
+  const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-mode]");
+  if (b?.dataset.mode === "preview" || b?.dataset.mode === "editor") setDocMode(b.dataset.mode);
+});
+
+/** Open `path` in a file tab. `mode` for a Markdown file (default: the editor, with the
+ *  switch to the preview); an open tab keeps the mode it has. */
+async function openFile(path: string, mode?: DocMode) {
   try {
     await editors.open(path);
   } catch (e) {
@@ -386,15 +484,18 @@ async function openFile(path: string) {
         tip: relPath(path),
         pinned: false,
         el: $("view-editor"),
+        mode: /\.md$/i.test(path) ? (mode ?? "editor") : undefined,
         cls: () => (editors.isDirty(path) ? "dirty" : ""),
         show: () => {
           editors.activate(path);
           tree.setActive(path);
-          requestAnimationFrame(() => editors.layout());
+          renderDocMode(path);
         },
+        hide: () => saveDocScroll(),
         close: async () => {
           if (editors.isDirty(path) && !(await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" }))) return false;
           editors.close(path);
+          docScroll.delete(path);
           return true;
         },
       },
@@ -731,7 +832,8 @@ const host: CockpitHost = {
   status,
   openRepoFile: (rel) => {
     if (!workspace) return;
-    void openFile(rel.startsWith("/") ? rel : `${workspace.root}/${rel}`);
+    const path = rel.startsWith("/") ? rel : `${workspace.root}/${rel}`;
+    void openFile(path, isPreviewDoc(path) ? "preview" : undefined);
   },
   runPlan: async () => {
     if (!workspace) return status("Open a folder first");
@@ -1891,6 +1993,28 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await saveActive();
     const onDisk = await api.readTextFile(file);
     await log("editor-save", onDisk.endsWith(line) && !editors.isDirty(file), onDisk.slice(-80));
+    // Plan / HANDOFF preview: the cockpit's Open HANDOFF shows it rendered with the Preview |
+    // Editor switch (a README from the Explorer above opened in the editor); Editor shows the
+    // Markdown in Monaco, Preview the document again.
+    {
+      const hf = `${root}/.cursor/HANDOFF.md`;
+      const pv = $("doc-preview");
+      const modeBtn = (m: DocMode) => $("doc-bar").querySelector<HTMLElement>(`button[data-mode="${m}"]`);
+      host.openRepoFile(".cursor/HANDOFF.md");
+      const shown = await until(() => activeTab === hf && !pv.hidden && !!pv.querySelector(".md-doc") && $("monaco-host").hidden, 4000);
+      const renderMs = Number(pv.dataset.renderMs);
+      modeBtn("editor")?.click();
+      const editorMode = await until(() => !$("monaco-host").hidden && pv.hidden && editors.active === hf && tabs.get(hf)?.mode === "editor", 2000);
+      modeBtn("preview")?.click();
+      const back = await until(() => !pv.hidden && !!pv.querySelector(".md-doc"), 2000);
+      await shot("md-preview");
+      const readmeBar = (() => {
+        showTab(file);
+        return !$("doc-bar").hidden && tabs.get(file)?.mode === "editor";
+      })();
+      await closeTab(hf);
+      await log("md-preview", shown && editorMode && back && readmeBar && renderMs < 500, { shown, renderMs, editorMode, back, readmeBar });
+    }
     if (terminals.count === 0) await terminals.create();
     await wait(1500);
     await terminals.sendToActive("echo colony-ok-$((6*7)) > smoke.txt\n");

@@ -59,6 +59,11 @@ export class Editors {
     return [...this.docs.keys()];
   }
 
+  /** The file's current text in its model (unsaved edits included). */
+  text(path: string): string | null {
+    return this.docs.get(path)?.model.getValue() ?? null;
+  }
+
   isDirty(path: string): boolean {
     const d = this.docs.get(path);
     return !!d && d.model.getAlternativeVersionId() !== d.saved;
