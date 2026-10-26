@@ -285,7 +285,7 @@ function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
   return note;
 }
 
-const RUN_QUEUE_TIP = "agent-kit run-plan-all: resumes the HANDOFF queue, or proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm). An agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
+export const RUN_QUEUE_TIP = "agent-kit run-plan-all: resumes the HANDOFF queue, or proposes one from the active plan and the backlog and asks you to confirm it (queue-confirm). An agent run whose gates reach the Inbox (engine driver protocol 1.2.0 or newer), else a terminal tab";
 
 function runQueueBtn(host: CockpitHost, cls: string, title = RUN_QUEUE_TIP): HTMLButtonElement {
   return iconBtn("queue", "Run queue", () => void host.runQueue(), { class: cls, "data-act": "run-queue", title });
@@ -331,15 +331,17 @@ function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string):
 // ---- Plan actions --------------------------------------------------------------------
 // The kit plans through slash commands only (/start-project, /backlog-add, /backlog-edit):
 // these open the agent interactively with one of them, after a confirmation.
-const NEW_PLAN_WHY = "/start-project turns what you tell it into a plan with to-dos, with two confirmations before it writes the plan and makes it active.";
-const BACKLOG_ADD_WHY = "/backlog-add writes a new plan with to-dos and lists it under the HANDOFF backlog, without activating it.";
+export const NEW_PLAN_WHY = "/start-project turns what you tell it into a plan with to-dos, with two confirmations before it writes the plan and makes it active.";
+export const BACKLOG_ADD_WHY = "/backlog-add writes a new plan with to-dos and lists it under the HANDOFF backlog, without activating it.";
+export const NEW_PLAN_TIP = "/start-project in your agent, interactively: a new active plan";
+export const BACKLOG_ADD_TIP = "/backlog-add in your agent, interactively: a new plan in the backlog, not activated";
 
 function newPlanBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: "/start-project in your agent, interactively: a new active plan" });
+  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
 }
 
 function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" });
+  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
 }
 
 /**
@@ -527,22 +529,11 @@ export class MissionView extends View {
     const total = Number(pr.total) || 0;
     const done = Number(pr.completed) || 0;
     const planDone = total > 0 && done >= total;
-    const run = iconBtn("play", "Run plan", () => void this.host.runPlan(), {
-      class: plan && !planDone ? "primary" : "status-bar-btn",
-      "data-act": "run-plan",
-      title: plan ? "Run the HANDOFF plan (agent-kit run-plan --events ndjson): pick the engine, then the run opens as a tab with its transcript and gates" : "HANDOFF names no active plan: agent-kit run-plan would stop with “no active plan”",
-    });
-    run.disabled = !plan;
-    // Like agent-kit run-plan-all: no active plan or stored queue needed (it proposes one).
-    const queueRun = runQueueBtn(this.host, "status-bar-btn");
+    // Run plan, Run queue, Open interactive, Start a project and Create plan live in the
+    // top bar (main.ts #top-actions); the hero keeps the plan's own documents.
     const actions = h(
       "div",
       { class: "actions now-actions" },
-      run,
-      queueRun,
-      // No active plan (or it is done): the next mission is a new plan.
-      ...(snapshot.data && !pend && (!plan || planDone) ? [newPlanBtn(this.host, plan ? "status-bar-btn" : "primary"), backlogAddBtn(this.host)] : []),
-      iconBtn("terminals", "Open interactive", () => void this.host.interactive(), { class: "status-bar-btn", "data-act": "interactive", title: "The engine's own CLI (claude or codex) in a terminal tab, on your login" }),
       ...(pend
         ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`), { class: "status-bar-btn" })]
         : plan
@@ -578,7 +569,7 @@ export class MissionView extends View {
       { icon: "folder", text: str(sys.name), title: `Folder: ${str(sys.name)}` },
       { icon: "git", text: str(snapshot.git.branch), mono: true, title: `Branch: ${str(snapshot.git.branch)}` },
       { icon: "mode", text: mode, title: `Mode: ${mode}`, live: status === "executing" },
-      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive). Click to change it in the run dialog.`, onClick: () => void this.host.runPlan() } : null,
+      engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive in the top bar). Change it in the top bar's Run plan dialog.` } : null,
       pend ? { icon: "elapsed", text: `${clock(pend.startedAt)} · ${elapsed(pend.startedAt)}`, mono: true, title: `Started ${pend.startedAt}` } : null,
       !pend && str(now.modifiedAt) ? { icon: "updated", text: ago(now.modifiedAt), mono: true, title: `Updated ${str(now.modifiedAt)}` } : null,
       !pend ? { icon: "elapsed", text: timing(now), mono: true, title: "Elapsed on this plan" } : null,
@@ -596,7 +587,7 @@ export class MissionView extends View {
       ...(plan || pend ? [stepper(missionSteps(prev, cur, next, { status, planDone, nextUpPlan: pend ? "" : str(now.nextUpPlan), done, total }))] : []),
       ...(gaps ? [h("div", { class: "gaps clamp-3", title: plainMd(gaps) }, h("span", { class: "ag-warn" }, "Gaps "), ...inlineMd(gaps))] : []),
       meta,
-      actions,
+      ...(actions.childElementCount ? [actions] : []),
     );
     hero.dataset.keepScroll = "hero";
     return hero;
