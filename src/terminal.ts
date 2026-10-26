@@ -1,8 +1,6 @@
-// The terminal drawer: the user's shells (or an editor argv) in the opened folder, then a
-// link to every centre terminal tab (./termlist.ts).
+// The terminal drawer: the user's shells (or an editor argv) in the opened folder. The
+// interactive vendor CLIs and the queue runners are centre tabs and are not listed here.
 import { errText, h } from "./api";
-import { icon } from "./icons";
-import type { LinkedTerm } from "./termlist";
 import { TermView } from "./termview";
 
 interface Tab {
@@ -15,10 +13,6 @@ export class Terminals {
   private tabs: Tab[] = [];
   private active: Tab | null = null;
   private counter = 0;
-  /** Centre terminal tab id -> its link in the drawer's tab strip (kept across renders, so
-   *  a click that lands during a re-render still reaches the same button). */
-  private linked = new Map<string, HTMLElement>();
-  private pick: (id: string) => void = () => {};
 
   constructor(
     private tabBar: HTMLElement,
@@ -104,45 +98,6 @@ export class Terminals {
       const next = this.tabs[this.tabs.length - 1];
       if (next) this.show(next);
     }
-  }
-
-  /** List the centre terminal tabs after the shells. A link shows its centre tab (`pick`);
-   *  the terminal itself stays there. Exited ones stay listed, dimmed, while their tab is open. */
-  setLinked(list: LinkedTerm[], pick: (id: string) => void) {
-    this.pick = pick;
-    const box = this.tabBar.querySelector<HTMLElement>(".term-linked");
-    if (!box) return;
-    const keep = new Set(list.map((t) => t.id));
-    for (const [id, el] of this.linked) {
-      if (keep.has(id)) continue;
-      el.remove();
-      this.linked.delete(id);
-    }
-    list.forEach((t, i) => {
-      let el = this.linked.get(t.id);
-      if (!el) {
-        el = h("button", { class: "term-link" });
-        el.dataset.tab = t.id;
-        el.addEventListener("click", () => this.pick(t.id));
-        this.linked.set(t.id, el);
-      }
-      el.classList.toggle("exited", t.exited);
-      el.classList.toggle("current", t.current);
-      el.setAttribute("aria-current", t.current ? "true" : "false");
-      el.title = `${t.label}: a centre tab${t.exited ? ", exited" : t.gate ? ", waiting on a gate" : ""}. Click to show it.${t.tip ? `\n${t.tip}` : ""}`;
-      const sig = `${t.icon}|${t.gate}|${t.label}`;
-      if (el.dataset.sig !== sig) {
-        el.dataset.sig = sig;
-        el.replaceChildren(icon(t.icon, "tab-svg"), h("span", { class: "lbl" }, t.label), ...(t.gate ? [h("span", { class: "badge warn" }, "gate")] : []));
-      }
-      if (box.children[i] !== el) box.insertBefore(el, box.children[i] ?? null);
-    });
-    box.hidden = !list.length;
-  }
-
-  /** The centre tab ids the drawer lists (COLONY_SMOKE). */
-  linkedIds(): string[] {
-    return [...this.tabBar.querySelectorAll<HTMLElement>(".term-linked .term-link")].map((el) => el.dataset.tab ?? "");
   }
 
   closeAll() {
