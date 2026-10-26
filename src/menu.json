@@ -43,6 +43,8 @@
         { "id": "run-plan", "label": "Run plan…" },
         { "id": "run-queue", "label": "Run queue…" },
         { "id": "interactive", "label": "Interactive agent" },
+        { "id": "start-project", "label": "Start a project…" },
+        { "id": "backlog-add", "label": "Create plan (backlog)…" },
         { "separator": true },
         { "id": "new-terminal", "label": "New shell terminal" },
         { "id": "engine", "label": "Engine…" }

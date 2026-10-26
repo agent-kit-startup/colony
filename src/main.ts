@@ -1,7 +1,9 @@
 // Colony window: the cockpit. A vertical rail holds the primary views (Mission, Inbox,
 // Review, Git, Terminal, Pipelines) and More (settings: skin, title bar); the other views
 // (Plans, Flight Log, Activity) and every command live in the menu bar (src/menu.json). The
-// tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
+// top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a project,
+// a Plans dropdown) next to Go to file and Open in editor; Mission keeps the plan's own
+// documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files and the kit's web panel
 // (a fallback under View). Explorer next to the rail, shell terminals at the bottom.
 import { listen } from "@tauri-apps/api/event";
@@ -11,7 +13,7 @@ import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
 import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
-import { ActivityView, type CockpitHost, FlightLogView, MissionView, PlansView, QueueView } from "./cockpit";
+import { ActivityView, BACKLOG_ADD_WHY, type CockpitHost, FlightLogView, MissionView, NEW_PLAN_WHY, PlansView, QueueView } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
@@ -60,6 +62,13 @@ document.getElementById("app")!.innerHTML = `
     <button id="btn-open" title="Open folder (Ctrl+O)">Open folder</button>
     <span id="ws-name" class="dim">No folder open</span>
     <span class="spacer"></span>
+    <span id="top-actions" role="group" aria-label="Agent actions" hidden>
+      <button data-cmd="run-plan" title="Run the HANDOFF plan (agent-kit run-plan --events ndjson): pick the engine, then the run opens as a tab with its transcript and gates">Run plan</button>
+      <button data-cmd="run-queue" title="Run the queue (agent-kit run-plan-all): it resumes the HANDOFF queue, or proposes one and asks you to confirm it">Run queue</button>
+      <button data-cmd="interactive" title="The engine's own CLI (claude or codex) in a terminal tab, on your login">Open interactive</button>
+      <button data-cmd="start-project" title="/start-project in your agent, interactively: a new active plan">Start a project</button>
+      <button id="btn-plans" aria-haspopup="menu" aria-expanded="false" title="Plans: view them, or create one in the backlog">Plans<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+    </span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
     <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
@@ -252,6 +261,7 @@ function openRail(r: RailItem) {
  *  a rail group with more than one view (Pipelines: Queue | CI/CD). */
 function renderTabs() {
   renderRail();
+  renderTopActions();
   renderDrawerLinks();
   const bar = $("tabs");
   const rest = $("tabs-rest");
@@ -955,6 +965,7 @@ const moreActionsSep = h("div", { class: "menu-sep", hidden: "" });
 menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
+  setPlansMenu(false);
   const r = anchor.getBoundingClientRect();
   // Next to the rail, on the window's side of it.
   menu.style.left = railPosition() === "right" ? "auto" : `${r.right + 6}px`;
@@ -978,6 +989,75 @@ menu.addEventListener("click", (ev) => {
       (e) => status(`Skin: ${errText(e)}`),
     );
   }
+});
+
+// ---- top bar actions: Run plan, Run queue, Open interactive, Start a project, Plans ------
+// Each button names an ACTIONS id, so the Run menu, the palette and the button run the same
+// action (shell ADR amend 2026-10-26 point 1). The Plans dropdown is built here, not in the
+// markup: More's markup holds settings only (menu.rs tests).
+const PLANS_MENU: { id: string; label: string; title: string }[] = [
+  { id: "view:plans", label: "View plans", title: "The Plans view: the active plan, the backlog and the parked plans" },
+  { id: "backlog-add", label: "Create plan", title: "/backlog-add in your agent, interactively: a new plan in the backlog, not activated" },
+];
+const plansBtn = $("btn-plans");
+const plansMenu = h("div", { id: "plans-menu", class: "menu", role: "menu", "aria-label": "Plans", hidden: "" }, ...PLANS_MENU.map((i) => h("button", { role: "menuitem", "data-cmd": i.id, title: i.title }, i.label)));
+document.body.append(plansMenu);
+
+/** Shown with a folder open; Run plan needs a HANDOFF plan (Run queue never does). Reads the
+ *  DOM only: renderTabs calls it before this section has run. */
+function renderTopActions() {
+  const bar = $("top-actions");
+  bar.hidden = !workspace;
+  if (!workspace && document.getElementById("plans-menu")) setPlansMenu(false);
+  const run = bar.querySelector<HTMLButtonElement>('[data-cmd="run-plan"]')!;
+  run.dataset.tip ??= run.title;
+  const plan = snapshot.activePlanFile;
+  run.disabled = !plan;
+  run.title = plan ? run.dataset.tip : "HANDOFF names no active plan: agent-kit run-plan would stop with “no active plan”";
+}
+
+/** Under the Plans button, right edges aligned; opened from the keyboard, focus its first item. */
+function setPlansMenu(open: boolean, focus = false) {
+  plansMenu.hidden = !open;
+  plansBtn.setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  menu.hidden = true;
+  const r = plansBtn.getBoundingClientRect();
+  plansMenu.style.top = `${r.bottom + 4}px`;
+  plansMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  plansMenu.style.left = plansMenu.style.bottom = "auto";
+  if (focus) plansMenu.querySelector<HTMLButtonElement>("button")?.focus();
+}
+$("top-actions").addEventListener("click", (ev) => {
+  const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
+  if (el === plansBtn) {
+    ev.stopPropagation();
+    return setPlansMenu(plansMenu.hidden, ev.detail === 0);
+  }
+  if (el?.dataset.cmd) runAction(el.dataset.cmd);
+});
+window.addEventListener("click", () => setPlansMenu(false));
+plansMenu.addEventListener("click", (ev) => {
+  const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
+  if (!el?.dataset.cmd) return;
+  setPlansMenu(false);
+  runAction(el.dataset.cmd);
+});
+plansMenu.addEventListener("keydown", (ev) => {
+  const items = [...plansMenu.querySelectorAll<HTMLButtonElement>("button")];
+  const at = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    setPlansMenu(false);
+    plansBtn.focus();
+  } else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    items[(at + (ev.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length].focus();
+  }
+});
+plansMenu.addEventListener("focusout", (ev) => {
+  const to = ev.relatedTarget as Node | null;
+  if (to && !plansMenu.contains(to) && to !== plansBtn) setPlansMenu(false);
 });
 
 // ---- title bar (settings.json ui.titleBar, applied when the window opens) --------------
@@ -1065,6 +1145,8 @@ const ACTIONS: Record<string, () => unknown> = {
   "run-plan": () => host.runPlan(),
   "run-queue": () => host.runQueue(),
   interactive: () => host.interactive(),
+  "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
+  "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
   "new-terminal": () => {
     toggleTerminal(true);
     return terminals.create();
@@ -1609,8 +1691,20 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // (and no active plan) opens on the First run card instead of the hero.
     const firstRun = view("mission").querySelector<HTMLElement>(".first-run");
     const firstRunOk = !!firstRun && !!firstRun.querySelector('[data-act="onboard"], [data-act="install-kit"]');
-    const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && !!view("mission").querySelector('[data-act="run-plan"]');
-    await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
+    // The hero keeps Open plan and Open HANDOFF; Run plan, Run queue and Open interactive sit in the top bar.
+    const heroActs = view("mission").querySelector(".hero:not(.first-run)")?.querySelectorAll('[data-act="run-plan"], [data-act="run-queue"], [data-act="interactive"]').length ?? 0;
+    const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && heroActs === 0;
+    await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), heroActs, firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
+    // The top bar: the agent actions, then the Plans dropdown (keyboard-style click: focus
+    // lands on its first item); View plans opens the Plans view.
+    const topCmds = [...$("top-actions").querySelectorAll<HTMLElement>("[data-cmd]")].map((b) => b.dataset.cmd).join(",");
+    $("btn-plans").click();
+    const plansItems = [...$("plans-menu").querySelectorAll<HTMLElement>("[data-cmd]")].map((b) => b.dataset.cmd).join(",");
+    const plansOpen = !$("plans-menu").hidden && $("btn-plans").getAttribute("aria-expanded") === "true" && document.activeElement === $("plans-menu").querySelector("button");
+    await shot("top-bar-plans");
+    $("plans-menu").querySelector<HTMLButtonElement>('[data-cmd="view:plans"]')?.click();
+    await wait(100);
+    await log("top-bar", !$("top-actions").hidden && topCmds === "run-plan,run-queue,interactive,start-project" && plansItems === "view:plans,backlog-add" && plansOpen && $("plans-menu").hidden && activeTab === "plans", { topCmds, plansItems, plansOpen, activeTab });
     showTab("plans");
     view("plans").querySelector<HTMLButtonElement>('button[data-filter="all"]')?.click();
     await wait(200);
@@ -2131,17 +2225,16 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(300);
     const remembered = await api.settingsWorkspace();
     await log("engine-remembered", remembered.backend === "codex" && remembered.onLimit === "claude" && remembered.model === "smoke-model", remembered);
-    // A view action starts the run: the Mission view's Run plan button opens the run
-    // dialog, then its Start, same click handlers as the operator's. The run must open and
-    // focus its own agent tab.
+    // A top bar action starts the run: Run plan opens the run dialog, then its Start, same
+    // click handlers as the operator's. The run must open and focus its own agent tab.
     showTab("mission");
     const before = runs.list().length;
-    view("mission").querySelector<HTMLButtonElement>('[data-act="run-plan"]')?.click();
+    $("top-actions").querySelector<HTMLButtonElement>('[data-cmd="run-plan"]')?.click();
     await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
     document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-start"]')?.click();
     await until(() => runs.list().length > before, 10000);
     const run = runs.list()[before];
-    if (!run) throw new Error("the Mission view's Run plan did not start a run");
+    if (!run) throw new Error("the top bar's Run plan did not start a run");
     await log("view-action-run", activeTab === `run:${run.id}` && !!view(`run:${run.id}`).querySelector(".tr"), { activeTab, cmd: run.cmd });
     await until(() => !run.running || !!run.gate, 20000);
     const fixture = run.plan === "smoke-fixture.plan.md";
@@ -2307,10 +2400,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // real: the argv is resolved, the real vendor CLI is not started by the smoke).
     pick(controls.backend, "claude");
     if (fixture) {
-      // The Mission view's button (no prompt), then a Plans-view style launch with a kit
+      // The top bar's button (no prompt), then a Plans-view style launch with a kit
       // command as the first prompt (same host call the Run…/Edit…/Resume… buttons make).
       showTab("mission");
-      const iBtn = view("mission").querySelector<HTMLButtonElement>('[data-act="interactive"]');
+      const iBtn = $("top-actions").querySelector<HTMLButtonElement>('[data-cmd="interactive"]');
       const tBefore = centerTerms.size;
       iBtn?.click();
       await until(() => centerTerms.size > tBefore, 5000);

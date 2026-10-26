@@ -305,9 +305,11 @@ mod tests {
     }
 
     /// Run queue behaves like `agent-kit run-plan-all`, which needs no stored queue and no
-    /// active plan (it proposes a queue and asks queue-confirm): the Mission hero always
-    /// offers it next to Run plan, the Queue card adds no second one, and no empty state
-    /// sends the operator to an interactive `/run-plan-all` instead.
+    /// active plan (it proposes a queue and asks queue-confirm): the top bar always offers it
+    /// next to Run plan, Open interactive, Start a project and the Plans dropdown (shell ADR
+    /// amend 2026-10-26 point 1), the Mission hero keeps only Open plan and Open HANDOFF, the
+    /// Queue card adds no second Run queue, and no empty state sends the operator to an
+    /// interactive `/run-plan-all` instead.
     #[test]
     fn run_queue_always_on() {
         let src = include_str!("../../src/cockpit.ts");
@@ -319,13 +321,33 @@ mod tests {
         let hero = slice("private hero(): HTMLElement {", "private gateStrip(");
         let button = slice("function runQueueBtn(", "\n}\n");
         assert!(button.contains("host.runQueue()") && button.contains("\"data-act\": \"run-queue\""), "runQueueBtn starts the queue runner");
-        assert!(hero.contains("runQueueBtn(this.host"), "Mission hero has Run queue");
-        assert!(!hero.contains("queueRun.disabled"), "hero Run queue is never disabled");
+        for gone in ["runQueueBtn(", "host.runPlan()", "host.interactive()", "\"data-act\": \"run-plan\"", "\"data-act\": \"interactive\""] {
+            assert!(!hero.contains(gone), "Mission hero still has {gone}");
+        }
+        assert!(hero.contains("\"Open plan\"") && hero.contains("\"Open HANDOFF\""), "Mission hero keeps Open plan and Open HANDOFF");
         let card = slice("private queueCard(): HTMLElement {", "private flightCard(");
         assert!(!card.contains("runQueue()"), "Queue card adds no second Run queue in Mission");
         assert!(!card.contains("queue.length ? [acts]"), "Queue card actions do not depend on a stored queue");
         assert!(!src.contains("empty-run-plan-all") && !src.contains("Ask agent: /run-plan-all"), "no interactive /run-plan-all fallback");
         let main = include_str!("../../src/main.ts");
+        let block = |from: &str, to: &str| {
+            let a = main.find(from).unwrap_or_else(|| panic!("{from} not in main.ts"));
+            let b = a + main[a..].find(to).unwrap_or_else(|| panic!("{to} after {from}"));
+            &main[a..b]
+        };
+        // Each top bar button names an ACTIONS id; one click handler runs it through runAction.
+        let top = block("<header id=\"top\">", "</header>");
+        for id in ["run-plan", "run-queue", "interactive", "start-project"] {
+            assert!(top.contains(&format!("data-cmd=\"{id}\"")), "#top has no {id} button");
+        }
+        assert!(top.contains("id=\"btn-plans\"") && top.contains("aria-haspopup=\"menu\""), "#top has the Plans dropdown");
+        let plans = block("const PLANS_MENU", "];");
+        assert!(plans.contains("\"view:plans\"") && plans.contains("\"backlog-add\""), "Plans dropdown: View plans and Create plan");
+        assert!(block("$(\"top-actions\").addEventListener(\"click\"", "});").contains("runAction("), "top bar buttons dispatch through runAction");
+        assert!(!block("function renderTopActions(", "\n}\n").contains("run-queue"), "top bar Run queue is never disabled");
+        let actions = block("const ACTIONS", "\n};");
+        assert!(actions.contains("\"start-project\": () => host.interactive(\"/start-project\", NEW_PLAN_WHY)"), "start-project action");
+        assert!(actions.contains("\"backlog-add\": () => host.interactive(\"/backlog-add\", BACKLOG_ADD_WHY)"), "backlog-add action");
         let run_queue = &main[main.find("runQueue: async () => {").expect("host.runQueue")..];
         let run_queue = &run_queue[..run_queue.find("interactive: async").expect("end of runQueue")];
         assert!(run_queue.contains("queue-confirm"), "the confirm says a run without a queue asks queue-confirm");
