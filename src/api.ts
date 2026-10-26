@@ -28,6 +28,9 @@ export interface LayoutSettings {
   explorerWidth?: number;
   terminalHeight?: number;
   terminalWidth?: number;
+  railPosition?: "left" | "right";
+  /** false: icon-only rail (tooltips and aria-labels kept). */
+  railLabels?: boolean;
 }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }

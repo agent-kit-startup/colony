@@ -103,6 +103,12 @@ document.getElementById("app")!.innerHTML = `
   <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
   <button data-more="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
   <button data-more="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
+  <div class="menu-sep"></div>
+  <div class="menu-label">Rail</div>
+  <button data-more="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
+  <button data-more="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
+  <button data-more="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
+  <button data-more="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -203,7 +209,7 @@ function renderRail() {
       return el;
     });
     // Settings only: never the current view, so never "active".
-    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar and other settings", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
+    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar, rail and other settings", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
     more.dataset.tab = "more";
     more.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -474,6 +480,29 @@ function toggleExplorer(force?: boolean) {
   layoutChanged();
 }
 
+// The rail (More → Rail): its side of the window and labels or icons only.
+type RailPosition = "left" | "right";
+const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
+const railLabels = () => !shell.classList.contains("rail-icons");
+
+function renderRailMenu() {
+  for (const b of menu.querySelectorAll<HTMLElement>("button[data-more=rail-position], button[data-more=rail-labels]")) {
+    const on = b.dataset.pos ? b.dataset.pos === railPosition() : (b.dataset.labels === "on") === railLabels();
+    b.dataset.label ??= b.textContent ?? "";
+    b.classList.toggle("on", on);
+    b.textContent = `${on ? "✓ " : ""}${b.dataset.label}`;
+  }
+}
+
+function setRail(p: { position?: RailPosition; labels?: boolean }) {
+  if (p.position) shell.dataset.rail = p.position;
+  if (p.labels !== undefined) shell.classList.toggle("rail-icons", !p.labels);
+  renderRailMenu();
+  relayout();
+  layoutChanged();
+  status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
+}
+
 // Layout persistence (settings.json ui.layout): saved after every panel change (debounced),
 // applied when the window opens. A size is saved only once a splitter set it.
 const px = (name: string) => {
@@ -488,6 +517,8 @@ function layoutNow(): Required<{ [K in keyof LayoutSettings]: LayoutSettings[K] 
     explorerWidth: px("--side-w"),
     terminalHeight: px("--bottom-h"),
     terminalWidth: px("--term-w"),
+    railPosition: railPosition(),
+    railLabels: railLabels(),
   };
 }
 /** Put a saved layout on the window (no save back). */
@@ -495,11 +526,14 @@ function applyLayout(l: LayoutSettings) {
   shell.dataset.dock = l.terminalDock === "top" || l.terminalDock === "side" ? l.terminalDock : "bottom";
   shell.classList.toggle("no-bottom", l.terminalVisible === false);
   shell.classList.toggle("no-side", l.explorerVisible === false);
+  shell.dataset.rail = l.railPosition === "right" ? "right" : "left";
+  shell.classList.toggle("rail-icons", l.railLabels === false);
   const size = (name: string, v: number | undefined) => (typeof v === "number" && v > 0 ? shell.style.setProperty(name, `${v}px`) : shell.style.removeProperty(name));
   size("--side-w", l.explorerWidth);
   size("--bottom-h", l.terminalHeight);
   size("--term-w", l.terminalWidth);
   renderDock();
+  renderRailMenu();
   renderRail();
   relayout();
 }
@@ -894,8 +928,9 @@ menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd"
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
   const r = anchor.getBoundingClientRect();
-  menu.style.left = `${r.right + 6}px`;
-  menu.style.right = "auto";
+  // Next to the rail, on the window's side of it.
+  menu.style.left = railPosition() === "right" ? "auto" : `${r.right + 6}px`;
+  menu.style.right = railPosition() === "right" ? `${window.innerWidth - r.left + 6}px` : "auto";
   menu.style.top = "auto";
   menu.style.bottom = `${Math.max(8, window.innerHeight - r.bottom)}px`;
   menu.hidden = false;
@@ -906,6 +941,8 @@ menu.addEventListener("click", (ev) => {
   menu.hidden = true;
   if (el.dataset.cmd) runAction(el.dataset.cmd);
   else if (el.dataset.more === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
+  else if (el.dataset.more === "rail-position") setRail({ position: el.dataset.pos === "right" ? "right" : "left" });
+  else if (el.dataset.more === "rail-labels") setRail({ labels: el.dataset.labels === "on" });
   else if (el.dataset.more === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
@@ -1778,6 +1815,58 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await until(() => dock() === "bottom", 2000);
     await wait(600);
     await layoutSaved;
+    // Rail (More → Rail): left and right × labels and icons only, in every dock. The rail
+    // sits at its window edge, the centre beside it; icons only hides the labels and keeps
+    // each item's tooltip and aria-label; the choice is in settings.json.
+    const moreRow = (sel: string) => menu.querySelector<HTMLButtonElement>(`button[data-more=${sel}]`)!.click();
+    const railCase = (pos: RailPosition, labels: boolean) => {
+      const r = box("rail");
+      const c = box("center");
+      const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
+      // Every other panel (centre, Explorer, terminal, splitters) on the window's side of the rail.
+      const panels = [c, ...["side", "side-resizer", "resizer", "bottom"].map((id) => $(id)).filter((el) => el.offsetParent !== null).map((el) => el.getBoundingClientRect())];
+      const edge = pos === "left" ? Math.round(r.left) === 0 && panels.every((b) => b.left >= r.right - 1) : Math.round(r.right) === window.innerWidth && panels.every((b) => b.right <= r.left + 1);
+      // Icons only hides the label visually; it stays the button's accessible name.
+      const lbls = items.every((el) => (el.querySelector<HTMLElement>(".lbl")!.getBoundingClientRect().width > 1) === labels);
+      const named = items.every((el) => !!el.querySelector(".lbl")?.textContent && !!el.title);
+      return { edge, lbls, named, width: Math.round(r.width) };
+    };
+    const rail: Record<string, unknown> = {};
+    for (const d of ["bottom", "side", "top"] as Dock[]) {
+      await api.smokeMenuClick(`dock:${d}`);
+      await until(() => dock() === d, 2000);
+      for (const pos of ["right", "left"] as RailPosition[]) {
+        for (const labels of [false, true]) {
+          moreRow(`rail-position][data-pos=${pos}`);
+          moreRow(`rail-labels][data-labels=${labels ? "on" : "off"}`);
+          await wait(120);
+          rail[`${d} ${pos} ${labels ? "labels" : "icons"}`] = railCase(pos, labels);
+        }
+      }
+    }
+    moreRow("rail-position][data-pos=right");
+    moreRow("rail-labels][data-labels=off");
+    let rOnDisk: LayoutSettings = {};
+    for (let i = 0; i < 20; i++) {
+      await wait(200);
+      await layoutSaved;
+      rOnDisk = await savedLayout();
+      if (rOnDisk.railPosition === "right" && rOnDisk.railLabels === false) break;
+    }
+    moreRow("rail-position][data-pos=left");
+    moreRow("rail-labels][data-labels=on");
+    await api.smokeMenuClick("dock:bottom");
+    await until(() => dock() === "bottom", 2000);
+    // Back to the default rail on disk too (layout-boot reads it on the next start).
+    let rRestored: LayoutSettings = {};
+    for (let i = 0; i < 20; i++) {
+      await wait(200);
+      await layoutSaved;
+      rRestored = await savedLayout();
+      if (rRestored.railPosition === "left" && rRestored.railLabels === true && rRestored.terminalDock === "bottom") break;
+    }
+    const railOk = Object.values(rail).every((v) => Object.entries(v as Record<string, unknown>).every(([k, x]) => k === "width" || x === true));
+    await log("rail-options", railOk && rOnDisk.railPosition === "right" && rOnDisk.railLabels === false && rRestored.railPosition === "left" && rRestored.railLabels === true && railPosition() === "left" && railLabels(), { rail, rOnDisk, rRestored });
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
