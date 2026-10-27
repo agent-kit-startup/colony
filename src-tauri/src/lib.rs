@@ -358,6 +358,7 @@ pub fn run() {
             mcdata::mc_subscribe,
             vendor::term_launch,
             agent::queue_mode,
+            agent::queue_gates,
             catalog::commands_catalog,
             chats::chat_sessions,
             pty::pty_spawn,

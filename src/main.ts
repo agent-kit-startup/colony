@@ -15,7 +15,8 @@ import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
 import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
-import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, type CockpitHost, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
+import { DriverChat, type DriverChatHost } from "./driverchat";
+import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
@@ -847,8 +848,39 @@ let smokeDryRun = false;
 
 // ---- cockpit host ----------------------------------------------------------------------
 const controls = new RunControls(status);
-const host: CockpitHost = {
+const host: DriverChatHost = {
   status,
+  engine: () => controls.backend.value,
+  relaunchQueue: async (note) => {
+    if (!workspace) return status("Open a folder first");
+    const engine = controls.backend.value;
+    // A note needs the queue as a driver run (an engine with `queue gates` has it).
+    const mode = await api.queueMode().catch((e) => ({ driver: false, protocol: null, note: `Queue mode: ${errText(e)}` }));
+    if (!mode.driver) return status(`Relaunch with resolution: ${mode.note}`);
+    const lines = note.split("\n").length;
+    const ok = await confirmAction(
+      `Relaunch agent-kit run-plan-all with ${engine} in ${workspace.name}, with your resolution note (${lines} line${lines === 1 ? "" : "s"}) after the command text? The note is context only: every gate the new run opens, queue-confirm included, still waits for you in the Inbox. It never runs /git-prod.`,
+      "Relaunch with resolution",
+    );
+    if (!ok) return status("Queue run not relaunched");
+    try {
+      const run = await runs.start({ backend: engine, maxTicks: 1, command: "run-plan-all", model: controls.model.value.trim() || undefined, note });
+      return status(`Queue run #${run.id} relaunched in ${run.name} (${run.backend}) with your resolution note`);
+    } catch (e) {
+      return status(`Relaunch with resolution: ${errText(e)}`);
+    }
+  },
+  chatAgent: async (engine, model) => {
+    if (!workspace) return status("Open a folder first");
+    try {
+      const l = await api.termLaunch({ kind: "interactive", engine, model });
+      if (l.note) status(l.note);
+      const vendor = l.label.split(" ")[0];
+      return openTermTab(l.argv, `${vendor} · driver chat`, `${l.argv.join(" ")}\nDriver chat agent${model ? ` on ${model}` : ""} (the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: "", backend: vendor, engine: vendor });
+    } catch (e) {
+      status(`Open chat agent: ${errText(e)}`);
+    }
+  },
   openRepoFile: (rel) => {
     if (!workspace) return;
     const path = rel.startsWith("/") ? rel : `${workspace.root}/${rel}`;
@@ -965,7 +997,7 @@ const host: CockpitHost = {
 // ---- views -----------------------------------------------------------------------------
 const mission = new MissionView(host, controls);
 const plans = new PlansView(host);
-const queue = new QueueView(host);
+const queue = new QueueView(host, new DriverChat(host));
 const flight = new FlightLogView(host);
 const activity = new ActivityView(host);
 let inboxCount = { gates: 0, attention: 0 };
