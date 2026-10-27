@@ -16,3 +16,7 @@
 .driver-chat .dc-settings .row { gap: 8px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
 .driver-chat .dc-label { min-width: 120px; color: var(--text-secondary); }
 .driver-chat .dc-model { width: 16em; }
+.driver-chat .dc-budget-in { width: 10em; }
+/* Run tokens (driver protocol 1.3.0): over the budget turns the text and the 1px border red. */
+.driver-chat .dc-tokens { margin: 6px 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--mc-radius); font-size: 12px; }
+.driver-chat .dc-tokens.over { color: var(--red); border-color: var(--red); }

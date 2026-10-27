@@ -39,7 +39,9 @@ pub const DRIVER_PROTOCOL_MAJOR: u64 = 1;
 /// inside it, never a blind `releases/latest`, and refuses an engine outside it. Running an
 /// engine that is already there (COLONY_ENGINE, PATH, older managed installs) only needs
 /// the major (`check_range`). Raise it with the Colony release that supports a newer protocol.
-pub const ENGINE_PROTOCOL_RANGE: &str = "~1.2";
+/// 1.3.0 adds token `usage` to `tick_end` / `run_end` (the driver chat's token budget);
+/// 1.2.x engines still install, and their runs show "no usage".
+pub const ENGINE_PROTOCOL_RANGE: &str = ">=1.2.0, <1.4.0";
 /// How many of the newest kit releases the updater looks at for one inside the range.
 const RELEASE_SCAN: usize = 10;
 /// Mission Control snapshot schema major the native views read (`dashboardDataVersion`).
@@ -158,9 +160,25 @@ pub fn supported_text() -> String {
     )
 }
 
-/// `~1.2` as people read it: `1.2.x`.
+/// The range as people read it: `~1.2` is `1.2.x`, `>=1.2.0, <1.4.0` is `1.2.x-1.3.x`.
 pub fn protocol_range_text() -> String {
-    ENGINE_PROTOCOL_RANGE.strip_prefix('~').map(|v| format!("{v}.x")).unwrap_or_else(|| ENGINE_PROTOCOL_RANGE.to_string())
+    if let Some(v) = ENGINE_PROTOCOL_RANGE.strip_prefix('~') {
+        return format!("{v}.x");
+    }
+    match (protocol_floor(), protocol_ceiling()) {
+        (Some(lo), Some(hi)) if lo.major == hi.major && hi.patch == 0 && hi.minor > lo.minor => format!("{}.{}.x-{}.{}.x", lo.major, lo.minor, hi.major, hi.minor - 1),
+        _ => ENGINE_PROTOCOL_RANGE.to_string(),
+    }
+}
+
+/// The range's `>=` bound, when it has one.
+fn protocol_floor() -> Option<Version> {
+    protocol_req().comparators.iter().find(|c| c.op == semver::Op::GreaterEq).map(|c| Version::new(c.major, c.minor.unwrap_or(0), c.patch.unwrap_or(0)))
+}
+
+/// The range's `<` bound, when it has one.
+fn protocol_ceiling() -> Option<Version> {
+    protocol_req().comparators.iter().find(|c| c.op == semver::Op::Less).map(|c| Version::new(c.major, c.minor.unwrap_or(0), c.patch.unwrap_or(0)))
 }
 
 fn protocol_req() -> VersionReq {
@@ -177,7 +195,13 @@ pub fn check_install_range(m: &Manifest) -> Result<(), String> {
     if protocol_installable(&m.driver_protocol) {
         return Ok(());
     }
-    let newer = Version::parse(m.driver_protocol.trim()).map(|v| protocol_req().comparators.iter().all(|c| v.major > c.major || v.minor > c.minor.unwrap_or(0))).unwrap_or(false);
+    // Above the range (a newer protocol than this build reads), or below it.
+    let newer = Version::parse(m.driver_protocol.trim())
+        .map(|v| match protocol_ceiling() {
+            Some(hi) => v >= hi,
+            None => protocol_req().comparators.iter().all(|c| v.major > c.major || v.minor > c.minor.unwrap_or(0)),
+        })
+        .unwrap_or(false);
     Err(format!(
         "engine {} speaks driver protocol {}; this Colony installs engines with driver protocol {} ({})",
         m.version,
@@ -965,11 +989,13 @@ mod tests {
         assert_eq!(engine_info_protocol(&script("kit-junk", "echo not json"), &[]), None);
         assert_eq!(engine_info_protocol(&script("kit-nofield", r#"echo '{"version":"6.3.0"}'"#), &[]), None);
         assert_eq!(engine_info_protocol(&d.join("missing"), &[]), None);
-        // The COLONY_SMOKE kit fixture announces the protocol the queue driver needs.
+        // The COLONY_SMOKE kit fixture announces 1.3.0 (token usage): the queue driver runs on
+        // it and the updater would install it.
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/smoke/fake-agent-kit.sh");
         let p = engine_info_protocol(Path::new("/bin/sh"), &[fixture]);
-        assert_eq!(p.as_deref(), Some(crate::agent::QUEUE_DRIVER_PROTOCOL));
+        assert_eq!(p.as_deref(), Some("1.3.0"));
         assert!(crate::agent::queue_driver(p.as_deref()));
+        assert!(protocol_installable(p.as_deref().unwrap()));
     }
 
     fn manifest(version: &str, driver: &str, data: Option<&str>) -> Manifest {
@@ -1146,7 +1172,7 @@ mod tests {
         let base = root.join("releases");
         publish(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
         publish(&base, &manifest("6.4.0", "1.2.1", Some("1.6.0")));
-        publish(&base, &manifest("6.5.0", "1.3.0", Some("1.6.0")));
+        publish(&base, &manifest("6.5.0", "1.4.0", Some("1.6.0")));
         publish(&base, &manifest("6.1.0", "1.1.0", Some("1.6.0")));
         publish(&base, &manifest("7.0.0", "2.0.0", Some("1.6.0")));
         let url = format!("file://{}", base.display());
@@ -1164,7 +1190,7 @@ mod tests {
         assert!(!engines.join("7.0.0").exists());
         // Same major, outside the updater range: refused with what to do instead.
         let e = install_engine(&engines, &url, "6.5.0").unwrap_err();
-        assert!(e.contains("driver protocol 1.3.0") && e.contains("1.2.x") && e.contains("update Colony first"), "{e}");
+        assert!(e.contains("driver protocol 1.4.0") && e.contains("1.2.x-1.3.x") && e.contains("update Colony first"), "{e}");
         let e = install_engine(&engines, &url, "6.1.0").unwrap_err();
         assert!(e.contains("install a newer engine version"), "{e}");
         assert!(!engines.join("6.5.0").exists() && !engines.join("6.1.0").exists());
@@ -1266,9 +1292,12 @@ mod tests {
 
     #[test]
     fn updater_range_and_release_pick() {
-        assert_eq!(protocol_range_text(), "1.2.x");
-        assert!(protocol_installable("1.2.0") && protocol_installable("1.2.7"));
-        assert!(!protocol_installable("1.1.0") && !protocol_installable("1.3.0") && !protocol_installable("2.2.0") && !protocol_installable("x"));
+        // 1.3.0 (token usage on tick_end / run_end) is the newest protocol this build reads;
+        // 1.2.x engines still install (their runs show "no usage").
+        assert_eq!(protocol_range_text(), "1.2.x-1.3.x");
+        assert!(protocol_installable("1.2.0") && protocol_installable("1.2.7") && protocol_installable("1.3.0") && protocol_installable("1.3.4"));
+        assert!(!protocol_installable("1.1.0") && !protocol_installable("1.4.0") && !protocol_installable("2.2.0") && !protocol_installable("x"));
+        assert!(!protocol_installable("1.3.0-rc.1") && !protocol_installable("1.2.0-rc.1"), "pre-releases never install");
 
         let json = r#"[
             {"tag_name":"v6.11.0-rc.1","draft":false,"prerelease":true},
@@ -1281,9 +1310,11 @@ mod tests {
         let vs = release_versions(json).unwrap();
         assert_eq!(vs.iter().map(|v| v.to_string()).collect::<Vec<_>>(), ["6.10.0", "6.9.0", "6.8.0"]);
 
-        // Newest inside the range wins; a newer release on 1.3 is skipped.
-        let proto = |v: &Version| Some(if v.minor >= 10 { "1.3.0" } else { "1.2.0" }.to_string());
+        // Newest inside the range wins; a newer release on 1.4 is skipped.
+        let proto = |v: &Version| Some(if v.minor >= 10 { "1.4.0" } else { "1.2.0" }.to_string());
         assert_eq!(pick_in_range(&vs, proto).unwrap(), "6.9.0");
+        let proto13 = |v: &Version| Some(if v.minor >= 10 { "1.3.0" } else { "1.2.0" }.to_string());
+        assert_eq!(pick_in_range(&vs, proto13).unwrap(), "6.10.0");
         // No side engine.json (older kit releases): taken, the tarball manifest decides.
         assert_eq!(pick_in_range(&vs, |_| None).unwrap(), "6.10.0");
         // Nothing fits: a clear message naming what was skipped.

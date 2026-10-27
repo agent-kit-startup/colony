@@ -4,6 +4,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, type BackendChoice, errText, h } from "./api";
 import { type Gate, type Run, runs } from "./runs";
+import { parseBudget } from "./usage";
 
 /**
  * Shown text for each engine id. The id itself is what `--backend` takes and
@@ -93,9 +94,14 @@ export class RunControls {
   }
 
   /** Restore the engine choice remembered for the opened folder. */
-  async loadWorkspace() {
+  async loadWorkspace(root?: string) {
     try {
       const ws = await api.settingsWorkspace();
+      // The folder's per-run token budget, for the run views (informational only).
+      if (root) {
+        const b = parseBudget(ws.tokenBudget);
+        runs.setBudget(root, typeof b === "number" ? b : null);
+      }
       if (ws.backend && [...this.backend.options].some((o) => o.value === ws.backend)) {
         this.backend.value = ws.backend;
         this.explicit = true;

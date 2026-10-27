@@ -572,6 +572,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .first-run-strip { flex: none; display: flex; align-items: center; gap: var(--mc-space-md); min-width: 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--yellow-bg); font-size: var(--mc-chrome-subtitle-size); }
 /* Run rows drop whole fields as their card narrows, never cut them (kit truncation
    contract): clock first, then the backend, then the kit-sees-it chip. */
+@container (max-width: 600px) { .run-row .run-tokens { display: none; } }
 @container (max-width: 520px) { .run-row .run-clock { display: none; } }
 @container (max-width: 440px) { .run-row .run-backend { display: none; } }
 @container (max-width: 380px) { .run-row .run-kit { display: none; } .run-row .run-kind { min-width: 0; } }
@@ -668,6 +669,10 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .run-view { display: flex; flex-direction: column; background: var(--bg-primary); }
 .run-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); min-height: 36px; flex: none; }
 .run-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Tokens a driver run reported (protocol 1.3.0). Over the folder's budget: the text and a 1px
+   border turn red; never a side bar or a tinted fill. */
+.run-usage, .run-tokens { flex: none; color: var(--text-muted); white-space: nowrap; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); padding: 0 4px; }
+.run-usage.over, .run-tokens.over { color: var(--red); border-color: var(--red); }
 .run-body { flex: 1; overflow: auto; min-height: 0; }
 .run-body .ag-log { border: 0; border-radius: 0; min-height: 100%; }
 .tr { padding: 12px 16px 40px; display: flex; flex-direction: column; gap: 6px; max-width: 1100px; }
