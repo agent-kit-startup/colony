@@ -9,7 +9,7 @@ import { gateControls } from "./agent";
 import { ContextStrip } from "./contextstrip";
 import { icon } from "./icons";
 import { type Align, type Block, type ListItem, linkKind, parseBlocks, parseInline } from "./markdown";
-import { type Ev, type Run, type RunItem, runLabel, runs } from "./runs";
+import { type Ev, type Run, type RunItem, runLabel, runs, runTokens } from "./runs";
 
 const RESULT_MAX = 6000;
 
@@ -127,6 +127,8 @@ export class AgentTab {
   private raw = h("div", { class: "ag-log", hidden: "" });
   private chip = h("span", { class: "chip" });
   private title = h("span", { class: "run-title" });
+  /** Tokens the run reported (driver protocol 1.3.0) against the folder's budget. */
+  private usage = h("span", { class: "run-usage mono small" });
   private stopBtn = h("button", { title: "Send {type:stop} at the open gate (the run ends, exit 4)" }, "Stop at gate");
   private killBtn = h("button", { title: "Terminate the run now" }, "Kill");
   private rawBtn = h("button", { class: "toggle", title: "Show the raw driver event log" }, "Raw log");
@@ -143,7 +145,7 @@ export class AgentTab {
     this.el = h(
       "div",
       { class: "run-view" },
-      h("div", { class: "run-head" }, this.chip, this.title, h("span", { class: "spacer" }), gotoGate, this.rawBtn, this.stopBtn, this.killBtn),
+      h("div", { class: "run-head" }, this.chip, this.title, this.usage, h("span", { class: "spacer" }), gotoGate, this.rawBtn, this.stopBtn, this.killBtn),
       this.context.el,
       h("div", { class: "run-body" }, this.tr, this.raw),
     );
@@ -188,6 +190,11 @@ export class AgentTab {
     this.chip.textContent = r.gate ? "waiting for you" : r.running ? "running" : `exited ${r.exitCode ?? "(signal)"}`;
     this.title.textContent = runLabel(r);
     this.title.title = r.cmd;
+    const t = runTokens(r);
+    this.usage.textContent = t.short;
+    this.usage.title = `${t.text}. The budget only informs: it never stops the run or answers a gate.`;
+    this.usage.dataset.budget = t.state;
+    this.usage.classList.toggle("over", t.state === "over");
     this.stopBtn.disabled = !r.gate;
     this.killBtn.disabled = !r.running;
   }

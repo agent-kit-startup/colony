@@ -4,6 +4,7 @@
 // ticks. The Agent panel, the Inbox and the Review view all read from this one store.
 // Colony never answers a gate by itself: a reply is only ever sent from an operator action.
 import { api, Channel, errText, type AgentEvent, type RunCommand, type TickReview } from "./api";
+import { addUsage, budgetState, formatTokens, protocolHasUsage, readUsage, type TokenUsage, usageText } from "./usage";
 
 const MAX_ROWS = 3000;
 const MAX_ITEMS = 6000;
@@ -68,6 +69,13 @@ export interface Run {
   /** Queue runner relaunched from the driver chat: the operator's resolution note
    *  (`--note`). `run_start` does not echo it, so Colony keeps its own copy. */
   note: string;
+  /** `run_start.protocol` ("" until it arrives). */
+  protocol: string;
+  /** The run reports token usage: its protocol is 1.3.0 or newer (usage.ts). */
+  usageSupported: boolean;
+  /** Tokens so far: the sum of `tick_end.usage`, replaced by `run_end.usage` when it
+   *  arrives; null while nothing was reported (always null below 1.3.0). */
+  usage: TokenUsage | null;
 }
 
 export type RunChange =
@@ -109,6 +117,20 @@ export interface StartOptions { backend: string; maxTicks: number; cwd?: string;
 class RunStore {
   readonly runs = new Map<number, Run>();
   private listeners = new Set<(c: RunChange) => void>();
+  /** Per-run token budget by folder (setting `tokenBudget`); informational only. */
+  private budgets = new Map<string, number>();
+
+  /** The folder's per-run token budget (null = none). Runs in it re-render. */
+  setBudget(root: string, budget: number | null) {
+    if ((this.budgets.get(root) ?? null) === budget) return;
+    if (budget === null) this.budgets.delete(root);
+    else this.budgets.set(root, budget);
+    for (const r of this.runs.values()) if (r.root === root) this.emit({ kind: "state", run: r });
+  }
+
+  budget(root: string): number | null {
+    return this.budgets.get(root) ?? null;
+  }
 
   on(fn: (c: RunChange) => void) {
     this.listeners.add(fn);
@@ -155,6 +177,9 @@ class RunStore {
       lastText: "",
       queue: null,
       note: opts.note?.trim() ?? "",
+      protocol: "",
+      usageSupported: false,
+      usage: null,
     };
     this.runs.set(run.id, run);
     this.emit({ kind: "state", run });
@@ -251,6 +276,8 @@ class RunStore {
   private apply(run: Run, ev: Ev, line: string) {
     switch (ev.type) {
       case "run_start":
+        run.protocol = String(ev.protocol ?? "");
+        run.usageSupported = protocolHasUsage(ev.protocol);
         run.plan = String(ev.plan ?? "");
         if (ev.backend) run.backend = String(ev.backend);
         if (ev.command === "run-plan-all") run.command = "run-plan-all";
@@ -301,18 +328,31 @@ class RunStore {
         if (ev.result?.line) parts.push(ev.result.line);
         if (ev.stop) parts.push(`stop: ${ev.stop.cause}${ev.stop.message ? ` (${ev.stop.message})` : ""}`);
         if (ev.limit) parts.push(`usage limit: ${ev.limit.source}`);
+        if (run.usageSupported) {
+          const u = readUsage(ev.usage);
+          if (u) {
+            run.usage = addUsage(run.usage, u);
+            parts.push(`${formatTokens(u.totalTokens)} tokens`);
+            this.emit({ kind: "state", run });
+          }
+        }
         return this.row(run, parts.join(" · "), "ag-head");
       }
       case "log":
         return this.row(run, String(ev.message ?? ""), ev.level === "error" ? "ag-err" : ev.level === "warn" ? "ag-warn" : "ag-dim");
       case "run_end":
         if (run.gate) this.setGate(run, null);
+        if (run.usageSupported) {
+          // The kit's run total is authoritative (run-plan: the ticks' sum; run-plan-all: the session).
+          run.usage = readUsage(ev.usage) ?? run.usage;
+          this.emit({ kind: "state", run });
+        }
         if (run.command === "run-plan-all") {
           const n = Array.isArray(ev.replies) ? ev.replies.length : 0;
           const stop = ev.stop?.cause ? ` · stop: ${ev.stop.cause}` : "";
-          return this.row(run, `■ queue run ended · exit ${ev.exitCode} · ${ev.reason} · ${n} answer${n === 1 ? "" : "s"}${stop}`, "ag-head");
+          return this.row(run, `■ queue run ended · exit ${ev.exitCode} · ${ev.reason} · ${n} answer${n === 1 ? "" : "s"}${stop} · ${usageText(run.usageSupported, run.usage)}`, "ag-head");
         }
-        return this.row(run, `■ run ended · exit ${ev.exitCode} · ${ev.reason} · ${ev.ticks} ticks · ${ev.pending} pending`, "ag-head");
+        return this.row(run, `■ run ended · exit ${ev.exitCode} · ${ev.reason} · ${ev.ticks} ticks · ${ev.pending} pending · ${usageText(run.usageSupported, run.usage)}`, "ag-head");
       default:
         return this.row(run, line, "ag-dim");
     }
@@ -331,6 +371,15 @@ export function liveQueueRun(root: string): Run | null {
 export function queuePosition(q: QueueState): string {
   if (q.total === 0) return "none";
   return `${q.cursor === null ? "–" : q.cursor + 1}/${q.total}`;
+}
+
+/** A run's tokens against its folder's budget: one line, and `over` when it passed it. */
+export function runTokens(r: Run): { text: string; short: string; state: "none" | "within" | "over"; budget: number | null } {
+  const budget = runs.budget(r.root);
+  const state = budgetState(r.usage, budget);
+  const tail = budget === null ? "" : state === "over" ? ` · over the ${formatTokens(budget)} budget` : ` of ${formatTokens(budget)} budget`;
+  const short = !r.usageSupported ? "no usage" : r.usage ? `${formatTokens(r.usage.totalTokens)} tok` : "no usage yet";
+  return { text: `${usageText(r.usageSupported, r.usage)}${r.usage ? tail : ""}`, short, state, budget };
 }
 
 export function runLabel(r: Run): string {

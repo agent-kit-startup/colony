@@ -5,7 +5,7 @@
 // included, and the `run-plan-all` queue runner on an older engine). The Mission view's Agent runs card and
 // its "launched from Colony" hero read this, merged with what the kit snapshot reports.
 // Colony only reads the snapshot here; nothing is written back to the kit.
-import { type QueueState, type Run, runs } from "./runs";
+import { type QueueState, type Run, runs, runTokens } from "./runs";
 import { obj, snapshot, str } from "./snapshot";
 import type { TermView } from "./termview";
 
@@ -30,6 +30,8 @@ export interface Launch {
   runId?: number;
   /** Driver queue runs: the latest `queue_state` (null until the first one). */
   queue?: QueueState | null;
+  /** Driver runs: tokens reported (driver protocol 1.3.0) against the folder's budget. */
+  tokens?: { short: string; text: string; over: boolean };
 }
 
 /** A row the kit snapshot reports (activity `run_plan` or a workspace process). */
@@ -197,6 +199,7 @@ class LaunchStore {
       gate: r.gate?.askId ?? null,
       runId: r.id,
       ...(queue ? { queue: r.queue } : {}),
+      tokens: (({ short, text, state }) => ({ short, text, over: state === "over" }))(runTokens(r)),
     };
   }
 

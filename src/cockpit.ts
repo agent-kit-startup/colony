@@ -223,6 +223,7 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
       h("span", { class: "run-backend" }, l.backend),
       h("span", { class: "run-clock" }, clock(l.startedAt)),
       h("span", { class: "run-elapsed" }, elapsed(l.startedAt)),
+      ...(l.tokens ? [h("span", { class: `run-tokens${l.tokens.over ? " over" : ""}`, title: l.tokens.text }, l.tokens.short)] : []),
     ),
   );
   row.dataset.launch = l.tabId;

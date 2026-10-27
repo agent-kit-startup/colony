@@ -89,8 +89,9 @@ export interface TickReview {
 export interface FileVersions { before: string | null; after: string | null; note: string | null }
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 /** Per folder. `chatModel`: the driver chat agent's model ("" or unset = small tier);
- *  `offerRelaunch`: offer a relaunch when a deferred gate moves in HANDOFF (default on). */
-export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean }
+ *  `offerRelaunch`: offer a relaunch when a deferred gate moves in HANDOFF (default on);
+ *  `tokenBudget`: per-run token budget the run views compare usage with (unset = none). */
+export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean; tokenBudget?: number }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 /** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }

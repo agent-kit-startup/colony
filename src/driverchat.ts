@@ -14,9 +14,10 @@ import type { CockpitHost } from "./cockpit";
 import { pendingGates } from "./gates";
 import { gateCard } from "./inbox";
 import { CHAT_ENGINES, chatModel, type GatesDecision, gatesChange, gatesKey, NEVER_PREANSWER, noteProblem, offerRelaunch, parseDecision, PREANSWER_CLASSES } from "./resolver";
-import { liveQueueRun, runs } from "./runs";
+import { liveQueueRun, type Run, runs, runTokens } from "./runs";
 import { snapshot } from "./snapshot";
 import { btn, cardHeader, chip, empty, pill } from "./ui";
+import { formatTokens, parseBudget, USAGE_PROTOCOL } from "./usage";
 import "./driverchat.css";
 
 export const RELAUNCH_TIP = "agent-kit run-plan-all --note: relaunch the queue with your resolution note after the command text. The note is context only: every gate the new run opens, queue-confirm included, still waits for you";
@@ -36,6 +37,7 @@ export class DriverChat {
   private note = h("textarea", { class: "dc-note", rows: "7", spellcheck: "false", "aria-label": "Resolution note", placeholder: "Your resolution note: what you did about each gate. It reaches the relaunched session as operator context, never as a gate answer." }) as HTMLTextAreaElement;
   private chatModelIn = h("input", { class: "dc-model", type: "text", spellcheck: "false", "aria-label": "Chat model" }) as HTMLInputElement;
   private offerIn = h("input", { type: "checkbox", "aria-label": "Offer a relaunch when a deferred gate moves" }) as HTMLInputElement;
+  private budgetIn = h("input", { class: "dc-budget-in mono", type: "text", inputmode: "numeric", spellcheck: "false", "aria-label": "Per-run token budget", placeholder: "none" }) as HTMLInputElement;
   private root = "";
   private decision: GatesDecision | null = null;
   private supported: boolean | null = null;
@@ -61,6 +63,12 @@ export class DriverChat {
     });
     this.chatModelIn.addEventListener("change", () => this.remember({ chatModel: this.chatModelIn.value.trim() || null }));
     this.offerIn.addEventListener("change", () => this.remember({ offerRelaunch: this.offerIn.checked }));
+    this.budgetIn.addEventListener("change", () => {
+      const b = parseBudget(this.budgetIn.value);
+      if (b === "invalid") return this.host.status("Driver chat: the token budget is a whole number of tokens above 0, or empty for none");
+      runs.setBudget(this.root, b);
+      this.remember({ tokenBudget: b });
+    });
     // Re-probe when HANDOFF's queue fields change (the snapshot) or a queue run ends.
     snapshot.on((why) => {
       if (why !== "data") return;
@@ -83,7 +91,7 @@ export class DriverChat {
 
   /** Form fields this panel keeps across the Queue view's re-renders. */
   owns(el: HTMLElement): boolean {
-    return el === this.note || el === this.chatModelIn || el === this.offerIn;
+    return el === this.note || el === this.chatModelIn || el === this.offerIn || el === this.budgetIn;
   }
 
   /** The panel for the opened folder: a new folder starts again from its own HANDOFF. */
@@ -112,6 +120,25 @@ export class DriverChat {
     }
     this.chatModelIn.value = this.settings.chatModel ?? "";
     this.offerIn.checked = this.settings.offerRelaunch !== false;
+    const b = parseBudget(this.settings.tokenBudget);
+    this.budgetIn.value = typeof b === "number" ? String(b) : "";
+    runs.setBudget(this.root, typeof b === "number" ? b : null);
+  }
+
+  /** The folder's newest queue run (live or ended), for its tokens. */
+  private lastQueueRun(): Run | null {
+    const mine = runs.list().filter((r) => r.command === "run-plan-all" && r.root === this.root);
+    return mine.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
+  }
+
+  /** "Run #n: 590.4k tokens (...)", red text and border once over the budget. */
+  private tokensLine(): HTMLElement | null {
+    const r = this.lastQueueRun();
+    if (!r) return null;
+    const t = runTokens(r);
+    const el = h("div", { class: `dc-tokens hint${t.state === "over" ? " over" : ""}`, "data-budget": t.state, title: "Read from the driver's tick_end / run_end usage (no model call). The budget only informs: it never stops the run or answers a gate." }, `Queue run #${r.id}${r.running ? "" : " (ended)"}: ${t.text}`);
+    el.dataset.run = String(r.id);
+    return el;
   }
 
   private remember(patch: Record<string, unknown>) {
@@ -253,13 +280,14 @@ export class DriverChat {
       h("label", { class: "row" }, h("span", { class: "dc-label" }, "Chat model"), this.chatModelIn, h("span", { class: "dim small" }, "The chat agent only; queue workers keep the Run controls' engine and model")),
       h("label", { class: "row" }, this.offerIn, h("span", {}, "Offer a relaunch when a deferred gate moves in HANDOFF (re-probed on every HANDOFF change; you still confirm the relaunch)")),
       h("div", { class: "row" }, h("span", { class: "dc-label" }, "Pre-answered Asks"), h("span", { class: "dim" }, PREANSWER_CLASSES.length ? PREANSWER_CLASSES.join(", ") : `none: no Accepted ADR lets an app answer a gate class for you (driver chat ADR point 5). Never: ${NEVER_PREANSWER.join(", ")}`)),
-      h("div", { class: "row" }, h("span", { class: "dc-label" }, "Token budget"), h("span", { class: "dim" }, "not shown yet: the driver events carry no token usage (needs a driver protocol minor version)")),
+      h("label", { class: "row" }, h("span", { class: "dc-label" }, "Token budget"), this.budgetIn, h("span", { class: "dim small" }, `Per run, in tokens (empty: none). Reported by engines with driver protocol ${USAGE_PROTOCOL} or newer; an older engine shows "no usage". Passing it marks the run over budget and nothing else: it never stops a run or answers a gate${runs.budget(this.root) !== null ? ` (now ${formatTokens(runs.budget(this.root) as number)})` : ""}`)),
     );
     this.el.replaceChildren(
       head,
       h("p", { class: "hint" }, "Reads the queue's deferred gates and resolution prompt with agent-kit queue gates (no model call), then relaunches run-plan-all with your note. It never answers a gate for you and never edits HANDOFF."),
       ...(live ? [h("div", { class: "dc-live hint" }, `Queue run #${live.id} is live${live.queue?.status ? ` · ${live.queue.status}` : ""}. Its gates, queue-end-gates included, are answered here or in the Inbox; its input stays open until run_end.`)] : []),
       ...(liveGate ? [gateCard(liveGate, this.host, "dc-live-gate")] : []),
+      ...((t) => (t ? [t] : []))(this.tokensLine()),
       gateList,
       h("div", { class: "dc-note-label" }, "Resolution note (run-plan-all --note)"),
       this.note,
