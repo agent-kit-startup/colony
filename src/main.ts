@@ -9,6 +9,7 @@
 // (a fallback under View). Explorer next to the rail; the terminal drawer holds the user's
 // shells and every terminal control, and its bar stays on screen while the drawer is closed.
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
@@ -34,6 +35,7 @@ import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { decide, type McRecord } from "./mcactions";
+import { type DropHit, dropPoint, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { ReviewView } from "./review";
@@ -44,7 +46,7 @@ import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
-import { TermView } from "./termview";
+import { openTermMenu, TermView, termStatus } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
 import menuSpec from "./menu.json";
@@ -1911,11 +1913,62 @@ window.addEventListener(
 
 // No native WebKit context menu (Back / Reload / Open Frame) over the app or a terminal:
 // it can navigate the window away. Text fields and the editor keep theirs (copy / paste),
-// and handlers that open their own menu (the Explorer) run before this one.
+// and handlers that open their own menu (the Explorer) run before this one. A terminal
+// opens Colony's Copy / Paste menu (termview.ts), also when the right-click lands on
+// xterm's helper textarea.
 window.addEventListener("contextmenu", (ev) => {
   const t = ev.target as HTMLElement | null;
-  if (ev.defaultPrevented || t?.closest("input, textarea, [contenteditable='true'], .monaco-editor")) return;
+  if (ev.defaultPrevented) return;
+  const term = TermView.at(t);
+  if (term) {
+    ev.preventDefault();
+    openTermMenu(term, ev.clientX, ev.clientY);
+    return;
+  }
+  if (t?.closest("input, textarea, [contenteditable='true'], .monaco-editor")) return;
   ev.preventDefault();
+});
+
+// A terminal's refused clipboard read or write shows in the status bar (termview.ts).
+termStatus.show = status;
+
+// ---- files dropped from the desktop (src/droproute.ts) ------------------------------------
+/** Route one drop by the element under its position; returns the zone it went to. */
+async function handleDrop(paths: string[], pos: { x: number; y: number }): Promise<string> {
+  const pt = dropPoint(pos, navigator.userAgent.includes("Linux"), window.devicePixelRatio);
+  const el = document.elementFromPoint(pt.x, pt.y);
+  const zone = dropZone(el as DropHit | null, workspace?.root ?? null); // an Element: closest, dataset, classList
+  if (!paths.length) return "none";
+  const n = paths.length === 1 ? relPath(paths[0]) : `${paths.length} files`;
+  if (zone.kind === "terminal") {
+    const term = TermView.at(el);
+    if (!term || term.exited) {
+      status("Drop: that terminal has exited");
+      return "none";
+    }
+    term.term.paste(terminalText(paths));
+    term.focus();
+    status(`Typed the path of ${n} into the terminal`);
+  } else if (zone.kind === "explorer") {
+    const into = zone.dir === workspace?.root ? workspace.name : relPath(zone.dir);
+    try {
+      const copied = await api.dropCopy(paths, zone.dir);
+      await tree.refresh();
+      status(`Copied ${n} into ${into}`);
+      if (copied.length === 1) tree.setActive(copied[0]);
+    } catch (e) {
+      status(`Drop on ${into}: ${errText(e)}`);
+    }
+  } else if (zone.kind === "editor") {
+    for (const p of paths) await openFile(p);
+  } else {
+    status(workspace ? "Drop files on the editor, a terminal or the Explorer" : "Open a folder first, then drop files on it");
+  }
+  return zone.kind;
+}
+let lastDrop: Promise<string> | null = null;
+void getCurrentWebview().onDragDropEvent((ev) => {
+  if (ev.payload.type === "drop") lastDrop = handleDrop(ev.payload.paths, ev.payload.position);
 });
 
 window.addEventListener("beforeunload", (ev) => {
@@ -2242,6 +2295,53 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
+    // Files dropped from the desktop: the smoke's stand-in emits Tauri's drag-drop event
+    // with the real payload (lib.rs smoke_drag_drop), at the centre of a terminal, an
+    // Explorer file row (its folder: the root) and the editor. No OS drag, no input.
+    {
+      const name = `drop ${Date.now()}.txt`;
+      const src = await api.createTextFile(`${root}/colony-drop-src/${name}`, "dropped by the code-path smoke\n");
+      const centre = (el: Element | null | undefined) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null;
+      };
+      const drop = async (el: Element | null | undefined) => {
+        const at = centre(el);
+        if (!at) return { at, zone: "no target" };
+        lastDrop = null;
+        await api.smokeDragDrop([src], at.x, at.y);
+        await until(() => lastDrop !== null, 3000);
+        return { at, zone: lastDrop ? await lastDrop : "no event" };
+      };
+      const pane = [...$("terms").querySelectorAll<HTMLElement>(".term-pane")].find((p) => p.style.display !== "none");
+      const term = TermView.at(pane ?? null);
+      // What the drop typed into the shell (the terminal's input, before any echo).
+      let input = "";
+      const prevInput = term?.onInput;
+      if (term) {
+        term.onInput = (d) => {
+          input += d;
+          prevInput?.(d);
+        };
+      }
+      const onTerm = await drop(pane?.querySelector(".xterm-screen"));
+      const typed = await until(() => input.includes(`'${src}' `), 3000);
+      if (term && prevInput) term.onInput = prevInput;
+      await terminals.sendToActive("\x15"); // Ctrl+U: clear the typed line
+      const row = $("tree").querySelector(`.tree-row.file[data-path="${CSS.escape(file)}"]`);
+      const onTree = await drop(row);
+      const copied = await api.readTextFile(`${root}/${name}`).catch((e) => `error: ${errText(e)}`);
+      showTab(file);
+      const onEditor = await drop($("monaco-host"));
+      const opened = await until(() => editors.active === src && activeTab === src, 3000);
+      await log("file-drop", onTerm.zone === "terminal" && typed && onTree.zone === "explorer" && copied === "dropped by the code-path smoke\n" && onEditor.zone === "editor" && opened, {
+        terminal: { ...onTerm, typed, input: input.slice(0, 160) },
+        explorer: { ...onTree, copied: copied.slice(0, 60) },
+        editor: { ...onEditor, opened, active: editors.active ? relPath(editors.active) : null },
+        devicePixelRatio: window.devicePixelRatio,
+      });
+      await closeTab(src);
+    }
     // Panels: the terminal docks at the top, the side and back at the bottom (the menu's
     // path), refitting its xterm each time; the Explorer hides and comes back; both
     // splitters resize their panel (DOM pointer events on the splitter, no OS input).

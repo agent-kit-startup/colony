@@ -69,6 +69,10 @@ pub fn jail(state: &AppState, p: &str) -> Result<PathBuf, String> {
     if crate::context::allowed(&resolved) {
         return Ok(resolved);
     }
+    // And a file the user dropped on the window from the desktop (dragdrop.rs).
+    if state.dropped.contains(&resolved) {
+        return Ok(resolved);
+    }
     if !resolved.starts_with(&root) {
         return Err(format!("Path is outside the workspace: {}", resolved.display()));
     }

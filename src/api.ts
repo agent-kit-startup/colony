@@ -121,6 +121,8 @@ export const api = {
   appUpdateInstall: () => invoke<string>("app_update_install"),
   smokeLog: (line: string) => invoke<void>("smoke_log", { line }),
   smokeExit: () => invoke<void>("smoke_exit"),
+  /** The smoke's stand-in for a file drop from the desktop (CSS pixels on Linux). */
+  smokeDragDrop: (paths: string[], x: number, y: number) => invoke<void>("smoke_drag_drop", { paths, x, y }),
   menuState: () => invoke<MenuState[]>("menu_state"),
   smokeMenuClick: (id: string) => invoke<void>("smoke_menu_click", { id }),
   menuPopup: (index: number, x: number, y: number) => invoke<void>("menu_popup", { index, x, y }),
@@ -130,6 +132,8 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   createTextFile: (path: string, contents: string) => invoke<string>("create_text_file", { path, contents }),
+  /** Copy files dropped on the window into a workspace folder (dragdrop.rs). */
+  dropCopy: (paths: string[], dir: string) => invoke<string[]>("drop_copy", { paths, dir }),
   dashboardStart: () => invoke<DashboardInfo>("dashboard_start"),
   engineStatus: () => invoke<EngineStatus>("engine_status"),
   engineInstall: (version?: string) => invoke<EngineInstallReport>("engine_install", { version: version || null }),
