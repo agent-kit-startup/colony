@@ -88,7 +88,9 @@ export interface TickReview {
 }
 export interface FileVersions { before: string | null; after: string | null; note: string | null }
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
-export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string }
+/** Per folder. `chatModel`: the driver chat agent's model ("" or unset = small tier);
+ *  `offerRelaunch`: offer a relaunch when a deferred gate moves in HANDOFF (default on). */
+export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 /** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }
@@ -97,6 +99,9 @@ export type RunCommand = "run-plan" | "run-plan-all";
 export interface AgentStarted { id: number; cmd: string; root: string; backend: string; command: RunCommand }
 /** How "Run queue" starts run-plan-all with the current engine (agent.rs `queue_mode`). */
 export interface QueueMode { driver: boolean; protocol: string | null; note: string }
+/** `agent-kit queue gates` in the folder (agent.rs `queue_gates`): `decision` is the
+ *  `--json` output, `prompt` the `--prompt` output; `supported` false on an engine without it. */
+export interface QueueGates { supported: boolean; decision: unknown; prompt: string; note: string }
 export interface ContextSource { label: string; kind: string; path: string; exists: boolean; bytes: number | null; lines: number | null; files: number | null; note: string }
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
@@ -153,7 +158,7 @@ export const api = {
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
-  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand; onEvent: Channel<AgentEvent> }) =>
+  agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand; note?: string; onEvent: Channel<AgentEvent> }) =>
     invoke<AgentStarted>("agent_start", {
       backend: o.backend,
       maxTicks: o.maxTicks,
@@ -161,9 +166,11 @@ export const api = {
       onLimit: o.onLimit || null,
       model: o.model || null,
       command: o.command ?? null,
+      note: o.note || null,
       onEvent: o.onEvent,
     }),
   queueMode: () => invoke<QueueMode>("queue_mode"),
+  queueGates: (backend: string, cwd?: string) => invoke<QueueGates>("queue_gates", { backend, cwd: cwd ?? null }),
   agentBackends: () => invoke<BackendChoice[]>("agent_backends"),
   agentReply: (runId: number, askId: string, reply: number | string) => invoke<void>("agent_reply", { runId, askId, reply }),
   agentStop: (runId: number) => invoke<void>("agent_stop", { runId }),

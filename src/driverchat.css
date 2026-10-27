@@ -1,0 +1,18 @@
+/* Driver chat panel (src/driverchat.ts), under the Queue view's hero card. State is the 1px
+   border color only: no accent bar, no tinted fill (operator UI rule). */
+.driver-chat [hidden] { display: none !important; }
+.driver-chat .dc-gates { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.driver-chat .dc-gate { gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--mc-radius); background: var(--bg-card); min-width: 0; font-size: 12px; }
+.driver-chat .dc-gate.moved { border-color: var(--yellow); }
+.driver-chat .dc-gate strong { flex: 0 0 auto; max-width: 40%; }
+.driver-chat .dc-gate-text { color: var(--text-secondary); min-width: 0; overflow-wrap: anywhere; }
+.driver-chat .dc-note-label { font-size: var(--mc-chrome-meta-size); color: var(--text-muted); margin-top: 8px; }
+.driver-chat .dc-note { display: block; width: 100%; box-sizing: border-box; min-height: 7em; font-size: 12px; margin-top: 4px; }
+.driver-chat .dc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.driver-chat .dc-live-gate { margin: 6px 0; }
+.driver-chat .dc-sent pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; }
+.driver-chat .dc-settings { margin-top: 10px; font-size: 12px; }
+.driver-chat .dc-settings summary { cursor: pointer; color: var(--text-secondary); }
+.driver-chat .dc-settings .row { gap: 8px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
+.driver-chat .dc-label { min-width: 120px; color: var(--text-secondary); }
+.driver-chat .dc-model { width: 16em; }

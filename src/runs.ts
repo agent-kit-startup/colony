@@ -65,6 +65,9 @@ export interface Run {
   lastText: string;
   /** Queue runner only: the latest `queue_state` (null until the first one, or for run-plan). */
   queue: QueueState | null;
+  /** Queue runner relaunched from the driver chat: the operator's resolution note
+   *  (`--note`). `run_start` does not echo it, so Colony keeps its own copy. */
+  note: string;
 }
 
 export type RunChange =
@@ -101,7 +104,7 @@ function agentLine(e: Ev): Row | null {
   return null;
 }
 
-export interface StartOptions { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand }
+export interface StartOptions { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand; note?: string }
 
 class RunStore {
   readonly runs = new Map<number, Run>();
@@ -151,10 +154,12 @@ class RunStore {
       startedAt: new Date().toISOString(),
       lastText: "",
       queue: null,
+      note: opts.note?.trim() ?? "",
     };
     this.runs.set(run.id, run);
     this.emit({ kind: "state", run });
     this.row(run, `$ ${started.cmd}`, "ag-dim");
+    if (run.note) this.row(run, `resolution note (${run.note.split("\n").length} lines): ${run.note}`, "ag-dim");
     for (const m of early.splice(0)) this.onMessage(run, m);
     return run;
   }

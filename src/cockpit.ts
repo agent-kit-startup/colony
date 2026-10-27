@@ -15,6 +15,7 @@ import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "
 import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { planCrudButton } from "./planmenu";
+import type { DriverChat } from "./driverchat";
 import { inlineMd, plainMd, prose } from "./transcript";
 import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, emptyCta, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
 
@@ -910,7 +911,8 @@ export class PlansView extends View {
 
 // ---- Queue ---------------------------------------------------------------------------
 export class QueueView extends View {
-  constructor(host: CockpitHost) {
+  /** `chat`: the driver chat panel under the queue's hero card (./driverchat.ts). */
+  constructor(host: CockpitHost, private chat?: DriverChat) {
     super(host, "cv-queue");
     // A live queue run's queue_state moves the cursor before the next snapshot does.
     runs.on((c) => c.kind === "state" && c.run.command === "run-plan-all" && this.invalidate());
@@ -971,7 +973,11 @@ export class QueueView extends View {
       return r;
     });
     const status = str(q.status);
-    return [head, h("div", { class: "q-list" }, ...(rows.length ? rows : [noQueue(false)])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
+    return [head, ...(this.chat ? [this.chat.attach()] : []), h("div", { class: "q-list" }, ...(rows.length ? rows : [noQueue(false)])), ...(status ? [card("Queue status (HANDOFF)", prose(status))] : [])];
+  }
+
+  protected keepsFocus(el: HTMLElement): boolean {
+    return !!this.chat?.owns(el);
   }
 }
 
