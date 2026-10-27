@@ -7,6 +7,7 @@ mod catalog;
 mod chats;
 mod context;
 mod dashboard;
+mod dragdrop;
 mod engine;
 mod forge;
 mod gitops;
@@ -49,6 +50,8 @@ pub struct AppState {
     #[cfg(unix)]
     instance_inbox: instance::Inbox,
     startup: Mutex<StartupInfo>,
+    /// Files dropped on the window from the desktop (dragdrop.rs).
+    pub dropped: dragdrop::Dropped,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -168,6 +171,20 @@ fn smoke_exit(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), S
     }
     app.exit(0);
     Ok(())
+}
+
+/// The smoke's stand-in for a file drop from the desktop (refused when the smoke is off):
+/// remembers `paths` as a real drop does (lib.rs `on_window_event`) and emits the event
+/// Tauri emits for one, with the same payload, so src/droproute.ts routes it.
+#[tauri::command]
+fn smoke_drag_drop(app: tauri::AppHandle, state: State<'_, AppState>, paths: Vec<PathBuf>, x: f64, y: f64) -> Result<(), String> {
+    use tauri::Emitter;
+    if state.startup.lock().ok().and_then(|s| s.smoke.clone()).is_none() {
+        return Err("not a smoke run".into());
+    }
+    state.dropped.record(&paths);
+    let payload = serde_json::json!({ "paths": paths, "position": { "x": x, "y": y } });
+    app.emit_to(tauri::EventTarget::labeled("main"), "tauri://drag-drop", payload).map_err(|e| e.to_string())
 }
 
 /// Ask the compositor to focus this window (on Hyprland; elsewhere nothing). The frontend
@@ -329,6 +346,13 @@ pub fn run() {
                 eprintln!("colony: menu: {e}");
             }
         })
+        // A file drop from the desktop: remember its files (dragdrop.rs); Tauri also emits
+        // `tauri://drag-drop` to the page, where src/droproute.ts routes it.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<AppState>().dropped.record(paths);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             instance_subscribe,
@@ -338,6 +362,8 @@ pub fn run() {
             appupdate::app_update_install,
             smoke_log,
             smoke_exit,
+            smoke_drag_drop,
+            dragdrop::drop_copy,
             menu::menu_state,
             menu::menu_popup,
             menu::smoke_menu_click,
@@ -448,6 +474,10 @@ pub fn run() {
             window
                 .inner_size(1500.0, 950.0)
                 .min_inner_size(900.0, 600.0)
+                // WebKit's `javascript-can-access-clipboard` (Tauri leaves it off): without it
+                // `navigator.clipboard.readText()` and `execCommand('paste')` are refused, so
+                // the terminal's Ctrl+Shift+V and Monaco's menu Paste paste nothing.
+                .enable_clipboard_access()
                 .initialization_script_for_all_frames(&hook)
                 .build()?;
             Ok(())

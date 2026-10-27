@@ -3,7 +3,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { api, Channel, errText, focusPolicy, type PtyEvent } from "./api";
+import { api, Channel, errText, focusPolicy, h, type PtyEvent } from "./api";
 import { onSkin, termFont, token } from "./skin";
 
 // The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
@@ -22,7 +22,16 @@ const termTheme = () => ({
   brightBlack: token("--text-muted"),
 });
 
+/** Where a terminal reports a clipboard failure (main.ts points it at the status bar). */
+export const termStatus = { show: (_msg: string): void => {} };
+
 export class TermView {
+  private static byPane = new WeakMap<Element, TermView>();
+  /** The terminal that `el` sits in (a drop target, a right-click), if any. */
+  static at(el: Element | null): TermView | undefined {
+    const pane = el?.closest(".term-pane");
+    return pane ? TermView.byPane.get(pane) : undefined;
+  }
   readonly term: Terminal;
   private fitAddon = new FitAddon();
   id = -1;
@@ -47,6 +56,7 @@ export class TermView {
     });
     this.term.loadAddon(this.fitAddon);
     this.term.open(pane);
+    TermView.byPane.set(pane, this);
     this.offSkin = onSkin(() => {
       this.term.options.theme = termTheme();
       const font = termFont();
@@ -91,17 +101,41 @@ export class TermView {
     this.term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown" || !ev.ctrlKey || !ev.shiftKey) return true;
       if (ev.code === "KeyC") {
-        const sel = this.term.getSelection();
-        if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+        void this.copySelection();
         return false;
       }
       if (ev.code === "KeyV") {
-        navigator.clipboard.readText().then((txt) => this.term.paste(txt)).catch(() => {});
+        void this.pasteClipboard();
         return false;
       }
       return true;
     });
     return true;
+  }
+
+  /** Ctrl+Shift+C and the menu's Copy: the selection to the clipboard. */
+  async copySelection(): Promise<void> {
+    const sel = this.term.getSelection();
+    if (!sel) return;
+    try {
+      await navigator.clipboard.writeText(sel);
+    } catch (e) {
+      termStatus.show(`Copy failed: ${errText(e)}`);
+    }
+  }
+
+  /** Ctrl+Shift+V and the menu's Paste: the clipboard's text into the shell (bracketed
+   *  when the program asked for it). A refused read is shown, never swallowed. */
+  async pasteClipboard(): Promise<void> {
+    let txt: string;
+    try {
+      txt = await navigator.clipboard.readText();
+    } catch (e) {
+      termStatus.show(`Paste failed: the clipboard read was refused (${errText(e)})`);
+      return;
+    }
+    if (txt) this.term.paste(txt);
+    else termStatus.show("Paste: the clipboard holds no text");
   }
 
   async send(data: string) {
@@ -138,4 +172,43 @@ export class TermView {
     this.term.dispose();
     this.pane.remove();
   }
+}
+
+// ---- right-click menu ---------------------------------------------------------------
+// WebKit's own menu stays cancelled over a terminal (main.ts contextmenu: it offers Back /
+// Reload); a right-click there opens this Copy / Paste menu instead.
+let termMenu: HTMLElement | null = null;
+let menuView: TermView | null = null;
+
+function closeTermMenu() {
+  if (termMenu) termMenu.hidden = true;
+}
+
+export function openTermMenu(view: TermView, x: number, y: number) {
+  if (!termMenu) {
+    const m = h("div", { id: "term-menu", class: "menu", role: "menu", "aria-label": "Terminal", hidden: "" });
+    for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, closeTermMenu);
+    window.addEventListener("colony:popover", (ev) => (ev as CustomEvent).detail !== "terminal" && closeTermMenu());
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || m.hidden) return;
+      ev.preventDefault();
+      closeTermMenu();
+      menuView?.focus();
+    });
+    document.body.append(m);
+    termMenu = m;
+  }
+  // One popover at a time (main.ts, planmenu.ts).
+  window.dispatchEvent(new CustomEvent("colony:popover", { detail: "terminal" }));
+  menuView = view;
+  const copy = h("button", { role: "menuitem", "data-act": "term-copy" }, "Copy");
+  copy.disabled = !view.term.getSelection();
+  copy.addEventListener("click", () => void view.copySelection().then(() => view.focus()));
+  const paste = h("button", { role: "menuitem", "data-act": "term-paste" }, "Paste");
+  paste.addEventListener("click", () => void view.pasteClipboard().then(() => view.focus()));
+  termMenu.replaceChildren(copy, paste);
+  termMenu.hidden = false;
+  const r = termMenu.getBoundingClientRect();
+  termMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 4))}px`;
+  termMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 4))}px`;
 }
