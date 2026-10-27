@@ -103,16 +103,24 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #shell.no-side #side, #shell.no-side #side-resizer { display: none; }
 @media (max-width: 1100px) { #shell { --side-w: 190px; } }
 
-/* No overflow clipping: the folder path is the one flexible field and the buttons keep
-   their size (the agent actions and the Plans dropdown live here, More in the rail, the
-   terminal controls in the drawer bar). */
+/* The folder path is the one flexible field and the buttons keep their size (the agent
+   actions and the Plans dropdown live here, More in the rail, the terminal controls in the
+   drawer bar). */
 #top { grid-area: top; display: flex; white-space: nowrap; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); min-width: 0; }
 #top > button { flex: none; }
-/* The folder path gives way first; if the agent actions still do not fit, they scroll
-   sideways so Go to file, Open in editor, settings and the window controls stay reachable. */
+/* The folder path gives way first, down to a readable folder name; then the agent actions
+   that do not fit fold into the More agent actions dropdown (fitTopActions in main.ts, the
+   primary button last), so nothing scrolls sideways and Go to file, Open in editor, settings
+   and the window controls stay on screen. The clip is a fallback only; the vertical padding
+   keeps the focus ring inside it. */
 #ws-name { flex-shrink: 100; }
-#top-actions { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; align-items: center; gap: 6px; padding-right: 8px; margin-right: 2px; border-right: 1px solid var(--border); }
+#top-actions { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow: hidden; align-items: center; gap: 6px; padding: 4px 8px 4px 4px; margin: -4px 2px -4px -4px; border-right: 1px solid var(--border); }
 #top-actions > button { flex: none; }
+#top-actions > .folded { display: none; }
+#btn-top-more { display: inline-flex; align-items: center; justify-content: center; }
+#btn-top-more[hidden] { display: none; }
+#btn-top-more svg { width: 14px; height: 14px; }
+#btn-top-more[aria-expanded="true"] { border-color: var(--border-active); }
 #btn-plans { display: inline-flex; align-items: center; gap: 4px; }
 #btn-plans svg { width: 12px; height: 12px; }
 #btn-plans[aria-expanded="true"] { border-color: var(--border-active); }
@@ -123,9 +131,9 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #plan-crud-menu { min-width: 200px; }
 #plan-crud-menu .menu-label { max-width: 260px; white-space: normal; }
 .brand { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: 0.02em; margin-right: 6px; }
-#ws-name { display: inline-flex; min-width: 0; max-width: 50vw; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); }
-#ws-name .ws-parent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-#ws-name .ws-leaf { flex: none; color: var(--text-primary); font-weight: 600; }
+#ws-name { display: inline-flex; min-width: 12ch; overflow: hidden; max-width: 50vw; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); }
+#ws-name .ws-parent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 100 auto; }
+#ws-name .ws-leaf { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); font-weight: 600; }
 /* Custom title bar (settings.json ui.titleBar = "custom"): #top drags the window and holds
    the menus and the window controls. Hover changes the border only. */
 #top-menus { display: inline-flex; flex: none; gap: 2px; }

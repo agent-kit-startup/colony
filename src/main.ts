@@ -72,6 +72,7 @@ document.getElementById("app")!.innerHTML = `
       <button data-cmd="interactive" title="The engine's own CLI (claude or codex) in a terminal tab, on your login">Open interactive</button>
       <button data-cmd="start-project">Start a project</button>
       <button id="btn-plans" aria-haspopup="menu" aria-expanded="false" title="Plans: view them, or create one in the backlog">Plans<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+      <button id="btn-top-more" aria-haspopup="menu" aria-expanded="false" title="More agent actions (the ones that do not fit the top bar)" aria-label="More agent actions" hidden><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg></button>
     </span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
@@ -1113,7 +1114,7 @@ const moreActionsSep = h("div", { class: "menu-sep", hidden: "" });
 menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
 function toggleMore(anchor: HTMLElement) {
   if (!menu.hidden) return (menu.hidden = true);
-  setPlansMenu(false);
+  closeTopMenus();
   closePlanMenu();
   const r = anchor.getBoundingClientRect();
   // Next to the rail, on the window's side of it.
@@ -1150,7 +1151,16 @@ const PLANS_MENU: { id: string; label: string; title: string }[] = [
 ];
 const plansBtn = $("btn-plans");
 const plansMenu = h("div", { id: "plans-menu", class: "menu", role: "menu", "aria-label": "Plans", hidden: "" }, ...PLANS_MENU.map((i) => h("button", { role: "menuitem", "data-cmd": i.id, title: i.title }, i.label)));
-document.body.append(plansMenu);
+// The overflow dropdown: the agent actions that do not fit the row (fitTopActions), filled
+// from the folded buttons when it opens. Same ACTIONS ids, so it is the button row folded,
+// not another menu (menu.json is untouched).
+const topMoreBtn = $("btn-top-more");
+const topMoreMenu = h("div", { id: "top-more-menu", class: "menu", role: "menu", "aria-label": "More agent actions", hidden: "" });
+document.body.append(plansMenu, topMoreMenu);
+const TOP_DROPDOWNS: [HTMLElement, HTMLElement][] = [
+  [plansBtn, plansMenu],
+  [topMoreBtn, topMoreMenu],
+];
 // The tooltips the Mission and Queue views use for the same actions.
 $("top-actions").querySelector('[data-cmd="run-queue"]')!.setAttribute("title", RUN_QUEUE_TIP);
 $("top-actions").querySelector('[data-cmd="start-project"]')!.setAttribute("title", NEW_PLAN_TIP);
@@ -1162,69 +1172,134 @@ $("top-actions").querySelector('[data-cmd="start-project"]')!.setAttribute("titl
 function renderTopActions() {
   const bar = $("top-actions");
   bar.hidden = !workspace;
-  if (!workspace && document.getElementById("plans-menu")) setPlansMenu(false);
+  if (!workspace && document.getElementById("top-more-menu")) closeTopMenus();
   const plan = snapshot.activePlanFile;
   const pr = snapshot.data ? snapshot.now.progress : null;
   const total = Number(pr?.total) || 0;
   const open = !!plan && !(total > 0 && Number(pr?.completed) >= total);
   bar.querySelector('[data-cmd="run-plan"]')!.classList.toggle("primary", !!snapshot.data && open);
   bar.querySelector('[data-cmd="start-project"]')!.classList.toggle("primary", !!snapshot.data && !open);
+  fitTopActions();
 }
 
-/** Under the Plans button, right edges aligned; opened from the keyboard, focus its first item. */
-function setPlansMenu(open: boolean, focus = false) {
-  plansMenu.hidden = !open;
-  plansBtn.setAttribute("aria-expanded", String(open));
+/** The agent actions never scroll sideways: the ones that do not fit fold into the More agent
+ *  actions dropdown, from the right, the primary button last. Measured, not a media query:
+ *  the custom title bar's menus and window controls take room the native mode does not.
+ *  Reads the DOM only (renderTopActions calls it before this section has run). */
+function fitTopActions() {
+  const top = document.getElementById("top");
+  const bar = document.getElementById("top-actions");
+  const more = document.getElementById("btn-top-more");
+  if (!top || !bar || !more || bar.hidden) return;
+  const items = [...bar.children].filter((el): el is HTMLElement => el instanceof HTMLElement && el !== more);
+  const folded = () => items.map((el) => el.classList.contains("folded")).join();
+  const before = folded();
+  for (const el of items) el.classList.remove("folded");
+  more.hidden = true;
+  const over = () => bar.scrollWidth > bar.clientWidth + 1 || top.scrollWidth > top.clientWidth + 1;
+  if (over()) {
+    more.hidden = false;
+    const rightFirst = items.slice().reverse();
+    const order = [...rightFirst.filter((el) => !el.classList.contains("primary")), ...rightFirst.filter((el) => el.classList.contains("primary"))];
+    for (const el of order) {
+      if (!over()) break;
+      el.classList.add("folded");
+    }
+  }
+  // An open dropdown no longer matches the row (its button folded, or the overflow rows
+  // changed): close it. Unchanged (a snapshot event re-rendering): it stays open.
+  if (folded() !== before && document.getElementById("top-more-menu")) closeTopMenus();
+}
+new ResizeObserver(() => fitTopActions()).observe($("top"));
+void document.fonts?.ready.then(() => fitTopActions());
+
+/** The overflow dropdown's rows: each folded action, and the Plans entries under a label
+ *  when the Plans button folded (no dropdown inside a dropdown). */
+function fillTopMore() {
+  const rows: HTMLElement[] = [];
+  for (const el of $("top-actions").querySelectorAll<HTMLElement>(":scope > .folded")) {
+    if (el === plansBtn) {
+      if (rows.length) rows.push(h("div", { class: "menu-sep" }));
+      rows.push(h("div", { class: "menu-label" }, "Plans"), ...PLANS_MENU.map((i) => h("button", { role: "menuitem", "data-cmd": i.id, title: i.title }, i.label)));
+    } else if (el.dataset.cmd) {
+      rows.push(h("button", { role: "menuitem", "data-cmd": el.dataset.cmd, title: el.title }, el.textContent ?? ""));
+    }
+  }
+  topMoreMenu.replaceChildren(...rows);
+}
+
+function closeTopMenus() {
+  for (const [b, m] of TOP_DROPDOWNS) {
+    m.hidden = true;
+    b.setAttribute("aria-expanded", "false");
+  }
+}
+
+/** A top bar dropdown (Plans, More agent actions), one at a time: under its button, right
+ *  edges aligned, position fixed from the button's rect (a body-level menu, so the row's
+ *  overflow never clips it); opened from the keyboard, focus its first item. */
+function setTopMenu(btn: HTMLElement, open: boolean, focus = false) {
+  closeTopMenus();
   if (!open) return;
+  const dd = TOP_DROPDOWNS.find(([b]) => b === btn)![1];
+  if (dd === topMoreMenu) fillTopMore();
+  dd.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
   menu.hidden = true;
   closePlanMenu();
-  const r = plansBtn.getBoundingClientRect();
-  plansMenu.style.top = `${r.bottom + 4}px`;
-  plansMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
-  plansMenu.style.left = plansMenu.style.bottom = "auto";
-  if (focus) plansMenu.querySelector<HTMLButtonElement>("button")?.focus();
+  const r = btn.getBoundingClientRect();
+  dd.style.top = `${r.bottom + 4}px`;
+  dd.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  dd.style.left = dd.style.bottom = "auto";
+  dd.style.maxHeight = `${Math.max(120, window.innerHeight - r.bottom - 12)}px`;
+  dd.style.overflowY = "auto";
+  if (focus) dd.querySelector<HTMLButtonElement>("button")?.focus();
 }
 $("top-actions").addEventListener("click", (ev) => {
   const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
-  if (el === plansBtn) {
+  const dd = TOP_DROPDOWNS.find(([b]) => b === el);
+  if (el && dd) {
     ev.stopPropagation();
-    return setPlansMenu(plansMenu.hidden, ev.detail === 0);
+    return setTopMenu(el, dd[1].hidden, ev.detail === 0);
   }
   if (el?.dataset.cmd) runAction(el.dataset.cmd);
 });
 // Closed by any click outside, a resize or the window losing focus (a native menu popup
 // takes it), and by Escape wherever the focus is.
-for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, () => setPlansMenu(false));
+for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, () => closeTopMenus());
 // A plan CRUD dropdown opened (src/planmenu.ts; its click does not reach the window): one
 // popover at a time.
 window.addEventListener("colony:popover", () => {
-  setPlansMenu(false);
+  closeTopMenus();
   menu.hidden = true;
 });
 window.addEventListener("keydown", (ev) => {
-  if (ev.key !== "Escape" || plansMenu.hidden) return;
+  const open = TOP_DROPDOWNS.find(([, m]) => !m.hidden);
+  if (ev.key !== "Escape" || !open) return;
   ev.preventDefault();
-  setPlansMenu(false);
-  plansBtn.focus();
+  closeTopMenus();
+  open[0].focus();
 });
-plansMenu.addEventListener("click", (ev) => {
-  const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
-  if (!el?.dataset.cmd) return;
-  setPlansMenu(false);
-  runAction(el.dataset.cmd);
-});
-plansMenu.addEventListener("keydown", (ev) => {
-  const items = [...plansMenu.querySelectorAll<HTMLButtonElement>("button")];
-  const at = items.indexOf(document.activeElement as HTMLButtonElement);
-  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-    ev.preventDefault();
-    items[(at + (ev.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length].focus();
-  }
-});
-plansMenu.addEventListener("focusout", (ev) => {
-  const to = ev.relatedTarget as Node | null;
-  if (to && !plansMenu.contains(to) && to !== plansBtn) setPlansMenu(false);
-});
+for (const [btn, dd] of TOP_DROPDOWNS) {
+  dd.addEventListener("click", (ev) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
+    if (!el?.dataset.cmd) return;
+    closeTopMenus();
+    runAction(el.dataset.cmd);
+  });
+  dd.addEventListener("keydown", (ev) => {
+    const items = [...dd.querySelectorAll<HTMLButtonElement>("button")];
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      items[(at + (ev.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length].focus();
+    }
+  });
+  dd.addEventListener("focusout", (ev) => {
+    const to = ev.relatedTarget as Node | null;
+    if (to && !dd.contains(to) && to !== btn) closeTopMenus();
+  });
+}
 
 // ---- title bar (settings.json ui.titleBar, applied when the window opens) --------------
 /** The mode this window opened with, and the saved one (they differ until a restart).
@@ -1290,6 +1365,8 @@ function applyTitleBar(info: StartupInfo) {
   controls.querySelector(".win-close")!.addEventListener("click", () => void closeWindow());
   void win.onResized(() => void syncMax());
   void syncMax();
+  // The menus and the window controls take room in the row without resizing #top.
+  fitTopActions();
 }
 
 // ---- actions: the native menu bar and More (src/menu.json), and the palette, run these -
@@ -1885,6 +1962,50 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     const escaped = $("plans-menu").hidden && $("btn-plans").getAttribute("aria-expanded") === "false";
     await log("top-bar", !$("top-actions").hidden && topCmds === "run-plan,run-queue,interactive,start-project" && plansItems === "view:plans,backlog-add" && plansOpen && viewed && mouseOpen && escaped, { topCmds, plansItems, plansOpen, viewed, mouseOpen, escaped });
+    // The top bar never scrolls sideways: measured at the window's width, then with #top held
+    // at 760 px, the agent actions that do not fit fold into More agent actions (the rows are
+    // the folded ids, the Plans entries flattened), its dropdown sits inside the window, a row
+    // dispatches its ACTIONS id, and the window controls (custom title bar) stay in view.
+    const topFit = () => {
+      const top = $("top");
+      const ta = $("top-actions");
+      const inView = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        const x = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return r.width > 0 && r.left >= 0 && r.right <= window.innerWidth && !!x && (x === el || el.contains(x));
+      };
+      const items = [...ta.querySelectorAll<HTMLElement>(":scope > [data-cmd], :scope > #btn-plans")];
+      const folded = items.filter((el) => !el.getClientRects().length).map((el) => el.dataset.cmd ?? "plans");
+      const shown = items.filter((el) => el.getClientRects().length);
+      const more = $("btn-top-more");
+      return {
+        scroll: Math.max(top.scrollWidth - top.clientWidth, ta.scrollWidth - ta.clientWidth),
+        folded,
+        shownInView: shown.every(inView),
+        moreOk: folded.length ? !more.hidden && inView(more) : more.hidden,
+        winOk: info.titleBar !== "custom" || [...$("win-controls").querySelectorAll("button")].every(inView),
+      };
+    };
+    const fitWide = topFit();
+    $("top").style.maxWidth = "760px";
+    await wait(150);
+    const fitNarrow = topFit();
+    $("btn-top-more").click();
+    const moreMenu = $("top-more-menu");
+    const moreRows = [...moreMenu.querySelectorAll<HTMLElement>("[data-cmd]")].map((b) => b.dataset.cmd).join(",");
+    const wantRows = fitNarrow.folded.flatMap((id) => (id === "plans" ? ["view:plans", "backlog-add"] : [id])).join(",");
+    const mr = moreMenu.getBoundingClientRect();
+    const moreOpen = !moreMenu.hidden && $("btn-top-more").getAttribute("aria-expanded") === "true" && document.activeElement === moreMenu.querySelector("button") && mr.top >= 0 && mr.bottom <= window.innerHeight && mr.left >= 0 && mr.right <= window.innerWidth;
+    await shot("top-bar-folded");
+    showTab("mission");
+    moreMenu.querySelector<HTMLButtonElement>('[data-cmd="view:plans"]')?.click();
+    await wait(100);
+    const foldViewed = moreMenu.hidden && activeTab === "plans";
+    $("top").style.maxWidth = "";
+    await wait(150);
+    const fitBack = topFit();
+    const fitOk = (f: ReturnType<typeof topFit>) => f.scroll <= 1 && f.shownInView && f.moreOk && f.winOk;
+    await log("top-bar-fit", fitOk(fitWide) && fitOk(fitNarrow) && fitOk(fitBack) && fitNarrow.folded.length > 0 && fitNarrow.folded.includes("plans") && moreRows === wantRows && moreOpen && foldViewed, { fitWide, fitNarrow, fitBack, moreRows, moreOpen, foldViewed, titleBar: info.titleBar });
     showTab("plans");
     view("plans").querySelector<HTMLButtonElement>('button[data-filter="all"]')?.click();
     await wait(200);
