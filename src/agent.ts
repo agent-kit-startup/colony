@@ -4,6 +4,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, type BackendChoice, errText, h } from "./api";
 import { type Gate, type Run, runs } from "./runs";
+import { preanswerSetting } from "./resolver";
 import { parseBudget } from "./usage";
 
 /**
@@ -101,6 +102,7 @@ export class RunControls {
       if (root) {
         const b = parseBudget(ws.tokenBudget);
         runs.setBudget(root, typeof b === "number" ? b : null);
+        runs.setPreanswer(root, preanswerSetting(ws.preanswer));
       }
       if (ws.backend && [...this.backend.options].some((o) => o.value === ws.backend)) {
         this.backend.value = ws.backend;

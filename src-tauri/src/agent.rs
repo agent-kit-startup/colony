@@ -241,6 +241,26 @@ mod tests {
     }
 
     #[test]
+    fn policy_preanswer_is_allowlisted_and_marked() {
+        use super::reply_message;
+        use serde_json::json;
+        // The operator's reply: no source field, as before.
+        assert_eq!(reply_message("demo", &json!(2), None).unwrap(), json!({"type":"hitl_reply","askId":"demo","reply":2}));
+        assert_eq!(reply_message("demo", &json!("Beta"), Some("operator")).unwrap(), json!({"type":"hitl_reply","askId":"demo","reply":"Beta"}));
+        // The one allowed pair goes out marked as a policy pre-answer.
+        assert_eq!(
+            reply_message("context-checkpoint", &json!("Continue queue"), Some("policy")).unwrap(),
+            json!({"type":"hitl_reply","askId":"context-checkpoint","reply":"Continue queue","source":"policy"})
+        );
+        // Another label, a number, another gate, or an unknown source: refused.
+        for (ask, reply) in [("context-checkpoint", json!("Change queue")), ("context-checkpoint", json!(1)), ("queue-confirm", json!("Run as proposed")), ("git-prod", json!("Continue queue"))] {
+            assert!(reply_message(ask, &reply, Some("policy")).is_err(), "{ask} {reply}");
+        }
+        assert!(reply_message("demo", &json!(1), Some("app")).is_err());
+        assert!(reply_message("demo", &json!(0), None).is_err());
+    }
+
+    #[test]
     fn queue_gates_json_shape() {
         use super::parse_gates;
         let ok = br#"{"ask":true,"reason":"deferred_gates","labels":["Resolve gates now","Print resolution prompt","Later"],"gates":[{"plan":"a.plan.md","gate":"Colony PR #65 open","asks":[]}]}"#;
@@ -593,16 +613,41 @@ fn send_line(state: &AppState, run_id: u32, value: serde_json::Value) -> Result<
     stdin.flush().map_err(|e| e.to_string())
 }
 
-/// Relay the operator's answer to the open gate: `reply` is a 1-based number, an exact
-/// label, or free text (driver protocol "Answers").
-#[tauri::command]
-pub fn agent_reply(state: State<'_, AppState>, run_id: u32, ask_id: String, reply: serde_json::Value) -> Result<(), String> {
-    match &reply {
+/// The (ask-id, label) pairs a folder setting may pre-answer (kit ADR 2026-10-26 driver chat,
+/// Amend 2026-10-28; kit `PREANSWERABLE_GATES`, driver protocol 1.4.0). Mirrors
+/// `PREANSWERS` in src/resolver.ts.
+pub(crate) const PREANSWERS: &[(&str, &str)] = &[("context-checkpoint", "Continue queue")];
+
+/// The `hitl_reply` line for the open gate. `source` is `None` / `"operator"` (the operator
+/// picked it) or `"policy"` (a folder setting pre-answered it, sent as `"source":"policy"` so
+/// the kit stamps `policy pre-answer`, never `operator reply`). A policy reply must be the
+/// exact label of an allowed pair; anything else is refused here, before the kit sees it.
+pub(crate) fn reply_message(ask_id: &str, reply: &serde_json::Value, source: Option<&str>) -> Result<serde_json::Value, String> {
+    match reply {
         serde_json::Value::Number(n) if n.as_u64().is_some_and(|v| v >= 1) => {}
         serde_json::Value::String(s) if !s.trim().is_empty() => {}
         _ => return Err("Reply must be a 1-based number or non-empty text".into()),
     }
-    send_line(&state, run_id, serde_json::json!({ "type": "hitl_reply", "askId": ask_id, "reply": reply }))
+    match source {
+        None | Some("operator") => Ok(serde_json::json!({ "type": "hitl_reply", "askId": ask_id, "reply": reply })),
+        Some("policy") => {
+            let label = reply.as_str().unwrap_or_default();
+            if !PREANSWERS.iter().any(|(a, l)| *a == ask_id && *l == label) {
+                return Err(format!("No setting may pre-answer gate {ask_id} with {reply}"));
+            }
+            Ok(serde_json::json!({ "type": "hitl_reply", "askId": ask_id, "reply": label, "source": "policy" }))
+        }
+        Some(other) => Err(format!("Unknown reply source {other:?} (operator or policy)")),
+    }
+}
+
+/// Relay an answer to the open gate: `reply` is a 1-based number, an exact label, or free
+/// text (driver protocol "Answers"). With `source: "policy"` it is a pre-answer from a folder
+/// setting (driver protocol 1.4.0 "Policy pre-answers"), never presented as the operator's.
+#[tauri::command]
+pub fn agent_reply(state: State<'_, AppState>, run_id: u32, ask_id: String, reply: serde_json::Value, source: Option<String>) -> Result<(), String> {
+    let line = reply_message(&ask_id, &reply, source.as_deref())?;
+    send_line(&state, run_id, line)
 }
 
 /// `{"type":"stop"}` ends the run at the open gate (exit 4, cause "driver stop").

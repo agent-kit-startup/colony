@@ -3,8 +3,9 @@
 // 1.3.0)"). The numbers are the kit's `tick_end.usage` / `run_end.usage` (kit
 // docs/driver-events-protocol.md "Token usage"), read only when the run's
 // `run_start.protocol` is 1.3.0 or newer. An older engine shows "no usage": Colony never
-// derives tokens from the agent's own stream (`agent_event`). The budget is informational:
-// passing it shows the run as over budget and nothing else (no stop, no answer).
+// derives tokens from the agent's own stream (`agent_event`). The budget never stops a run
+// or answers a gate: passing it shows the run as over budget, and it bounds the one policy
+// pre-answer (resolver.ts `decidePreanswer`, driver protocol 1.4.0 `hitl_gate.usage`).
 // No I/O here: Node runs it with its types stripped (scripts/usage.test.mjs).
 
 export interface TokenUsage {

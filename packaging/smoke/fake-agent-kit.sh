@@ -1,13 +1,14 @@
 #!/bin/sh
 # COLONY_SMOKE fixture: stands in for `agent-kit run-plan --events ndjson` and
-# `agent-kit run-plan-all --events ndjson` (driver protocol 1.3.0,
+# `agent-kit run-plan-all --events ndjson` (driver protocol 1.4.0,
 # docs/driver-events-protocol.md in the kit) so the smoke can exercise a HITL gate answer,
 # the per-tick review, the queue runner and the engine choice end to end without a real
 # agent. run-plan: one tick that edits two files, opens gate `smoke-gate` and waits for
 # one stdin line. run-plan-all: one session with a queue_state change and gate
 # `smoke-queue-gate`. `engine-info --json` announces the protocol. `tick_end` / `run_end`
 # carry token `usage` (1.3.0) on the paths that finish: run-plan 1500 tokens, run-plan-all
-# 5700 tokens. `queue gates --json` / `--prompt` print one deferred gate in the shape of the
+# 5700 tokens. `hitl_gate` carries the session's `usage` up to the gate (1.4.0). The fixture
+# gates are not `context-checkpoint`, so the policy pre-answer never fires on them. `queue gates --json` / `--prompt` print one deferred gate in the shape of the
 # kit's helper and write nothing (the driver chat panel calls them whenever the Queue view
 # renders, so they must never touch the workspace).
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
@@ -84,25 +85,28 @@ JSON
   exit 0
 fi
 if [ "$cmd" = engine-info ]; then
-  printf '{"name":"@dadado/agent-kit-cli","version":"0.0.0-fixture","node":">=20","driverProtocol":"1.3.0","dashboardDataVersion":"1.0.0"}\n'
+  printf '{"name":"@dadado/agent-kit-cli","version":"0.0.0-fixture","node":">=20","driverProtocol":"1.4.0","dashboardDataVersion":"1.0.0"}\n'
   exit 0
 fi
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # Token usage (driver protocol 1.3.0) on the finishing tick_end / run_end.
 tusage='{"inputTokens":1200,"cachedInputTokens":800,"outputTokens":300,"totalTokens":1500}'
 qusage='{"inputTokens":5000,"cachedInputTokens":3000,"outputTokens":700,"totalTokens":5700}'
+# Usage up to each fixture gate (1.4.0 hitl_gate.usage).
+tgate='{"inputTokens":900,"cachedInputTokens":600,"outputTokens":200,"totalTokens":1100}'
+qgate='{"inputTokens":4000,"cachedInputTokens":2500,"outputTokens":500,"totalTokens":4500}'
 ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
 if [ "$cmd" = run-plan-all ] && [ "${events:-}" = ndjson ]; then
   # Queue runner in driver mode: one session (no ticks), queue_state at start and after the
   # cursor moves, one gate answered on stdin. The HANDOFF itself is not touched.
   q0='"cursor":0,"total":2,"current":"colony-queue-a.plan.md","status":"running"'
-  ev "\"type\":\"run_start\",\"protocol\":\"1.3.0\",\"command\":\"run-plan-all\",\"backend\":\"$backend\",\"plan\":null,\"pending\":null,\"maxTicks\":null,\"hitl\":\"driver\",\"queue\":{$q0}"
+  ev "\"type\":\"run_start\",\"protocol\":\"1.4.0\",\"command\":\"run-plan-all\",\"backend\":\"$backend\",\"plan\":null,\"pending\":null,\"maxTicks\":null,\"hitl\":\"driver\",\"queue\":{$q0}"
   ev "\"type\":\"queue_state\",$q0"
   ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture queue args: backend=$backend model=${model:-none}\""
   sleep 1
   ev "\"type\":\"queue_state\",\"cursor\":1,\"total\":2,\"current\":\"colony-queue-b.plan.md\",\"status\":\"running\""
   ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Plan a is done; the queue moved to b. **Confirm** before I continue:\\n\\nHITL_GATE: smoke-queue-gate | Continue | Stop the queue\"}]}}"
-  ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-queue-gate\",\"labels\":[\"Continue\",\"Stop the queue\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-queue-gate | Continue | Stop the queue\""
+  ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-queue-gate\",\"labels\":[\"Continue\",\"Stop the queue\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-queue-gate | Continue | Stop the queue\",\"usage\":$qgate"
   if ! IFS= read -r reply; then
     ev "\"type\":\"run_end\",\"exitCode\":4,\"ticks\":1,\"pending\":null,\"reason\":\"gate EOF\",\"planExhausted\":false,\"replies\":[],\"stop\":{\"askId\":\"smoke-queue-gate\",\"cause\":\"EOF\",\"message\":\"stdin closed\",\"exitCode\":4},\"usage\":null"
     exit 4
@@ -120,7 +124,7 @@ if [ "$cmd" = run-plan-all ]; then
   exit 0
 fi
 
-ev "\"type\":\"run_start\",\"protocol\":\"1.3.0\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
+ev "\"type\":\"run_start\",\"protocol\":\"1.4.0\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
 ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture args: backend=$backend on-limit=${onlimit:-none} model=${model:-none}\""
 sleep 1
 ev "\"type\":\"tick_start\",\"tick\":1,\"maxTicks\":$max,\"pending\":1,\"log\":\".cursor/loop-logs/tick-fixture.log\",\"prompt\":\"TICK_PROMPT fixture\",\"backend\":\"$backend\""
@@ -131,7 +135,7 @@ ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"user\",\"message\"
 ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Both files are written. **One decision** before I finish:\\n\\n- Ship it: keep the change\\n- Hold: stop here\\n\\nHITL_GATE: smoke-gate | Ship it | Hold\"}]}}"
 
 printf '\nFixture tick line.\n' >> README.md
-ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-gate\",\"labels\":[\"Ship it\",\"Hold\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-gate | Ship it | Hold\""
+ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-gate\",\"labels\":[\"Ship it\",\"Hold\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-gate | Ship it | Hold\",\"usage\":$tgate"
 if ! IFS= read -r reply; then
   ev "\"type\":\"tick_end\",\"tick\":1,\"backend\":\"$backend\",\"limit\":null,\"exitCode\":4,\"pendingBefore\":1,\"pendingAfter\":1,\"result\":null,\"replies\":[],\"stop\":{\"askId\":\"smoke-gate\",\"cause\":\"EOF\",\"message\":\"stdin closed\",\"exitCode\":4},\"usage\":null"
   ev "\"type\":\"run_end\",\"exitCode\":4,\"ticks\":1,\"pending\":1,\"reason\":\"gate EOF\",\"planExhausted\":false,\"usage\":null"

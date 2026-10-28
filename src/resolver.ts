@@ -98,9 +98,60 @@ export function offerRelaunch(enabled: boolean, prev: GatesDecision | null, next
 }
 
 /**
- * Ask classes a setting may pre-answer on the operator's behalf (ADR point 5): none until a
- * later Accepted amendment names one. `git-prod`, `kit-prod`, `queue-confirm`, `risk` and
- * `ticket` are never pre-answerable.
+ * The gates a folder setting may pre-answer, and with which label (ADR point 5, Amend
+ * 2026-10-28: exactly one pair). Mirrors the kit's `PREANSWERABLE_GATES` and `PREANSWERS` in
+ * src-tauri/src/agent.rs. `git-prod`, `kit-prod`, `queue-confirm`, `risk` and `ticket` are
+ * never pre-answerable; every other gate stays the operator's.
  */
-export const PREANSWER_CLASSES: readonly string[] = [];
+export const PREANSWERS: Readonly<Record<string, string>> = { "context-checkpoint": "Continue queue" };
+export const PREANSWER_CLASSES: readonly string[] = Object.keys(PREANSWERS);
 export const NEVER_PREANSWER = ["git-prod", "kit-prod", "queue-confirm", "risk", "ticket"] as const;
+/** The first driver protocol that marks a reply `"source":"policy"` and puts `usage` on `hitl_gate`. */
+export const PREANSWER_PROTOCOL = "1.4.0";
+
+/** Whether a run that announced `protocol` in `run_start` takes a policy pre-answer (1.x, >= 1.4.0). */
+export function protocolHasPreanswer(protocol: unknown): boolean {
+  if (typeof protocol !== "string") return false;
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(protocol.trim());
+  return !!m && Number(m[1]) === 1 && Number(m[2]) >= 4;
+}
+
+export interface PreanswerInput {
+  /** Ask ids the folder setting turned on (default: none). */
+  enabled: readonly string[];
+  /** The run's `run_start.protocol`. */
+  protocol: unknown;
+  askId: string;
+  labels: readonly string[];
+  /** Tokens the run reported so far, the open gate's `usage` included; null when none. */
+  spent: number | null;
+  /** The folder's per-run token budget; null when none is set. */
+  budget: number | null;
+}
+
+export type PreanswerDecision = { send: true; label: string } | { send: false; reason: string };
+
+/**
+ * Whether Colony answers this gate from the folder setting instead of waiting for the
+ * operator. Every condition must hold: an allowed pair, the setting on for it, an engine on
+ * driver protocol 1.4.0 or newer (an older one would stamp the reply as the operator's), a
+ * budget set and the run's reported tokens within it. Anything else leaves the gate to the
+ * operator, as before.
+ */
+export function decidePreanswer(o: PreanswerInput): PreanswerDecision {
+  const label = Object.hasOwn(PREANSWERS, o.askId) ? PREANSWERS[o.askId] : undefined;
+  if (!label || (NEVER_PREANSWER as readonly string[]).includes(o.askId)) return { send: false, reason: "not pre-answerable" };
+  if (!o.enabled.includes(o.askId)) return { send: false, reason: "setting off" };
+  if (!protocolHasPreanswer(o.protocol)) return { send: false, reason: `engine protocol below ${PREANSWER_PROTOCOL}` };
+  if (!o.labels.includes(label)) return { send: false, reason: `the gate has no "${label}" label` };
+  if (o.budget === null) return { send: false, reason: "no token budget set" };
+  if (o.spent === null) return { send: false, reason: "no token usage reported" };
+  if (o.spent > o.budget) return { send: false, reason: "over the token budget" };
+  return { send: true, label };
+}
+
+/** The folder setting's ask ids, keeping only allowed ones (an unknown or stale id is dropped). */
+export function preanswerSetting(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && Object.hasOwn(PREANSWERS, x));
+}

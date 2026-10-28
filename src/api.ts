@@ -90,8 +90,10 @@ export interface FileVersions { before: string | null; after: string | null; not
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
 /** Per folder. `chatModel`: the driver chat agent's model ("" or unset = small tier);
  *  `offerRelaunch`: offer a relaunch when a deferred gate moves in HANDOFF (default on);
- *  `tokenBudget`: per-run token budget the run views compare usage with (unset = none). */
-export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean; tokenBudget?: number }
+ *  `tokenBudget`: per-run token budget the run views compare usage with (unset = none).
+ *  `preanswer`: ask ids the driver chat answers from the setting (kit ADR 2026-10-26 Amend
+ *  2026-10-28; only `context-checkpoint`; unset = none). */
+export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean; tokenBudget?: number; preanswer?: string[] }
 export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
 /** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }
@@ -177,7 +179,8 @@ export const api = {
   queueMode: () => invoke<QueueMode>("queue_mode"),
   queueGates: (backend: string, cwd?: string) => invoke<QueueGates>("queue_gates", { backend, cwd: cwd ?? null }),
   agentBackends: () => invoke<BackendChoice[]>("agent_backends"),
-  agentReply: (runId: number, askId: string, reply: number | string) => invoke<void>("agent_reply", { runId, askId, reply }),
+  /** `source: "policy"`: a pre-answer from the folder setting (driver protocol 1.4.0), never the operator's. */
+  agentReply: (runId: number, askId: string, reply: number | string, source?: "policy") => invoke<void>("agent_reply", { runId, askId, reply, source: source ?? null }),
   agentStop: (runId: number) => invoke<void>("agent_stop", { runId }),
   agentKill: (runId: number) => invoke<void>("agent_kill", { runId }),
   settingsGet: () => invoke<SettingsInfo>("settings_get"),
