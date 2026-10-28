@@ -13,7 +13,7 @@ import { api, errText, h, type WorkspaceSettings } from "./api";
 import type { CockpitHost } from "./cockpit";
 import { pendingGates } from "./gates";
 import { gateCard } from "./inbox";
-import { CHAT_ENGINES, chatModel, type GatesDecision, gatesChange, gatesKey, NEVER_PREANSWER, noteProblem, offerRelaunch, parseDecision, PREANSWER_CLASSES } from "./resolver";
+import { CHAT_ENGINES, chatModel, type GatesDecision, gatesChange, gatesKey, NEVER_PREANSWER, noteProblem, offerRelaunch, parseDecision, PREANSWER_PROTOCOL, PREANSWERS, preanswerSetting } from "./resolver";
 import { liveQueueRun, type Run, runs, runTokens } from "./runs";
 import { snapshot } from "./snapshot";
 import { btn, cardHeader, chip, empty, pill } from "./ui";
@@ -37,6 +37,8 @@ export class DriverChat {
   private note = h("textarea", { class: "dc-note", rows: "7", spellcheck: "false", "aria-label": "Resolution note", placeholder: "Your resolution note: what you did about each gate. It reaches the relaunched session as operator context, never as a gate answer." }) as HTMLTextAreaElement;
   private chatModelIn = h("input", { class: "dc-model", type: "text", spellcheck: "false", "aria-label": "Chat model" }) as HTMLInputElement;
   private offerIn = h("input", { type: "checkbox", "aria-label": "Offer a relaunch when a deferred gate moves" }) as HTMLInputElement;
+  /** Pre-answer `context-checkpoint` with `Continue queue` (ADR Amend 2026-10-28). Off by default. */
+  private preanswerIn = h("input", { type: "checkbox", class: "dc-preanswer-in", "aria-label": "Pre-answer context-checkpoint with Continue queue" }) as HTMLInputElement;
   private budgetIn = h("input", { class: "dc-budget-in mono", type: "text", inputmode: "numeric", spellcheck: "false", "aria-label": "Per-run token budget", placeholder: "none" }) as HTMLInputElement;
   private root = "";
   private decision: GatesDecision | null = null;
@@ -63,6 +65,11 @@ export class DriverChat {
     });
     this.chatModelIn.addEventListener("change", () => this.remember({ chatModel: this.chatModelIn.value.trim() || null }));
     this.offerIn.addEventListener("change", () => this.remember({ offerRelaunch: this.offerIn.checked }));
+    this.preanswerIn.addEventListener("change", () => {
+      const ids = this.preanswerIn.checked ? ["context-checkpoint"] : [];
+      runs.setPreanswer(this.root, ids);
+      this.remember({ preanswer: ids.length ? ids : null });
+    });
     this.budgetIn.addEventListener("change", () => {
       const b = parseBudget(this.budgetIn.value);
       if (b === "invalid") return this.host.status("Driver chat: the token budget is a whole number of tokens above 0, or empty for none");
@@ -91,7 +98,7 @@ export class DriverChat {
 
   /** Form fields this panel keeps across the Queue view's re-renders. */
   owns(el: HTMLElement): boolean {
-    return el === this.note || el === this.chatModelIn || el === this.offerIn || el === this.budgetIn;
+    return el === this.note || el === this.chatModelIn || el === this.offerIn || el === this.preanswerIn || el === this.budgetIn;
   }
 
   /** The panel for the opened folder: a new folder starts again from its own HANDOFF. */
@@ -120,6 +127,9 @@ export class DriverChat {
     }
     this.chatModelIn.value = this.settings.chatModel ?? "";
     this.offerIn.checked = this.settings.offerRelaunch !== false;
+    const pre = preanswerSetting(this.settings.preanswer);
+    this.preanswerIn.checked = pre.includes("context-checkpoint");
+    runs.setPreanswer(this.root, pre);
     const b = parseBudget(this.settings.tokenBudget);
     this.budgetIn.value = typeof b === "number" ? String(b) : "";
     runs.setBudget(this.root, typeof b === "number" ? b : null);
@@ -279,12 +289,21 @@ export class DriverChat {
       h("summary", {}, "Autonomy and token settings"),
       h("label", { class: "row" }, h("span", { class: "dc-label" }, "Chat model"), this.chatModelIn, h("span", { class: "dim small" }, "The chat agent only; queue workers keep the Run controls' engine and model")),
       h("label", { class: "row" }, this.offerIn, h("span", {}, "Offer a relaunch when a deferred gate moves in HANDOFF (re-probed on every HANDOFF change; you still confirm the relaunch)")),
-      h("div", { class: "row" }, h("span", { class: "dc-label" }, "Pre-answered Asks"), h("span", { class: "dim" }, PREANSWER_CLASSES.length ? PREANSWER_CLASSES.join(", ") : `none: no Accepted ADR lets an app answer a gate class for you (driver chat ADR point 5). Never: ${NEVER_PREANSWER.join(", ")}`)),
-      h("label", { class: "row" }, h("span", { class: "dc-label" }, "Token budget"), this.budgetIn, h("span", { class: "dim small" }, `Per run, in tokens (empty: none). Reported by engines with driver protocol ${USAGE_PROTOCOL} or newer; an older engine shows "no usage". Passing it marks the run over budget and nothing else: it never stops a run or answers a gate${runs.budget(this.root) !== null ? ` (now ${formatTokens(runs.budget(this.root) as number)})` : ""}`)),
+      h(
+        "label",
+        { class: "row" },
+        this.preanswerIn,
+        h(
+          "span",
+          {},
+          `Pre-answer context-checkpoint with "${PREANSWERS["context-checkpoint"]}" (off by default). Only while a token budget is set and the run's reported tokens are within it, and only on engines with driver protocol ${PREANSWER_PROTOCOL} or newer; otherwise the gate waits for you. The run records it as a policy pre-answer, never as your reply, and you can still stop the run at any time. Every other gate stays yours; never pre-answered: ${NEVER_PREANSWER.join(", ")} (driver chat ADR, Amend 2026-10-28)`,
+        ),
+      ),
+      h("label", { class: "row" }, h("span", { class: "dc-label" }, "Token budget"), this.budgetIn, h("span", { class: "dim small" }, `Per run, in tokens (empty: none). Reported by engines with driver protocol ${USAGE_PROTOCOL} or newer; an older engine shows "no usage". Passing it marks the run over budget and ends the pre-answer above for that run; it never stops a run or answers a gate${runs.budget(this.root) !== null ? ` (now ${formatTokens(runs.budget(this.root) as number)})` : ""}`)),
     );
     this.el.replaceChildren(
       head,
-      h("p", { class: "hint" }, "Reads the queue's deferred gates and resolution prompt with agent-kit queue gates (no model call), then relaunches run-plan-all with your note. It never answers a gate for you and never edits HANDOFF."),
+      h("p", { class: "hint" }, "Reads the queue's deferred gates and resolution prompt with agent-kit queue gates (no model call), then relaunches run-plan-all with your note. It never answers a gate for you, except the context-checkpoint pre-answer you can turn on below, and never edits HANDOFF."),
       ...(live ? [h("div", { class: "dc-live hint" }, `Queue run #${live.id} is live${live.queue?.status ? ` · ${live.queue.status}` : ""}. Its gates, queue-end-gates included, are answered here or in the Inbox; its input stays open until run_end.`)] : []),
       ...(liveGate ? [gateCard(liveGate, this.host, "dc-live-gate")] : []),
       ...((t) => (t ? [t] : []))(this.tokensLine()),

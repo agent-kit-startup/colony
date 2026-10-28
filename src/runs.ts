@@ -2,8 +2,12 @@
 // `agent-kit run-plan --events ndjson` and, on driver protocol 1.2.0, the queue runner
 // `agent-kit run-plan-all --events ndjson`. Their logs, their open HITL gates and their
 // ticks. The Agent panel, the Inbox and the Review view all read from this one store.
-// Colony never answers a gate by itself: a reply is only ever sent from an operator action.
+// Colony never answers a gate by itself: a reply is only ever sent from an operator action,
+// with one exception the operator turns on per folder (driver chat settings, kit ADR
+// 2026-10-26 Amend 2026-10-28): `context-checkpoint` answered `Continue queue` within the
+// token budget, sent as `"source":"policy"` and shown as a policy pre-answer, never as yours.
 import { api, Channel, errText, type AgentEvent, type RunCommand, type TickReview } from "./api";
+import { decidePreanswer } from "./resolver";
 import { addUsage, budgetState, formatTokens, protocolHasUsage, readUsage, type TokenUsage, usageText } from "./usage";
 
 const MAX_ROWS = 3000;
@@ -21,7 +25,7 @@ export type RunItem =
   | { kind: "raw"; line: string }
   | { kind: "stderr"; line: string }
   | { kind: "review"; review: TickReview }
-  | { kind: "reply"; askId: string; shown: string }
+  | { kind: "reply"; askId: string; shown: string; by?: "policy" }
   | { kind: "error"; text: string }
   | { kind: "exit"; code: number | null };
 /**
@@ -119,6 +123,18 @@ class RunStore {
   private listeners = new Set<(c: RunChange) => void>();
   /** Per-run token budget by folder (setting `tokenBudget`); informational only. */
   private budgets = new Map<string, number>();
+  /** Gates a folder's setting pre-answers (setting `preanswer`; default none). */
+  private preanswers = new Map<string, string[]>();
+
+  /** The folder's pre-answered ask ids (driver chat setting). */
+  setPreanswer(root: string, ids: string[]) {
+    if (ids.length) this.preanswers.set(root, [...ids]);
+    else this.preanswers.delete(root);
+  }
+
+  preanswer(root: string): string[] {
+    return this.preanswers.get(root) ?? [];
+  }
 
   /** The folder's per-run token budget (null = none). Runs in it re-render. */
   setBudget(root: string, budget: number | null) {
@@ -197,6 +213,19 @@ class RunStore {
     this.row(run, `answered ${askId}: ${shown}`, "ag-reply");
     this.item(run, { kind: "reply", askId, shown });
     this.setGate(run, null);
+  }
+
+  /** The folder setting's answer: sent as a policy pre-answer; on failure the gate waits for you. */
+  private async sendPreanswer(run: Run, gate: Gate, label: string, why: string) {
+    try {
+      await api.agentReply(run.id, gate.askId, label, "policy");
+    } catch (e) {
+      this.item(run, { kind: "error", text: `Could not pre-answer ${gate.askId} (${errText(e)}); the gate waits for you.` });
+      return this.setGate(run, gate);
+    }
+    const shown = `${label} (${why})`;
+    this.row(run, `pre-answered ${gate.askId} by policy: ${shown}`, "ag-reply");
+    this.item(run, { kind: "reply", askId: gate.askId, shown, by: "policy" });
   }
 
   async stop(runId: number) {
@@ -320,6 +349,16 @@ class RunStore {
           at: String(ev.ts ?? new Date().toISOString()),
         };
         this.row(run, `gate ${gate.askId}: ${gate.line}`, "ag-warn");
+        // 1.4.0: the session's tokens up to this gate, plus the ticks that already ended.
+        const atGate = run.usageSupported ? readUsage(ev.usage) : null;
+        const spent = atGate ? (addUsage(run.usage, atGate)?.totalTokens ?? null) : null;
+        const budget = this.budget(run.root);
+        const d = decidePreanswer({ enabled: this.preanswer(run.root), protocol: run.protocol, askId: gate.askId, labels: gate.labels, spent, budget });
+        if (d.send) {
+          void this.sendPreanswer(run, gate, d.label, `folder setting, ${formatTokens(spent ?? 0)} of ${formatTokens(budget ?? 0)} tokens`);
+          return;
+        }
+        if (d.reason !== "not pre-answerable" && d.reason !== "setting off") this.row(run, `gate ${gate.askId} left to you: ${d.reason}`, "ag-dim");
         return this.setGate(run, gate);
       }
       case "tick_end": {

@@ -245,6 +245,10 @@ export class AgentTab {
       }
       case "reply": {
         const card = this.gates.get(item.askId);
+        if (item.by === "policy") {
+          if (card) this.closeGate(card, `Pre-answered by policy: ${item.shown}`, "answered");
+          return this.append(h("div", { class: "tr-line ag-reply" }, `↩ policy pre-answer ${item.askId}: ${item.shown}`), live);
+        }
         if (card) this.closeGate(card, `Answered: ${item.shown}`, "answered");
         return this.append(h("div", { class: "tr-line ag-reply" }, `↩ you answered ${item.askId}: ${item.shown}`), live);
       }
