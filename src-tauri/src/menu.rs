@@ -1,6 +1,6 @@
 //! Native menu bar (File, View, Run, Help). The items come from `src/menu.json`, the one
-//! command source: its `menus` are this bar, its `more` the action rows of the rail's More
-//! menu (settings only; the window renders those, never here). Every id sits in exactly one
+//! command source: its `menus` are this bar, its `config` the action rows of Workspace →
+//! Config (settings only; the window renders those, never here). Every id sits in exactly one
 //! of the two and is a key of the window's action map (src/main.ts `runAction`); the tests
 //! below check that against main.ts. A click emits `colony-menu` with the item id to the
 //! main window; the window runs the action.
@@ -23,9 +23,9 @@ const SPEC: &str = include_str!("../../src/menu.json");
 #[derive(Deserialize, Debug)]
 struct Spec {
     menus: Vec<SpecMenu>,
-    /// The action rows of the rail's More menu (src/main.ts renders them; not in the bar).
+    /// The action rows of Workspace → Config (src/main.ts renders them; not in the bar).
     #[serde(default)]
-    more: Vec<SpecItem>,
+    config: Vec<SpecItem>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -84,9 +84,9 @@ fn parse_str(text: &str) -> Result<Spec, String> {
             check(i)?;
         }
     }
-    // One id, one place: a More row may not repeat a menu bar item (nor carry a separator:
-    // More draws its own section breaks).
-    for i in &spec.more {
+    // One id, one place: a Config row may not repeat a menu bar item (nor carry a separator:
+    // the Config pane draws its own section breaks).
+    for i in &spec.config {
         check(i)?;
     }
     Ok(spec)
@@ -186,9 +186,9 @@ mod tests {
 
     const MAIN_TS: &str = include_str!("../../src/main.ts");
 
-    /// The action ids of the rail's More menu (settings only; never in the menu bar).
-    fn more_ids() -> Vec<String> {
-        parse().unwrap().more.into_iter().map(|i| i.id).collect()
+    /// The action ids of Workspace → Config (settings only; never in the menu bar).
+    fn config_ids() -> Vec<String> {
+        parse().unwrap().config.into_iter().map(|i| i.id).collect()
     }
 
     /// The text of `main.ts` from `start` to the first `end` after it.
@@ -218,49 +218,58 @@ mod tests {
         main_ts_block(after, "]").split('"').skip(1).step_by(2).map(String::from).collect()
     }
 
-    /// Every `view:<id>` the window resolves: rail items with views, and the views off the rail.
+    /// Every `view:<id>` the window resolves: the rail items, and Workspace's sections.
     fn view_ids() -> Vec<String> {
         let rail = main_ts_block("const RAIL: RailItem[] = [", "\n];");
         let mut out: Vec<String> = rail
             .lines()
-            .filter(|l| l.contains("views: [\""))
+            .filter(|l| l.contains("views: "))
             .filter_map(|l| l.split("id: \"").nth(1)?.split('"').next().map(|id| format!("view:{id}")))
             .collect();
-        out.extend(quoted_list("const OFF_RAIL_VIEWS = [").into_iter().map(|v| format!("view:{v}")));
+        out.extend(quoted_list("const WORKSPACE_SECTIONS = [").into_iter().map(|v| format!("view:{v}")));
         out
     }
 
     #[test]
-    fn no_action_is_in_both_the_menu_bar_and_more() {
+    fn no_action_is_in_both_the_menu_bar_and_config() {
         let bar = ids();
-        let more = more_ids();
-        assert!(!more.is_empty(), "More has no action rows");
-        for id in &more {
-            assert!(!bar.contains(id), "{id} is in the menu bar and in More");
+        let config = config_ids();
+        assert!(!config.is_empty(), "Config has no action rows");
+        for id in &config {
+            assert!(!bar.contains(id), "{id} is in the menu bar and in Config");
         }
     }
 
-    /// The settings More may hold as action rows (Skin and Title bar are markup in main.ts).
-    /// Views, commands, About and Engine live in the menu bar: a new id here is a decision.
-    const MORE_SETTINGS: &[&str] = &["omarchy"];
+    /// The settings Workspace → Config may hold as action rows (Skin, Title bar and Rail are
+    /// markup in main.ts). Views, commands, About and Engine live in the menu bar: a new id
+    /// here is a decision.
+    const CONFIG_SETTINGS: &[&str] = &["omarchy"];
 
     #[test]
-    fn more_holds_settings_only() {
-        for id in more_ids() {
-            assert!(MORE_SETTINGS.contains(&id.as_str()), "{id} in More: More holds settings only (MORE_SETTINGS)");
+    fn config_holds_settings_only() {
+        for id in config_ids() {
+            assert!(CONFIG_SETTINGS.contains(&id.as_str()), "{id} in Config: Config holds settings only (CONFIG_SETTINGS)");
         }
-        // More's action rows come from menu.json, not from markup in main.ts.
-        let markup = main_ts_block("<div id=\"more-menu\"", "</div>\n<div id=\"quick\"");
-        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a More action row: {markup}");
+        // Config's action rows come from menu.json, not from markup in main.ts.
+        let markup = main_ts_block("<div id=\"settings-pane\"", "</div>\n<div id=\"quick\"");
+        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a Config action row: {markup}");
+    }
+
+    #[test]
+    fn the_rail_has_no_more_menu() {
+        // (`top-more-menu` is the top bar's overflow of agent actions, not the rail's More.)
+        for gone in ["\"btn-more\"", "\"more-menu\"", "toggleMore", "OFF_RAIL_VIEWS"] {
+            assert!(!MAIN_TS.contains(gone), "{gone}: no More menu and no off-rail views (ADR 2026-10-24 amend 2026-10-28)");
+        }
     }
 
     #[test]
     fn every_action_is_in_exactly_one_menu() {
         let keys = action_keys();
         assert!(keys.len() >= 20 && keys.iter().any(|k| k == "new-terminal") && keys.iter().any(|k| k == "settings"), "{keys:?}");
-        let all: Vec<String> = ids().into_iter().chain(more_ids()).collect();
+        let all: Vec<String> = ids().into_iter().chain(config_ids()).collect();
         for k in &keys {
-            assert_eq!(all.iter().filter(|i| *i == k).count(), 1, "action {k} is not in exactly one of the menu bar and More");
+            assert_eq!(all.iter().filter(|i| *i == k).count(), 1, "action {k} is not in exactly one of the menu bar and Config");
         }
         let views = view_ids();
         for id in &all {
@@ -275,7 +284,7 @@ mod tests {
     #[test]
     fn view_items_resolve() {
         let views = view_ids();
-        for want in ["view:mission", "view:pipelines", "view:plans", "view:flight", "view:activity"] {
+        for want in ["view:mission", "view:ship", "view:workspace", "view:plans", "view:config", "view:flight", "view:activity", "view:terminals"] {
             assert!(views.iter().any(|v| v == want), "{want} not in {views:?}");
         }
         assert!(!views.iter().any(|v| v == "view:terminal"), "Terminal is a toggle, not a view");
@@ -285,14 +294,14 @@ mod tests {
     fn a_duplicate_id_is_refused() {
         let twice_in_bar = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"},{"id":"x","label":"X again"}]}]}"#;
         assert!(parse_str(twice_in_bar).is_err());
-        let bar_and_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"x","label":"X"}]}"#;
-        assert!(parse_str(bar_and_more).is_err());
-        let twice_in_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"y","label":"Y"},{"id":"y","label":"Y"}]}"#;
-        assert!(parse_str(twice_in_more).is_err());
-        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"id":"y","label":"Y"}]}"#;
-        assert_eq!(parse_str(fine).map(|s| s.more.len()), Ok(1));
-        let separator_in_more = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"more":[{"separator":true}]}"#;
-        assert!(parse_str(separator_in_more).is_err());
+        let bar_and_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"x","label":"X"}]}"#;
+        assert!(parse_str(bar_and_config).is_err());
+        let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"},{"id":"y","label":"Y"}]}"#;
+        assert!(parse_str(twice_in_config).is_err());
+        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
+        assert_eq!(parse_str(fine).map(|s| s.config.len()), Ok(1));
+        let separator_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"separator":true}]}"#;
+        assert!(parse_str(separator_in_config).is_err());
     }
 
     #[test]

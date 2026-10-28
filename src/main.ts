@@ -1,9 +1,10 @@
-// Colony window: the cockpit. A vertical rail holds the primary views (Mission, Inbox,
-// Review, Git, Pipelines) and More (settings: skin, title bar); the other views
-// (Plans, Flight Log, Activity) and every command live in the menu bar (src/menu.json). The
-// top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a project,
-// a Plans dropdown) next to Go to file and Open in editor; Mission keeps the plan's own
-// documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
+// Colony window: the cockpit. A vertical rail holds every kit item at first level (Cockpit,
+// Queue, Inbox, Chats, Flight Log, Review, Ship, Activity, Terminals, Processes, Workspace,
+// Colony; ADR 2026-10-24 amend 2026-10-28): it scrolls at any window height, and the
+// settings live in Workspace → Config. Every command lives in the menu bar (src/menu.json).
+// The top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a
+// project, a Plans dropdown) next to Go to file and Open in editor; Cockpit keeps the plan's
+// own documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files (a plan or HANDOFF opened
 // from the cockpit shows rendered first, with a Preview | Editor switch) and the kit's web panel
 // (a fallback under View). Explorer next to the rail; the terminal drawer holds the user's
@@ -17,7 +18,7 @@ import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
 import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { DriverChat, type DriverChatHost } from "./driverchat";
-import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
+import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
@@ -46,6 +47,7 @@ import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
+import { pendingView, sectionInfo, workspaceSection } from "./workspace";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
@@ -111,26 +113,26 @@ document.getElementById("app")!.innerHTML = `
   </main>
   <div id="resizer" title="Drag to resize"></div>
   <section id="bottom">
-    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-toggle" data-act="toggle-terminal" aria-controls="terms" title="Hide the terminal drawer (Ctrl+5 or Ctrl+\`)" aria-label="Hide the terminal drawer" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
+    <div id="term-tabs" class="tabbar"><button class="tab-add" title="New terminal">+</button><span class="drawer-ctl"><span class="dock-group" role="group" aria-label="Terminal position"><button data-dock="bottom" title="Terminal at the bottom" aria-label="Terminal at the bottom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 10h11"/></svg></button><button data-dock="top" title="Terminal at the top" aria-label="Terminal at the top"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11"/></svg></button><button data-dock="side" title="Terminal at the side" aria-label="Terminal at the side"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M10 2.5v11"/></svg></button></span><button class="term-toggle" data-act="toggle-terminal" aria-controls="terms" title="Hide the terminal drawer (Ctrl+\`)" aria-label="Hide the terminal drawer" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button></span></div>
     <div id="terms"></div>
   </section>
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
-<div id="more-menu" class="menu" hidden>
+<div id="settings-pane" class="settings-pane" role="group" aria-label="Colony settings">
   <div class="menu-label">Skin</div>
-  <button data-more="skin" data-skin="bare-metal">Bare Metal</button>
-  <button data-more="skin" data-skin="legacy">Legacy</button>
-  <button data-more="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
+  <button data-setting="skin" data-skin="bare-metal">Bare Metal</button>
+  <button data-setting="skin" data-skin="legacy">Legacy</button>
+  <button data-setting="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
   <div class="menu-sep" data-title-bar-menu></div>
   <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
-  <button data-more="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
-  <button data-more="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
+  <button data-setting="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
+  <button data-setting="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
   <div class="menu-sep"></div>
   <div class="menu-label">Rail</div>
-  <button data-more="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
-  <button data-more="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
-  <button data-more="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
-  <button data-more="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+  <button data-setting="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
+  <button data-setting="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
+  <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
+  <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
 
@@ -179,25 +181,33 @@ let activeTab = "mission";
 const nav = new NavHistory();
 
 /**
- * Primary navigation (desktop IDE study: Mission, Inbox, Review, Git and Pipelines; the
- * other views in the View menu, settings under More). A rail item shows one view, or a group
- * of views with a switch at the head of the tab strip. The terminal drawer is not a rail
- * item: its own bar (always on screen) shows and hides it (ADR 2026-10-24, amend 2026-10-26).
+ * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
+ * amend 2026-10-28; plan colony-sidebar-native-kit). A rail item shows one view, or a group of
+ * views: Ship switches Git | CI/CD at the head of the tab strip; Workspace's sections switch
+ * inside the view (`inner`), never in the strip. No item sits behind a More menu: the rail
+ * scrolls at any window height. The terminal drawer is not a rail item: its own bar (always on
+ * screen) shows and hides it; the Terminals item is a list view.
  */
-interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[] }
+interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; inner?: boolean; home?: string }
+/** Workspace's sections, in order: each one a view, switched inside the Workspace view. */
+const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "config", "plans"];
 const RAIL: RailItem[] = [
-  { id: "mission", label: "Mission", icon: "current-mission", tip: "Mission: the active plan, what needs you, agent runs and the queue (Ctrl+1)", views: ["mission"] },
-  { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+2)", views: ["inbox"] },
-  { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+3)", views: ["review"] },
-  { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push (Ctrl+4)", views: ["git"] },
-  { id: "pipelines", label: "Pipelines", icon: "devops", tip: "Pipelines: the run-plan-all queue and the CI/CD runs of this branch (Ctrl+6)", views: ["queue", "cicd"] },
+  { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
+  { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
+  { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+3)", views: ["inbox"] },
+  { id: "chats", label: "Chats", icon: "agents", tip: "Chats: the saved agent chats of this folder, resumable (Ctrl+4)", views: ["chats"] },
+  { id: "flight", label: "Flight Log", icon: "field-report", tip: "Flight Log: residuals, warnings, tick logs (Ctrl+5)", views: ["flight"] },
+  { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+6)", views: ["review"] },
+  { id: "ship", label: "Ship", icon: "git", tip: "Ship: Git (host requests, pull requests, branch flow, commit, push) and CI/CD (Ctrl+7)", views: ["git", "cicd"] },
+  { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
+  { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
+  { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
+  { id: "workspace", label: "Workspace", icon: "folder", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, inner: true, home: "plans" },
+  { id: "colony", label: "Colony", icon: "overview", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
 ];
-/** Views off the rail (View menu, palette), after the rail in the Ctrl+<n> order (Ctrl+7, 8, 9). */
-const OFF_RAIL_VIEWS = ["plans", "flight", "activity"];
-/** Ctrl+1..9: the rail items, the terminal drawer's toggle in slot 5 (where the rail's
- *  Terminal item used to be, so the keys did not move), then the off-rail views. The rail
- *  tooltips name these keys (cargo test terminal_drawer checks both). */
-const CTRL_DIGITS = ["mission", "inbox", "review", "git", "terminal", "pipelines", "plans", "flight", "activity"];
+/** Ctrl+1..9: the first nine rail items. The rail tooltips name these keys (cargo test
+ *  terminal_drawer checks both); the terminal drawer toggles with Ctrl+` instead. */
+const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
@@ -233,25 +243,20 @@ function renderRail() {
   }
   if (!railEls.size) {
     const items = RAIL.map((r) => {
-      const el = h("button", { class: "tab rail-item", title: r.tip }, h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon")), h("span", { class: "lbl" }, r.label));
+      const el = h("button", { class: "tab rail-item", title: r.tip, "aria-label": r.label }, h("span", { class: "rail-icon-wrap" }, icon(r.icon, "rail-icon")), h("span", { class: "lbl" }, r.label));
       el.dataset.tab = r.id;
       el.addEventListener("click", () => openRail(r));
       railEls.set(r.id, el);
       return el;
     });
-    // Settings only: never the current view, so never "active".
-    const more = h("button", { id: "btn-more", class: "tab rail-item", title: "More: skin, title bar, rail and other settings", "aria-haspopup": "menu" }, h("span", { class: "rail-icon-wrap" }, icon("more", "rail-icon")), h("span", { class: "lbl" }, "More"));
-    more.dataset.tab = "more";
-    more.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      toggleMore(more);
-    });
-    railEls.set("more", more);
-    rail.replaceChildren(...items, h("span", { class: "spacer" }), more);
+    rail.replaceChildren(...items);
+    railFade();
   }
+  let activeEl: HTMLElement | null = null;
   for (const r of RAIL) {
     const el = railEls.get(r.id)!;
     const on = r.views.includes(activeTab);
+    if (on && !el.classList.contains("active")) activeEl = el;
     el.classList.toggle("active", on);
     el.setAttribute("aria-current", on ? "page" : "false");
     // Badges are replaced only when they change (a press on one that is replaced is lost too).
@@ -264,14 +269,43 @@ function renderRail() {
       wrap.append(...b);
     }
   }
+  // The view changed: its item scrolls into the rail's view (a short window scrolls the rail).
+  activeEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+/** A rail item opens the member shown last, else its `home`, else its first view. */
 function openRail(r: RailItem) {
-  showTab(lastInGroup.get(r.id) ?? r.views[0]);
+  showTab(lastInGroup.get(r.id) ?? r.home ?? r.views[0]);
 }
+
+/** The rail scrolls at any window height: an edge with items out of view gets a fade and a
+ *  1px line in the border colour (`.fade-top` / `.fade-bottom`). */
+function railFade() {
+  const rail = $("rail");
+  const top = rail.scrollTop > 0;
+  const bottom = rail.scrollTop + rail.clientHeight < rail.scrollHeight - 1;
+  rail.classList.toggle("fade-top", top);
+  rail.classList.toggle("fade-bottom", bottom);
+}
+$("rail").addEventListener("scroll", railFade, { passive: true });
+new ResizeObserver(railFade).observe($("rail"));
+// Arrow keys move the focus along the rail (Home / End: the first / last item); Enter or
+// Space opens the focused item, as on any button.
+$("rail").addEventListener("keydown", (ev) => {
+  const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  if (at < 0) return;
+  const next = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+  if (next === undefined) return;
+  ev.preventDefault();
+  const el = items[Math.max(0, Math.min(items.length - 1, next))];
+  el.focus();
+  el.scrollIntoView({ block: "nearest" });
+});
 
 /** The tab strip: documents only (runs, terminals, files, the web panel), after the switch of
- *  a rail group with more than one view (Pipelines: Queue | CI/CD). */
+ *  a rail group with more than one view (Ship: Git | CI/CD). Workspace switches its sections
+ *  inside the view, not here. */
 function renderTabs() {
   renderRail();
   renderTopActions();
@@ -302,7 +336,7 @@ function renderTabs() {
       el.addEventListener("click", () => showTab(t.id));
       return el;
     });
-  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(activeTab));
+  const group = RAIL.find((r) => r.views.length > 1 && !r.inner && r.views.includes(activeTab));
   const sw = group
     ? [
         h(
@@ -621,7 +655,7 @@ function renderDrawerToggle() {
   const on = !shell.classList.contains("no-bottom");
   const b = $("term-tabs").querySelector<HTMLButtonElement>(".term-toggle")!;
   const label = `${on ? "Hide" : "Show"} the terminal drawer`;
-  b.title = `${label} (Ctrl+5 or Ctrl+\`)`;
+  b.title = `${label} (Ctrl+\`)`;
   b.setAttribute("aria-label", label);
   b.setAttribute("aria-expanded", String(on));
 }
@@ -668,13 +702,13 @@ function toggleExplorer(force?: boolean) {
   layoutChanged();
 }
 
-// The rail (More → Rail): its side of the window and labels or icons only.
+// The rail (Workspace → Config → Rail): its side of the window and labels or icons only.
 type RailPosition = "left" | "right";
 const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
 const railLabels = () => !shell.classList.contains("rail-icons");
 
 function renderRailMenu() {
-  for (const b of menu.querySelectorAll<HTMLElement>("button[data-more=rail-position], button[data-more=rail-labels]")) {
+  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-setting=rail-position], button[data-setting=rail-labels]")) {
     const on = b.dataset.pos ? b.dataset.pos === railPosition() : (b.dataset.labels === "on") === railLabels();
     b.dataset.label ??= b.textContent ?? "";
     b.classList.toggle("on", on);
@@ -746,7 +780,7 @@ $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
 // Show / hide, next to the dock buttons: the same action as View > Show or hide the terminal,
-// Ctrl+5 and Ctrl+` (the title bar stays native under Hyprland).
+// and Ctrl+` (the title bar stays native under Hyprland).
 $("term-tabs").querySelector(".term-toggle")!.addEventListener("click", () => runAction("terminal"));
 
 /** A splitter drag: `size(dx, dy)` sets the panel size from the pointer offset. */
@@ -1004,6 +1038,7 @@ const driverChat = new DriverChat(host);
 const queue = new QueueView(host, driverChat);
 const flight = new FlightLogView(host);
 const activity = new ActivityView(host);
+const chatsView = new ChatsView(host);
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -1069,7 +1104,7 @@ function inboxBadge(): ReturnType<NonNullable<Tab["badge"]>> {
 function pinViews() {
   const pin = (id: string, label: string, icon: IconKind, tip: string, el: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
     addTab({ id, label, icon, tip, pinned: true, el, show: () => v.show(), hide: () => v.hide(), badge }, false);
-  pin("mission", "Mission", "current-mission", "Mission: the active plan, what needs you, runs, queue", mission.el, mission);
+  pin("mission", "Cockpit", "current-mission", "Cockpit: the active plan, what needs you, runs", mission.el, mission);
   pin("inbox", "Inbox", "inbox", "Inbox: live gates from every run, attention items, gate exits", inbox.el, inbox, () => inboxBadge());
   pin(
     "review",
@@ -1085,9 +1120,39 @@ function pinViews() {
   );
   pin("queue", "Queue", "queue", "run-plan-all queue", queue.el, queue);
   pin("cicd", "CI/CD", "devops", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
-  pin("plans", "Plans", "plans", "Plans and backlog (Mission Control snapshot)", plans.el, plans);
   pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
-  pin("activity", "Activity", "activity", "Saved chats, recent activity and health checks", activity.el, activity);
+  pin("activity", "Activity", "activity", "The kit's recent activity and health checks", activity.el, activity);
+  pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
+  // Rail items whose native view comes with plan to-do s3: until then, the kit's web panel
+  // at the matching section (the fallback that s3 removes).
+  const still = { show: () => {}, hide: () => {} };
+  const web = (section: string) => ({ label: "Open in the web panel", run: () => openWebPanel(section), title: `The kit's web panel at #${section} (the fallback until Colony draws it)` });
+  const later = "Colony draws this view natively with plan colony-sidebar-native-kit, to-do s3.";
+  pin(
+    "terminals",
+    "Terminals",
+    "terminals",
+    "The TTY sessions of this window",
+    pendingView("Terminals", `${later} It will list every TTY session of this window, the ones closed in the drawer bar included, with their status, folder and a reopen button. Until then the drawer bar lists and controls the open shells.`, [{ label: "Show the terminal drawer", run: () => toggleTerminal(true) }]),
+    still,
+  );
+  pin("processes", "Processes", "processes", "The kit's process list", pendingView("Processes", later, [web("processes")]), still);
+  pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", pendingView("Colony", later, [web("colony")]), still);
+  // Workspace: one view per section, the section switch at its head.
+  const openSection = (id: string) => showTab(id);
+  const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void } = still) => {
+    const info = sectionInfo(id);
+    pin(id, info.label, info.icon, info.tip, workspaceSection(id, WORKSPACE_SECTIONS, body, openSection), v);
+  };
+  section("memory", pendingView("Memory", later, [web("memory")]));
+  section("health", pendingView("Health", `${later} The Activity view lists the health checks meanwhile.`, [{ label: "Open Activity", run: () => showTab("activity") }]));
+  section("decisions", pendingView("Decisions", `${later} It reads the decision index of the kit's snapshot 1.10.0.`, [web("memory")]));
+  section("agents", pendingView("Agents", later, [web("agents")]));
+  section("skills", pendingView("Skills", later, [web("skills")]));
+  section("rules", pendingView("Rules", `${later} It reads the rules list of the kit's snapshot 1.10.0.`));
+  section("commands", pendingView("Commands", later, [{ label: "Commands…", run: () => palette.show() }, web("commands")]));
+  section("config", settingsPane);
+  section("plans", plans.el, plans);
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -1140,34 +1205,22 @@ runs.on((c) => {
   }
 });
 
-// ---- More menu (rail): settings only ---------------------------------------------------
-const menu = $("more-menu");
-// Its action rows come from src/menu.json `more` (never in the menu bar; menu.rs tests),
-// after the Skin and Title bar choices; `omarchyOnly` rows stay hidden until
+// ---- Workspace → Config: Colony's settings ---------------------------------------------
+// The settings the rail's More menu used to hold (ADR 2026-10-24 amend 2026-10-28 point 1):
+// Skin, Title bar, Rail side and labels, then the action rows of src/menu.json `config`
+// (never in the menu bar; menu.rs tests); `omarchyOnly` rows stay hidden until
 // renderSkinMenu() knows Omarchy is there.
-const moreActionsSep = h("div", { class: "menu-sep", hidden: "" });
-menu.append(moreActionsSep, ...menuSpec.more.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
-function toggleMore(anchor: HTMLElement) {
-  if (!menu.hidden) return (menu.hidden = true);
-  closeTopMenus();
-  closePlanMenu();
-  const r = anchor.getBoundingClientRect();
-  // Next to the rail, on the window's side of it.
-  menu.style.left = railPosition() === "right" ? "auto" : `${r.right + 6}px`;
-  menu.style.right = railPosition() === "right" ? `${window.innerWidth - r.left + 6}px` : "auto";
-  menu.style.top = "auto";
-  menu.style.bottom = `${Math.max(8, window.innerHeight - r.bottom)}px`;
-  menu.hidden = false;
-}
-window.addEventListener("click", () => (menu.hidden = true));
-menu.addEventListener("click", (ev) => {
-  const el = ev.target as HTMLElement;
-  menu.hidden = true;
+const settingsPane = $("settings-pane");
+const configActionsSep = h("div", { class: "menu-sep", hidden: "" });
+settingsPane.append(configActionsSep, ...menuSpec.config.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
+settingsPane.addEventListener("click", (ev) => {
+  const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
+  if (!el) return;
   if (el.dataset.cmd) runAction(el.dataset.cmd);
-  else if (el.dataset.more === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
-  else if (el.dataset.more === "rail-position") setRail({ position: el.dataset.pos === "right" ? "right" : "left" });
-  else if (el.dataset.more === "rail-labels") setRail({ labels: el.dataset.labels === "on" });
-  else if (el.dataset.more === "skin") {
+  else if (el.dataset.setting === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
+  else if (el.dataset.setting === "rail-position") setRail({ position: el.dataset.pos === "right" ? "right" : "left" });
+  else if (el.dataset.setting === "rail-labels") setRail({ labels: el.dataset.labels === "on" });
+  else if (el.dataset.setting === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
       () => status(`Skin: ${SKINS.find((x) => x.id === next)?.label} (saved in settings.json)`),
@@ -1179,7 +1232,7 @@ menu.addEventListener("click", (ev) => {
 // ---- top bar actions: Run plan, Run queue, Open interactive, Start a project, Plans ------
 // Each button names an ACTIONS id, so the Run menu, the palette and the button run the same
 // action (shell ADR amend 2026-10-26 point 1). The Plans dropdown is built here, not in the
-// markup: More's markup holds settings only (menu.rs tests).
+// markup: the settings pane's markup holds settings only (menu.rs tests).
 const PLANS_MENU: { id: string; label: string; title: string }[] = [
   { id: "view:plans", label: "View plans", title: "The Plans view: the active plan, the backlog and the parked plans" },
   { id: "backlog-add", label: "Create plan", title: BACKLOG_ADD_TIP },
@@ -1280,7 +1333,6 @@ function setTopMenu(btn: HTMLElement, open: boolean, focus = false) {
   if (dd === topMoreMenu) fillTopMore();
   dd.hidden = false;
   btn.setAttribute("aria-expanded", "true");
-  menu.hidden = true;
   closePlanMenu();
   const r = btn.getBoundingClientRect();
   dd.style.top = `${r.bottom + 4}px`;
@@ -1304,10 +1356,7 @@ $("top-actions").addEventListener("click", (ev) => {
 for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, () => closeTopMenus());
 // A plan CRUD dropdown opened (src/planmenu.ts; its click does not reach the window): one
 // popover at a time.
-window.addEventListener("colony:popover", () => {
-  closeTopMenus();
-  menu.hidden = true;
-});
+window.addEventListener("colony:popover", () => closeTopMenus());
 window.addEventListener("keydown", (ev) => {
   const open = TOP_DROPDOWNS.find(([, m]) => !m.hidden);
   if (ev.key !== "Escape" || !open) return;
@@ -1343,8 +1392,8 @@ for (const [btn, dd] of TOP_DROPDOWNS) {
 const titleBar = { current: "native" as "native" | "custom", saved: "native" as "native" | "custom", tiling: null as string | null };
 
 function renderTitleBarMenu() {
-  for (const el of menu.querySelectorAll<HTMLElement>("[data-title-bar-menu]")) el.hidden = !!titleBar.tiling;
-  for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="title-bar"]')) {
+  for (const el of settingsPane.querySelectorAll<HTMLElement>("[data-title-bar-menu]")) el.hidden = !!titleBar.tiling;
+  for (const b of settingsPane.querySelectorAll<HTMLElement>('button[data-setting="title-bar"]')) {
     const mode = b.dataset.mode;
     const on = mode === titleBar.saved;
     b.classList.toggle("on", on);
@@ -1404,7 +1453,7 @@ function applyTitleBar(info: StartupInfo) {
   fitTopActions();
 }
 
-// ---- actions: the native menu bar and More (src/menu.json), and the palette, run these -
+// ---- actions: the native menu bar and Workspace → Config (src/menu.json), and the palette -
 const ACTIONS: Record<string, () => unknown> = {
   "open-folder": () => pickFolder(),
   "run-elsewhere": () => controls.startElsewhere(),
@@ -1435,12 +1484,13 @@ const ACTIONS: Record<string, () => unknown> = {
   omarchy: () => openOmarchyPanel(status),
 };
 
-/** `view:<rail item or off-rail view>`: the rail item's own behaviour (a group opens its last view). */
+/** `view:<rail item or Workspace section>`: the rail item's own behaviour (a group opens its
+ *  last view); a Workspace section (`view:plans`, `view:config`, ...) opens that section. */
 function viewAction(id: string): (() => unknown) | null {
   const v = id.slice("view:".length);
   const r = RAIL.find((x) => x.id === v && x.views.length);
   if (r) return () => (workspace ? openRail(r) : status("Open a folder first"));
-  if (OFF_RAIL_VIEWS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
+  if (WORKSPACE_SECTIONS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
   return null;
 }
 
@@ -1469,17 +1519,16 @@ async function closeWindow() {
   await getCurrentWindow().close();
 }
 
-/** Every action item of src/menu.json: the menu bar in menu order, then More. */
+/** Every action item of src/menu.json: the menu bar in menu order, then Workspace → Config. */
 const menuItems = () => [
   ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
-  ...menuSpec.more.map((i) => ({ id: i.id, label: i.label, where: "More (rail)", bar: false, omarchyOnly: !!i.omarchyOnly })),
+  ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Workspace → Config", bar: false, omarchyOnly: !!i.omarchyOnly })),
 ];
 /** Every item id of the native menu bar, in menu order. */
 const menuIds = () => menuItems().flatMap((i) => (i.bar ? [i.id] : []));
 const unbound = menuItems().filter((i) => !actionFor(i.id)).map((i) => i.id);
 if (unbound.length) console.error(`colony: menu items without an action: ${unbound.join(", ")}`);
 void listen<string>("colony-menu", (ev) => {
-  menu.hidden = true;
   runAction(ev.payload);
 }).catch((e) => status(`Menu bar: ${errText(e)}`));
 
@@ -1493,11 +1542,17 @@ function showEngine() {
 $("st-engine").addEventListener("click", showEngine);
 
 // ---- command palette (Ctrl+Shift+P, View → Commands) -----------------------------------
-/** Every menu action the menus show here (menu bar, then More) as a palette row; not Commands… itself. */
-const paletteActions = (): ColonyAction[] =>
-  menuItems()
+/** Every menu action the menus show here (menu bar, then Workspace → Config) as a palette row,
+ *  a view row as `Go to <item>`, then `Go to Workspace → <section>` for every Workspace section
+ *  the View menu does not list; not Commands… itself. */
+const paletteActions = (): ColonyAction[] => {
+  const rows = menuItems()
     .filter((i) => i.id !== "commands" && (!i.omarchyOnly || omarchyDetected()))
-    .map((i) => ({ id: i.id, name: i.label, description: i.where }));
+    .map((i) => ({ id: i.id, name: i.id.startsWith("view:") ? `Go to ${i.label}` : i.label, description: i.where }));
+  const listed = new Set(rows.map((r) => r.id));
+  const sections = WORKSPACE_SECTIONS.filter((s) => !listed.has(`view:${s}`)).map((s) => ({ id: `view:${s}`, name: `Go to Workspace → ${sectionInfo(s).label}`, description: "Workspace" }));
+  return [...rows, ...sections];
+};
 const palette = new CommandPalette({
   status,
   hasFolder: () => !!workspace,
@@ -1520,9 +1575,9 @@ document.body.append(palette.el);
 
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
-  for (const b of menu.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
-  moreActionsSep.hidden = ![...menu.querySelectorAll<HTMLElement>("button[data-cmd]")].some((b) => !b.hidden);
-  for (const b of menu.querySelectorAll<HTMLElement>('button[data-more="skin"]')) {
+  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
+  configActionsSep.hidden = ![...settingsPane.querySelectorAll<HTMLElement>("button[data-cmd]")].some((b) => !b.hidden);
+  for (const b of settingsPane.querySelectorAll<HTMLElement>('button[data-setting="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
     b.classList.toggle("on", on);
@@ -1549,10 +1604,11 @@ function webPanelUrl() {
 // Sandboxed (security review 2026-10-24, finding 3): the panel keeps its own origin
 // (skin storage, clipboard) and scripts, but may not navigate Colony's window.
 const mcFrame = h("iframe", { id: "mc", title: "Mission Control (web panel)", allow: "clipboard-read; clipboard-write", sandbox: "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads" });
-function openWebPanel() {
+function openWebPanel(section?: string) {
   if (!workspace) return;
   if (!mcUrl) return status("Mission Control server is not running");
-  if (!mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
+  if (section) mcFrame.src = `${webPanelUrl()}#${section}`;
+  else if (!mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
   if (!tabs.has("web")) addTab({ id: "web", label: "Mission Control (web)", icon: "monitor", tip: `The kit's web panel, ${mcUrl} (fallback; actions copy unless allowlisted)`, pinned: false, el: h("div", { class: "web-view" }, mcFrame) });
   else showTab("web");
 }
@@ -1896,12 +1952,9 @@ window.addEventListener(
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
     else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
-      // Ctrl+1..6: the rail, 5 toggles the terminal drawer; Ctrl+7..9: Plans, Flight Log, Activity.
-      const id = CTRL_DIGITS[Number(key) - 1];
-      const r = RAIL.find((x) => x.id === id);
-      if (id === "terminal") toggleTerminal();
-      else if (r) openRail(r);
-      else if (id) showTab(id);
+      // Ctrl+1..9: the first nine rail items (Ctrl+` toggles the terminal drawer).
+      const r = RAIL.find((x) => x.id === CTRL_DIGITS[Number(key) - 1]);
+      if (r) openRail(r);
     }
     else handled = false;
     if (handled) {
@@ -2141,7 +2194,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
-    // click) runs the action; More holds only its menu.json `more` rows (settings).
+    // click) runs the action; Workspace → Config holds only its menu.json `config` rows (settings).
     // A custom title bar has no GTK menu bar: its own File / View / Run / Help buttons open
     // the same menus as popups (menu_popup, by index; a popup needs a real click).
     const bar = await api.menuState();
@@ -2158,11 +2211,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     showTab("mission");
     await fire("view:plans");
     m.plans = await until(() => activeTab === "plans", 2000);
-    m.moreSettingsOnly = JSON.stringify([...menu.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd)) === JSON.stringify(menuSpec.more.map((i) => i.id));
+    m.configSettingsOnly = JSON.stringify([...settingsPane.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd)) === JSON.stringify(menuSpec.config.map((i) => i.id));
     await fire("view:inbox");
     m.inbox = await until(() => activeTab === "inbox", 2000);
-    await fire("view:pipelines");
-    m.pipelines = await until(() => activeTab === "queue" || activeTab === "cicd", 2000);
+    await fire("view:ship");
+    m.ship = await until(() => activeTab === "git" || activeTab === "cicd", 2000);
     const termWas = termOn();
     await fire("terminal");
     m.terminalToggled = await until(() => termOn() !== termWas, 2000);
@@ -2186,7 +2239,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
     await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
-    // and the More menu's choice is saved for the next start (then put back). On a tiling
+    // and the Config choice is saved for the next start (then put back). On a tiling
     // window manager: always native, the choice hidden, a saved custom ignored.
     const win = getCurrentWindow();
     const decorated = await win.isDecorated();
@@ -2195,11 +2248,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const drag = $("top").getAttribute("data-tauri-drag-region");
     await log("title-bar-applied", decorated === !custom && controlsShown === custom && (custom ? drag === "deep" : drag === null) && document.documentElement.dataset.titleBar === info.titleBar, { titleBar: info.titleBar, decorated, controlsShown, drag, tiling: info.tilingWm });
     if (info.tilingWm) {
-      // Tiling window manager: always native. The choice is hidden from the More menu, and
+      // Tiling window manager: always native. The choice is hidden from Workspace → Config, and
       // a saved `custom` (written here, as a settings.json shared with a GNOME machine
       // would have it) still opens native on the next start (settings_title_bar asks the
       // same decision the startup uses). Then the saved value is put back.
-      const hidden = [...menu.querySelectorAll<HTMLElement>("[data-title-bar-menu]")];
+      const hidden = [...settingsPane.querySelectorAll<HTMLElement>("[data-title-bar-menu]")];
       const menuHidden = hidden.length === 4 && hidden.every((el) => el.hidden);
       const before = await api.settingsTitleBar();
       await api.settingsSetTitleBar("custom");
@@ -2212,7 +2265,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const savedTitleBar = async () => ((await api.settingsGet()).settings as { ui?: { titleBar?: string } } | null)?.ui?.titleBar;
       const startTb = titleBar.saved;
       const flip = startTb === "custom" ? "native" : "custom";
-      const pickTb = (mode: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="title-bar"][data-mode="${mode}"]`)?.click();
+      const pickTb = (mode: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting="title-bar"][data-mode="${mode}"]`)?.click();
       pickTb(flip);
       let flipped = false;
       for (let i = 0; i < 15 && !flipped; i++) {
@@ -2220,7 +2273,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         flipped = (await savedTitleBar()) === flip;
       }
       const restartNote = $("st-msg").textContent ?? "";
-      const marked = menu.querySelector<HTMLElement>(`button[data-more="title-bar"][data-mode="${flip}"]`)?.textContent ?? "";
+      const marked = settingsPane.querySelector<HTMLElement>(`button[data-setting="title-bar"][data-mode="${flip}"]`)?.textContent ?? "";
       pickTb(startTb);
       let back = false;
       for (let i = 0; i < 15 && !back; i++) {
@@ -2461,10 +2514,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await until(() => dock() === "bottom", 2000);
     await wait(600);
     await layoutSaved;
-    // Rail (More → Rail): left and right × labels and icons only, in every dock. The rail
+    // Rail (Workspace → Config → Rail): left and right × labels and icons only, in every dock. The rail
     // sits at its window edge, the centre beside it; icons only hides the labels and keeps
     // each item's tooltip and aria-label; the choice is in settings.json.
-    const moreRow = (sel: string) => menu.querySelector<HTMLButtonElement>(`button[data-more=${sel}]`)!.click();
+    const settingRow = (sel: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting=${sel}]`)!.click();
     const railCase = (pos: RailPosition, labels: boolean) => {
       const r = box("rail");
       const c = box("center");
@@ -2483,15 +2536,15 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => dock() === d, 2000);
       for (const pos of ["right", "left"] as RailPosition[]) {
         for (const labels of [false, true]) {
-          moreRow(`rail-position][data-pos=${pos}`);
-          moreRow(`rail-labels][data-labels=${labels ? "on" : "off"}`);
+          settingRow(`rail-position][data-pos=${pos}`);
+          settingRow(`rail-labels][data-labels=${labels ? "on" : "off"}`);
           await wait(120);
           rail[`${d} ${pos} ${labels ? "labels" : "icons"}`] = railCase(pos, labels);
         }
       }
     }
-    moreRow("rail-position][data-pos=right");
-    moreRow("rail-labels][data-labels=off");
+    settingRow("rail-position][data-pos=right");
+    settingRow("rail-labels][data-labels=off");
     let rOnDisk: LayoutSettings = {};
     for (let i = 0; i < 20; i++) {
       await wait(200);
@@ -2499,8 +2552,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       rOnDisk = await savedLayout();
       if (rOnDisk.railPosition === "right" && rOnDisk.railLabels === false) break;
     }
-    moreRow("rail-position][data-pos=left");
-    moreRow("rail-labels][data-labels=on");
+    settingRow("rail-position][data-pos=left");
+    settingRow("rail-labels][data-labels=on");
     await api.smokeMenuClick("dock:bottom");
     await until(() => dock() === "bottom", 2000);
     // Back to the default rail on disk too (layout-boot reads it on the next start).
@@ -2607,7 +2660,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       found[0] === "compact" &&
       palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));
     await log("claude-builtins", builtinsOk, { rendered: builtins.length, listed: palette.builtins().length, section, compactSearch: found });
-    // Colony section: every menu action (menu bar and More, not Commands… itself), Run.
+    // Colony section: every menu action (menu bar and Workspace → Config, not Commands… itself), Run.
     pInput.value = "";
     pInput.dispatchEvent(new Event("input"));
     const actionRows = [...palette.el.querySelectorAll<HTMLElement>(".palette-action")].map((el) => el.dataset.action);
@@ -2635,9 +2688,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("mc-run-plan", asked === "asked (plan demo.plan.md)" && runs.list().length === 0, { result: runReply, asked });
     const copied = await mcPerformInFrame({ kind: "copy", text: "colony smoke copy fallback", subject: "smoke text", destination: "terminal", toastMessage: "Copied smoke text" });
     await log("mc-copy-fallback", JSON.stringify(copied).includes("Colony") && !JSON.stringify(copied).includes("Opened"), copied);
-    // Skins: Legacy from the More menu (same handler as the operator's click), saved in
+    // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
     // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
-    const pickSkin = (id: string) => menu.querySelector<HTMLButtonElement>(`button[data-more="skin"][data-skin="${id}"]`)?.click();
+    const pickSkin = (id: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting="skin"][data-skin="${id}"]`)?.click();
     // On Omarchy with no saved skin the window starts on the system theme: start from Bare Metal.
     const startSkin = skin();
     if (startSkin !== "bare-metal") {
@@ -2679,7 +2732,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       pickSkin("bare-metal");
       await wait(400);
     } else {
-      await log("skin-omarchy", !!menu.querySelector<HTMLElement>('button[data-skin="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
+      await log("skin-omarchy", !!settingsPane.querySelector<HTMLElement>('button[data-skin="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
     await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === kitSkinValue("bare-metal") && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
     if (startSkin !== "bare-metal") pickSkin(startSkin);
@@ -2688,13 +2741,13 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
-      // More's row (menu.json `more`) opens the same panel; it only lists, nothing runs.
-      menu.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
+      // The Config row (menu.json `config`) opens the same panel; it only lists, nothing runs.
+      settingsPane.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
       const panelOpen = await until(() => !!document.getElementById("omarchy-panel"), 2000);
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
       await log("omarchy-more-row", panelOpen, { panelOpen });
     } else {
-      await log("omarchy-plan", !!menu.querySelector<HTMLElement>('button[data-cmd="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
+      await log("omarchy-plan", !!settingsPane.querySelector<HTMLElement>('button[data-cmd="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
     const gs = await api.gitStatus();
     await log("git-status", gs.isRepo, { branch: gs.branch, files: gs.files.map((f) => `${f.xy} ${f.path}`) });

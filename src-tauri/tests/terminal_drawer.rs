@@ -96,18 +96,21 @@ fn the_drawer_bar_has_the_toggle_and_lists_shells_only() {
 
 #[test]
 fn ctrl_digits_match_the_rail_tooltips() {
-    let start = MAIN.find("const CTRL_DIGITS = [").expect("CTRL_DIGITS") + "const CTRL_DIGITS = [".len();
-    let list: Vec<&str> = MAIN[start..start + MAIN[start..].find(']').unwrap()].split(',').map(|x| x.trim().trim_matches('"')).collect();
-    assert_eq!(list.get(4), Some(&"terminal"), "Ctrl+5 toggles the terminal drawer: {list:?}");
+    // Ctrl+1..9 are the first nine rail items in rail order (ADR 2026-10-24 amend
+    // 2026-10-28); the drawer toggles with Ctrl+` only, so no digit names it.
+    assert!(MAIN.contains("const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);"), "Ctrl+<n> follows the rail order");
     let rail_start = MAIN.find("const RAIL: RailItem[] = [").expect("RAIL");
     let rail = &MAIN[rail_start..rail_start + MAIN[rail_start..].find("\n];").unwrap()];
-    for line in rail.lines().filter(|l| l.contains("id: \"")) {
+    let items: Vec<&str> = rail.lines().filter(|l| l.contains("id: \"")).collect();
+    assert_eq!(items.len(), 12, "every kit item on the rail");
+    for (i, line) in items.iter().enumerate() {
         let id = line.split("id: \"").nth(1).unwrap().split('"').next().unwrap();
-        let n = list.iter().position(|x| *x == id).unwrap_or_else(|| panic!("{id} has no Ctrl+<n>")) + 1;
-        assert!(line.contains(&format!("(Ctrl+{n})")), "{id}: its tooltip must name Ctrl+{n}");
+        if i < 9 {
+            assert!(line.contains(&format!("(Ctrl+{})", i + 1)), "{id}: its tooltip must name Ctrl+{}", i + 1);
+        } else {
+            assert!(!line.contains("(Ctrl+"), "{id}: only the first nine items have a Ctrl+<n>");
+        }
     }
-    let off = MAIN.find("const OFF_RAIL_VIEWS = [").expect("OFF_RAIL_VIEWS");
-    for v in ["plans", "flight", "activity"] {
-        assert!(MAIN[off..off + 60].contains(v) && list.contains(&v), "{v} keeps its Ctrl+<n>");
-    }
+    assert!(MAIN.contains("if (ev.code === \"Backquote\") toggleTerminal("), "Ctrl+` toggles the drawer");
+    assert!(!MAIN.contains("Ctrl+5 or Ctrl+"), "the drawer toggle no longer claims Ctrl+5");
 }

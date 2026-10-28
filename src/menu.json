@@ -1,5 +1,5 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File, View (the views and panels), Run, Help. `more` is the action rows of the rail's More menu, which holds settings only (src/main.ts renders them after its Skin and Title bar choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File, View (the rail items in rail order, Plans, then the panels), Run, Help. `config` is the action rows of Workspace → Config, which holds settings only (src/main.ts renders them after its Skin, Title bar and Rail choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -16,14 +16,19 @@
     {
       "label": "View",
       "items": [
-        { "id": "view:mission", "label": "Mission" },
+        { "id": "view:mission", "label": "Cockpit" },
+        { "id": "view:queue", "label": "Queue" },
         { "id": "view:inbox", "label": "Inbox" },
-        { "id": "view:review", "label": "Review" },
-        { "id": "view:git", "label": "Git" },
-        { "id": "view:pipelines", "label": "Pipelines" },
-        { "id": "view:plans", "label": "Plans" },
+        { "id": "view:chats", "label": "Chats" },
         { "id": "view:flight", "label": "Flight Log" },
+        { "id": "view:review", "label": "Review" },
+        { "id": "view:ship", "label": "Ship" },
         { "id": "view:activity", "label": "Activity" },
+        { "id": "view:terminals", "label": "Terminals" },
+        { "id": "view:processes", "label": "Processes" },
+        { "id": "view:workspace", "label": "Workspace" },
+        { "id": "view:colony", "label": "Colony" },
+        { "id": "view:plans", "label": "Plans" },
         { "separator": true },
         { "id": "terminal", "label": "Show or hide the terminal" },
         { "id": "dock:bottom", "label": "Terminal at the bottom" },
@@ -57,7 +62,7 @@
       ]
     }
   ],
-  "more": [
+  "config": [
     { "id": "omarchy", "label": "Omarchy integration…", "title": "Bar widget and menu entries for omarchy-shell (opt-in, removable)", "omarchyOnly": true }
   ]
 }
