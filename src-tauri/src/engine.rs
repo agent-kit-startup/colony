@@ -42,8 +42,10 @@ pub const DRIVER_PROTOCOL_MAJOR: u64 = 1;
 /// 1.3.0 adds token `usage` to `tick_end` / `run_end` (the driver chat's token budget);
 /// 1.2.x engines still install, and their runs show "no usage". 1.4.0 adds the policy
 /// pre-answer (`hitl_reply.source`) and `hitl_gate.usage`; older engines still install, and
-/// the driver chat never pre-answers a gate on them.
-pub const ENGINE_PROTOCOL_RANGE: &str = ">=1.2.0, <1.5.0";
+/// the driver chat never pre-answers a gate on them. 1.5.0 adds the inbound `stop_after_tick`
+/// message (the run ends after the current tick, `run_end.reason` "stopped by request");
+/// older engines still install, and a Stop with no open gate on them falls back to Kill.
+pub const ENGINE_PROTOCOL_RANGE: &str = ">=1.2.0, <1.6.0";
 /// How many of the newest kit releases the updater looks at for one inside the range.
 const RELEASE_SCAN: usize = 10;
 /// Mission Control snapshot schema major the native views read (`dashboardDataVersion`).
@@ -162,7 +164,7 @@ pub fn supported_text() -> String {
     )
 }
 
-/// The range as people read it: `~1.2` is `1.2.x`, `>=1.2.0, <1.5.0` is `1.2.x-1.4.x`.
+/// The range as people read it: `~1.2` is `1.2.x`, `>=1.2.0, <1.6.0` is `1.2.x-1.5.x`.
 pub fn protocol_range_text() -> String {
     if let Some(v) = ENGINE_PROTOCOL_RANGE.strip_prefix('~') {
         return format!("{v}.x");
@@ -1174,7 +1176,7 @@ mod tests {
         let base = root.join("releases");
         publish(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
         publish(&base, &manifest("6.4.0", "1.2.1", Some("1.6.0")));
-        publish(&base, &manifest("6.5.0", "1.5.0", Some("1.6.0")));
+        publish(&base, &manifest("6.5.0", "1.6.0", Some("1.6.0")));
         publish(&base, &manifest("6.1.0", "1.1.0", Some("1.6.0")));
         publish(&base, &manifest("7.0.0", "2.0.0", Some("1.6.0")));
         let url = format!("file://{}", base.display());
@@ -1192,7 +1194,7 @@ mod tests {
         assert!(!engines.join("7.0.0").exists());
         // Same major, outside the updater range: refused with what to do instead.
         let e = install_engine(&engines, &url, "6.5.0").unwrap_err();
-        assert!(e.contains("driver protocol 1.5.0") && e.contains("1.2.x-1.4.x") && e.contains("update Colony first"), "{e}");
+        assert!(e.contains("driver protocol 1.6.0") && e.contains("1.2.x-1.5.x") && e.contains("update Colony first"), "{e}");
         let e = install_engine(&engines, &url, "6.1.0").unwrap_err();
         assert!(e.contains("install a newer engine version"), "{e}");
         assert!(!engines.join("6.5.0").exists() && !engines.join("6.1.0").exists());
@@ -1294,11 +1296,11 @@ mod tests {
 
     #[test]
     fn updater_range_and_release_pick() {
-        // 1.4.0 (policy pre-answer, hitl_gate.usage) is the newest protocol this build reads;
-        // 1.2.x engines still install (their runs show "no usage").
-        assert_eq!(protocol_range_text(), "1.2.x-1.4.x");
-        assert!(protocol_installable("1.2.0") && protocol_installable("1.2.7") && protocol_installable("1.3.0") && protocol_installable("1.3.4") && protocol_installable("1.4.0"));
-        assert!(!protocol_installable("1.1.0") && !protocol_installable("1.5.0") && !protocol_installable("2.2.0") && !protocol_installable("x"));
+        // 1.5.0 (stop_after_tick) is the newest protocol this build reads; 1.2.x engines
+        // still install (their runs show "no usage").
+        assert_eq!(protocol_range_text(), "1.2.x-1.5.x");
+        assert!(protocol_installable("1.2.0") && protocol_installable("1.2.7") && protocol_installable("1.3.0") && protocol_installable("1.3.4") && protocol_installable("1.4.0") && protocol_installable("1.5.0"));
+        assert!(!protocol_installable("1.1.0") && !protocol_installable("1.6.0") && !protocol_installable("2.2.0") && !protocol_installable("x"));
         assert!(!protocol_installable("1.3.0-rc.1") && !protocol_installable("1.2.0-rc.1"), "pre-releases never install");
 
         let json = r#"[
@@ -1312,8 +1314,8 @@ mod tests {
         let vs = release_versions(json).unwrap();
         assert_eq!(vs.iter().map(|v| v.to_string()).collect::<Vec<_>>(), ["6.10.0", "6.9.0", "6.8.0"]);
 
-        // Newest inside the range wins; a newer release on 1.5 is skipped.
-        let proto = |v: &Version| Some(if v.minor >= 10 { "1.5.0" } else { "1.2.0" }.to_string());
+        // Newest inside the range wins; a newer release on 1.6 is skipped.
+        let proto = |v: &Version| Some(if v.minor >= 10 { "1.6.0" } else { "1.2.0" }.to_string());
         assert_eq!(pick_in_range(&vs, proto).unwrap(), "6.9.0");
         let proto13 = |v: &Version| Some(if v.minor >= 10 { "1.3.0" } else { "1.2.0" }.to_string());
         assert_eq!(pick_in_range(&vs, proto13).unwrap(), "6.10.0");
