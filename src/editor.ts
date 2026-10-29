@@ -50,9 +50,8 @@ export class Editors {
     });
     // The Omarchy skin follows the system monospace font.
     onSkin(() => this.editor.updateOptions({ fontFamily: monoFont() }));
-    this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void this.save();
-    });
+    // No Ctrl+S command here: the window's capture-phase keyboard handler (main.ts) is the one
+    // save path (File → Save, the palette and Ctrl+S), so a save never fails silently.
   }
 
   paths(): string[] {

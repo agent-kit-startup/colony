@@ -38,6 +38,7 @@ import { launches, promptPlan } from "./launches";
 import { type DropHit, dropPoint, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
+import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
@@ -105,7 +106,7 @@ document.getElementById("app")!.innerHTML = `
         <div id="recents"></div>
       </div>
       <div id="view-editor" class="view" hidden>
-        <div id="doc-bar" role="tablist" aria-label="Show this file as" hidden><button data-mode="preview" role="tab" title="The rendered document (plan to-dos as a table)">Preview</button><button data-mode="editor" role="tab" title="Edit the Markdown source (Ctrl+S saves)">Editor</button></div>
+        <div id="doc-bar" role="tablist" aria-label="Show this file as" hidden><button data-mode="preview" role="tab" title="The rendered document (plan to-dos as a table)">Preview</button><button data-mode="editor" role="tab" title="Edit the Markdown source (File → Save or Ctrl+S saves)">Editor</button></div>
         <div id="doc-preview" tabindex="-1" hidden></div>
         <div id="monaco-host"></div>
       </div>
@@ -135,7 +136,8 @@ document.getElementById("app")!.innerHTML = `
   <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
   <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
 </div>
-<div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>`;
+<div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>
+<div id="prompt" hidden><div class="quick-box"><label id="prompt-label" for="prompt-input"></label><input id="prompt-input" autocomplete="off" spellcheck="false" /><div id="prompt-hint" class="dim small">Enter saves, Escape cancels</div></div></div>`;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const shell = $("shell");
@@ -565,16 +567,77 @@ async function openFile(path: string, mode?: DocMode) {
   } else showTab(path);
 }
 
+/** File → Save, the palette row and Ctrl+S: the one save path. Every outcome is reported in
+ *  the status bar; nothing returns silently (ADR 2026-10-24 amend 2026-10-29 point 2). */
 async function saveActive() {
-  if (!isFile(activeTab)) return;
+  // The settings file opens without a folder (File → Settings), so no workspace is required.
+  if (!isFile(activeTab)) return status(workspace ? "Nothing to save: no file is active (open one from the Explorer or with Ctrl+P)" : "Nothing to save: open a folder first");
   try {
     const p = await editors.save(activeTab);
-    if (p) status(`Saved ${relPath(p)}`);
-    if (p && p.endsWith("/settings.json") && !p.startsWith(`${workspace?.root}/`)) void loadSkin();
+    if (!p) return status(`Save failed: ${relPath(activeTab)} is not open in the editor`);
+    status(`Saved ${relPath(p)}`);
+    if (p.endsWith("/settings.json") && !p.startsWith(`${workspace?.root}/`)) void loadSkin();
     void gitView.panel.refresh();
   } catch (e) {
-    status(`Save failed: ${errText(e)}`);
+    status(`Save failed: ${relPath(activeTab)}: ${errText(e)}`);
   }
+}
+
+/** File → Save as…: the active file's text (unsaved edits included) written to a new file
+ *  inside the workspace. The name is typed in Colony (no native picker): `create_text_file`
+ *  keeps it in the jail and never overwrites. The new file opens in its own tab; the original
+ *  tab keeps its text and its dirty state. */
+async function saveAs() {
+  if (!workspace) return status("Open a folder first");
+  if (!isFile(activeTab)) return status("Nothing to save as: no file is active");
+  const from = activeTab;
+  const text = editors.text(from);
+  if (text === null) return status(`Save as failed: ${relPath(from)} is not open in the editor`);
+  const typed = await promptText(`Save ${relPath(from)} as (a path inside ${workspace.name})`, saveAsInitial(workspace.root, from));
+  if (typed === null) return status("Save as: cancelled");
+  const target = saveAsTarget(workspace.root, from, typed);
+  if ("error" in target) return status(`Save as failed: ${target.error}`);
+  try {
+    const created = await api.createTextFile(target.path, text);
+    await tree.refresh();
+    await openFile(created);
+    status(`Saved as ${relPath(created)}`);
+    void gitView.panel.refresh();
+  } catch (e) {
+    status(`Save as failed: ${errText(e)}`);
+  }
+}
+
+/** One line of text typed in Colony (Save as…): the value on Enter, null on Escape or when
+ *  the field loses focus. */
+function promptText(label: string, value: string): Promise<string | null> {
+  const box = $("prompt");
+  const input = $<HTMLInputElement>("prompt-input");
+  $("prompt-label").textContent = label;
+  input.value = value;
+  box.hidden = false;
+  input.focus();
+  const dot = value.lastIndexOf(".");
+  const slash = value.lastIndexOf("/");
+  input.setSelectionRange(slash + 1, dot > slash ? dot : value.length);
+  return new Promise((resolve) => {
+    const done = (v: string | null) => {
+      input.removeEventListener("keydown", onKey);
+      input.removeEventListener("blur", onBlur);
+      box.hidden = true;
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Enter") done(input.value);
+      else if (ev.key === "Escape") done(null);
+      else return;
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    const onBlur = () => setTimeout(() => !box.hidden && done(null), 100);
+    input.addEventListener("keydown", onKey);
+    input.addEventListener("blur", onBlur);
+  });
 }
 
 /** Hand `path` (default: the active file, else the folder) to the user's own editor. */
@@ -1482,6 +1545,8 @@ function applyTitleBar(info: StartupInfo) {
 const ACTIONS: Record<string, () => unknown> = {
   "open-folder": () => pickFolder(),
   "run-elsewhere": () => controls.startElsewhere(),
+  save: () => saveActive(),
+  "save-as": () => saveAs(),
   "open-in-editor": () => openInEditor(),
   settings: () => openSettings(),
   "close-window": () => closeWindow(),
@@ -1572,7 +1637,7 @@ $("st-engine").addEventListener("click", showEngine);
 const paletteActions = (): ColonyAction[] => {
   const rows = menuItems()
     .filter((i) => i.id !== "commands" && (!i.omarchyOnly || omarchyDetected()))
-    .map((i) => ({ id: i.id, name: i.id.startsWith("view:") ? `Go to ${i.label}` : i.label, description: i.where }));
+    .map((i) => ({ id: i.id, name: i.id.startsWith("view:") ? `Go to ${i.label}` : i.label, description: i.where, shortcut: SHORTCUTS[i.id] }));
   const listed = new Set(rows.map((r) => r.id));
   const sections = WORKSPACE_SECTIONS.filter((s) => !listed.has(`view:${s}`)).map((s) => ({ id: `view:${s}`, name: `Go to Workspace → ${sectionInfo(s).label}`, description: "Workspace" }));
   return [...rows, ...sections];

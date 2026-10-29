@@ -29,11 +29,13 @@ export interface PaletteHost {
   runAction(id: string): void;
 }
 
-/** A menu item as a palette row: `name` is its label, `description` the menu it sits in. */
+/** A menu item as a palette row: `name` is its label, `description` the menu it sits in,
+ *  `shortcut` the window shortcut when it has one (the native menu shows none). */
 export interface ColonyAction {
   id: string;
   name: string;
   description: string;
+  shortcut?: string;
 }
 
 type Entry = { kind: "kit"; row: CommandRow } | { kind: "colony"; row: ColonyAction } | { kind: "claude"; row: ClaudeBuiltin };
@@ -202,8 +204,15 @@ export class CommandPalette {
   private action(a: ColonyAction, sel: boolean): HTMLElement {
     const el = h(
       "div",
-      { class: `quick-item palette-action ${sel ? "sel" : ""}`, title: `${a.description} → ${a.name}` },
-      h("div", { class: "row" }, h("span", { class: "grow ellipsis" }, a.name), h("span", { class: "dim small" }, a.description), h("span", { class: "palette-act run" }, "Run")),
+      { class: `quick-item palette-action ${sel ? "sel" : ""}`, title: `${a.description} → ${a.name}${a.shortcut ? ` (${a.shortcut})` : ""}` },
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "grow ellipsis" }, a.name),
+        ...(a.shortcut ? [h("kbd", { class: "palette-key dim small" }, a.shortcut)] : []),
+        h("span", { class: "dim small" }, a.description),
+        h("span", { class: "palette-act run" }, "Run"),
+      ),
     );
     el.dataset.action = a.id;
     el.addEventListener("mousedown", (ev) => {
