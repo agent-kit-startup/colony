@@ -300,9 +300,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 #st-ws { font-weight: 600; color: var(--text-primary); }
 #st-msg { overflow: hidden; text-overflow: ellipsis; }
 
-#quick { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+#quick, #prompt { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
 .quick-box { width: min(640px, 90vw); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); overflow: hidden; }
-#quick-input { width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; font-size: 14px; background: var(--bg-secondary); outline: none; }
+#prompt-label { display: block; padding: 10px 12px 0; font-size: 12px; color: var(--text-secondary); }
+#prompt-hint { padding: 6px 12px 8px; }
+.palette-key { font-family: var(--mc-font-mono); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+#quick-input, #prompt-input { width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 12px; font-size: 14px; background: var(--bg-secondary); outline: none; }
 #quick-list { max-height: 50vh; overflow: auto; }
 .quick-item { padding: 5px 12px; font-family: var(--mc-font-mono); font-size: 12px; cursor: pointer; }
 .quick-item.sel { background: var(--blue-bg); }
