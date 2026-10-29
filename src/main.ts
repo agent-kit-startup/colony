@@ -6,8 +6,8 @@
 // project, a Plans dropdown) next to Go to file and Open in editor; Cockpit keeps the plan's
 // own documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
 // the interactive vendor CLI and the queue runner, the editor files (a plan or HANDOFF opened
-// from the cockpit shows rendered first, with a Preview | Editor switch) and the kit's web panel
-// (a fallback under View). Explorer next to the rail; the terminal drawer holds the user's
+// from the cockpit shows rendered first, with a Preview | Editor switch); no view embeds the kit's
+// web page. Explorer next to the rail; the terminal drawer holds the user's
 // shells and every terminal control, and its bar stays on screen while the drawer is closed.
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -35,19 +35,20 @@ import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq
 import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
-import { decide, type McRecord } from "./mcactions";
 import { type DropHit, dropPoint, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
-import { kitSkinValue, loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
+import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
-import { pendingView, sectionInfo, workspaceSection } from "./workspace";
+import { sectionInfo, workspaceSection } from "./workspace";
+import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
@@ -148,7 +149,6 @@ const status = (msg: string) => {
 
 let workspace: WorkspaceInfo | null = null;
 let mcUrl = "";
-let mcOrigin = "";
 /** The folder's Mission Control server log (~/.cache/colony/dashboard-<port>.log), once known. */
 let mcLog = "";
 
@@ -282,8 +282,12 @@ function openRail(r: RailItem) {
  *  1px line in the border colour (`.fade-top` / `.fade-bottom`). */
 function railFade() {
   const rail = $("rail");
-  const top = rail.scrollTop > 0;
-  const bottom = rail.scrollTop + rail.clientHeight < rail.scrollHeight - 1;
+  // Measured on the items, not the scroll range: the rail's own padding may stay out of view
+  // while every item is in it (scrollIntoView stops at the item).
+  const items = rail.querySelectorAll<HTMLElement>(".rail-item");
+  const box = rail.getBoundingClientRect();
+  const top = !!items.length && items[0].getBoundingClientRect().top < box.top - 0.5;
+  const bottom = !!items.length && items[items.length - 1].getBoundingClientRect().bottom > box.bottom + 0.5;
   rail.classList.toggle("fade-top", top);
   rail.classList.toggle("fade-bottom", bottom);
 }
@@ -303,7 +307,7 @@ $("rail").addEventListener("keydown", (ev) => {
   el.scrollIntoView({ block: "nearest" });
 });
 
-/** The tab strip: documents only (runs, terminals, files, the web panel), after the switch of
+/** The tab strip: documents only (runs, terminals, files), after the switch of
  *  a rail group with more than one view (Ship: Git | CI/CD). Workspace switches its sections
  *  inside the view, not here. */
 function renderTabs() {
@@ -606,7 +610,7 @@ $("btn-settings").addEventListener("click", () => void openSettings());
 // stay centre tabs (context strip, gate badge, Agent runs) and are not repeated here. Its bar
 // (shell tabs, +, dock, show / hide) stays on screen while the drawer is closed: a shell tab
 // or the toggle opens it again.
-const terminals = new Terminals($("term-tabs"), $("terms"), status);
+const terminals = new Terminals($("term-tabs"), $("terms"), status, () => workspace?.root ?? "");
 $("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => runAction("new-terminal"));
 // A shell tab clicked while the drawer is closed opens it (capture: before the tab shows its
 // shell, so that shell gets the focus). Its close button only closes it.
@@ -853,10 +857,16 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
       view.dispose();
       centerTerms.delete(id);
       launches.dropTerm(id);
+      ttys.closed(id);
       return true;
     },
   });
-  view.onExit = () => renderTabs();
+  ttys.add({ key: id, place: "tab", label, argv, root: workspace?.root ?? "", startedAt: Date.now() });
+  view.term.onTitleChange((title) => ttys.update(id, { title: title.slice(0, 200) }));
+  view.onExit = (code) => {
+    ttys.exited(id, code);
+    renderTabs();
+  };
   if (agent && workspace) launches.addTerm({ tabId: id, kind: agent.kind, plan: agent.plan, backend: agent.backend, root: workspace.root, label, view, el });
   if (agent?.kind === "interactive" && agent.engine === "claude") {
     // Claude Code has saved (or updated) the session by now: list it under Chats.
@@ -870,8 +880,10 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
     await view.spawn(argv);
   } catch (e) {
     status(`${label}: ${errText(e)}`);
+    ttys.exited(id, null);
     return;
   }
+  ttys.update(id, { ptyId: view.id });
   return { id, view };
 }
 
@@ -1039,6 +1051,31 @@ const queue = new QueueView(host, driverChat);
 const flight = new FlightLogView(host);
 const activity = new ActivityView(host);
 const chatsView = new ChatsView(host);
+// The rail items and Workspace sections the kit's web page used to serve in a frame (plan s3).
+const kitHost: KitViewsHost = { ...host, showEngine: () => showEngine() };
+const processesView = new ProcessesView(kitHost);
+const terminalsView = new TerminalsView(kitHost, {
+  workspaceRoot: () => workspace?.root ?? "",
+  focus: (s) => {
+    if (s.place === "tab") return showTab(s.key);
+    toggleTerminal(true);
+    if (!terminals.focusShell(Number(s.key.slice("drawer:".length)))) status(`${s.label} is no longer in the drawer`);
+  },
+  reopen: (s) => {
+    toggleTerminal(true);
+    void terminals.create(s.argv ?? undefined, s.argv ? s.label : undefined);
+  },
+});
+const colonyView = new ColonyView(kitHost);
+const memoryView = new MemoryView(kitHost, () => showTab("decisions"));
+const healthView = new HealthView(kitHost);
+const decisionsView = new DecisionsView(kitHost);
+const agentsView = new AgentsView(kitHost);
+const skillsView = new SkillsView(kitHost);
+const rulesView = new RulesView(kitHost);
+const commandsView = new CommandsView(kitHost);
+/** Every snapshot view, for a folder switch or a server restart. */
+const kitViews = [processesView, colonyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -1123,35 +1160,23 @@ function pinViews() {
   pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
   pin("activity", "Activity", "activity", "The kit's recent activity and health checks", activity.el, activity);
   pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
-  // Rail items whose native view comes with plan to-do s3: until then, the kit's web panel
-  // at the matching section (the fallback that s3 removes).
-  const still = { show: () => {}, hide: () => {} };
-  const web = (section: string) => ({ label: "Open in the web panel", run: () => openWebPanel(section), title: `The kit's web panel at #${section} (the fallback until Colony draws it)` });
-  const later = "Colony draws this view natively with plan colony-sidebar-native-kit, to-do s3.";
-  pin(
-    "terminals",
-    "Terminals",
-    "terminals",
-    "The TTY sessions of this window",
-    pendingView("Terminals", `${later} It will list every TTY session of this window, the ones closed in the drawer bar included, with their status, folder and a reopen button. Until then the drawer bar lists and controls the open shells.`, [{ label: "Show the terminal drawer", run: () => toggleTerminal(true) }]),
-    still,
-  );
-  pin("processes", "Processes", "processes", "The kit's process list", pendingView("Processes", later, [web("processes")]), still);
-  pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", pendingView("Colony", later, [web("colony")]), still);
+  pin("terminals", "Terminals", "terminals", "Every terminal of this window, closed drawer shells included", terminalsView.el, terminalsView);
+  pin("processes", "Processes", "processes", "The kit's process list", processesView.el, processesView);
+  pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", colonyView.el, colonyView);
   // Workspace: one view per section, the section switch at its head.
   const openSection = (id: string) => showTab(id);
-  const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void } = still) => {
+  const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void }) => {
     const info = sectionInfo(id);
     pin(id, info.label, info.icon, info.tip, workspaceSection(id, WORKSPACE_SECTIONS, body, openSection), v);
   };
-  section("memory", pendingView("Memory", later, [web("memory")]));
-  section("health", pendingView("Health", `${later} The Activity view lists the health checks meanwhile.`, [{ label: "Open Activity", run: () => showTab("activity") }]));
-  section("decisions", pendingView("Decisions", `${later} It reads the decision index of the kit's snapshot 1.10.0.`, [web("memory")]));
-  section("agents", pendingView("Agents", later, [web("agents")]));
-  section("skills", pendingView("Skills", later, [web("skills")]));
-  section("rules", pendingView("Rules", `${later} It reads the rules list of the kit's snapshot 1.10.0.`));
-  section("commands", pendingView("Commands", later, [{ label: "Commands…", run: () => palette.show() }, web("commands")]));
-  section("config", settingsPane);
+  section("memory", memoryView.el, memoryView);
+  section("health", healthView.el, healthView);
+  section("decisions", decisionsView.el, decisionsView);
+  section("agents", agentsView.el, agentsView);
+  section("skills", skillsView.el, skillsView);
+  section("rules", rulesView.el, rulesView);
+  section("commands", commandsView.el, commandsView);
+  section("config", settingsPane, { show: () => {}, hide: () => {} });
   section("plans", plans.el, plans);
 }
 
@@ -1467,7 +1492,6 @@ const ACTIONS: Record<string, () => unknown> = {
   explorer: () => toggleExplorer(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
-  web: () => openWebPanel(),
   refresh: () => snapshot.refresh(),
   "run-plan": () => host.runPlan(),
   "run-queue": () => host.runQueue(),
@@ -1584,34 +1608,7 @@ function renderSkinMenu() {
     b.textContent = `${on ? "✓ " : ""}${SKINS.find((x) => x.id === b.dataset.skin)?.label}`;
   }
 }
-let frameKitSkin = "";
-onSkin((s) => {
-  renderSkinMenu();
-  // The web panel follows: reload it with the matching kit skin (an Omarchy theme switch
-  // keeps the panel on Bare Metal, so it does not reload then).
-  const kit = kitSkinValue(s);
-  if (mcFrame.getAttribute("src") && kit !== frameKitSkin) mcFrame.src = webPanelUrl();
-  frameKitSkin = kit;
-});
-
-/** The web panel URL; `colony-skin` makes the frame hook select the matching kit skin. */
-function webPanelUrl() {
-  const u = new URL(mcUrl);
-  u.searchParams.set("colony-skin", kitSkinValue(skin()));
-  return u.toString();
-}
-
-// Sandboxed (security review 2026-10-24, finding 3): the panel keeps its own origin
-// (skin storage, clipboard) and scripts, but may not navigate Colony's window.
-const mcFrame = h("iframe", { id: "mc", title: "Mission Control (web panel)", allow: "clipboard-read; clipboard-write", sandbox: "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads" });
-function openWebPanel(section?: string) {
-  if (!workspace) return;
-  if (!mcUrl) return status("Mission Control server is not running");
-  if (section) mcFrame.src = `${webPanelUrl()}#${section}`;
-  else if (!mcFrame.getAttribute("src")) mcFrame.src = webPanelUrl();
-  if (!tabs.has("web")) addTab({ id: "web", label: "Mission Control (web)", icon: "monitor", tip: `The kit's web panel, ${mcUrl} (fallback; actions copy unless allowlisted)`, pinned: false, el: h("div", { class: "web-view" }, mcFrame) });
-  else showTab("web");
-}
+onSkin(() => renderSkinMenu());
 
 // ---- status bar: Mission Control feed --------------------------------------------------
 function renderFeed() {
@@ -1738,8 +1735,7 @@ for (const b of $("tabs").querySelectorAll<HTMLButtonElement>("[data-nav]")) {
   b.replaceChildren(icon(step, "tab-svg"));
   b.addEventListener("click", () => navigate(step));
 }
-// The mouse's back and forward buttons, anywhere in the window (not inside the web panel
-// frame, whose events stay in the frame). The press is swallowed so WebKit runs no history
+// The mouse's back and forward buttons, anywhere in the window. The press is swallowed so WebKit runs no history
 // navigation of its own.
 window.addEventListener("mousedown", (ev) => {
   if (ev.button === 3 || ev.button === 4) ev.preventDefault();
@@ -1761,19 +1757,20 @@ async function openWorkspace(path: string) {
     return status(errText(e));
   }
   remember(workspace.root);
-  // Files, terminal tabs and the web panel belong to the folder; agent runs keep their
+  // Files and terminal tabs belong to the folder; agent runs keep their
   // tabs (a run may be in another folder, and closing one would kill it).
   for (const id of [...order]) {
     const t = tabs.get(id);
     if (!t || t.pinned || id.startsWith("run:")) continue;
     centerTerms.get(id)?.dispose();
-    centerTerms.delete(id);
+    if (centerTerms.delete(id)) ttys.closed(id);
     tabs.delete(id);
     order.splice(order.indexOf(id), 1);
     if (t.el !== $("view-editor")) t.el.remove();
   }
   // The history belongs to the folder (its tabs just left): Mission becomes its first entry.
   nav.reset();
+  commandsView.reset();
   document.getElementById("run-dialog")?.remove();
   editors.closeAll();
   terminals.closeAll();
@@ -1788,9 +1785,7 @@ async function openWorkspace(path: string) {
   readiness.reset(workspace.root, workspace.hasKit);
   void readiness.load();
   mcUrl = "";
-  mcOrigin = "";
   mcLog = "";
-  mcFrame.removeAttribute("src");
   alerts.setBase(`${workspace.name} · Colony`);
   // The folder name never truncates; its parent path ellipsizes (full path in the title).
   const parent = workspace.root.slice(0, workspace.root.length - workspace.name.length);
@@ -1817,12 +1812,11 @@ async function startMc() {
   $("st-mc").textContent = "Mission Control: starting…";
   snapshot.feed.error = null;
   snapshot.feed.detail = "starting";
-  for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
+  for (const v of [mission, plans, queue, flight, activity, ...kitViews]) v.invalidate();
   try {
     const mc = await api.dashboardStart();
     if (workspace?.root !== root) return;
     mcUrl = mc.url;
-    mcOrigin = new URL(mc.url).origin;
     mcLog = mc.logPath;
     $("st-mc").title = `${mc.servePath}\nengine: ${mc.engine}\nlog: ${mc.logPath}`;
     void refreshEngineBadge($("st-engine"));
@@ -1833,95 +1827,9 @@ async function startMc() {
     mcLog = /log: (\S+\.log)/.exec(errText(e))?.[1] ?? mcLog;
     snapshot.feed.error = errText(e);
     renderFeed();
-    for (const v of [mission, plans, queue, flight, activity]) v.invalidate();
+    for (const v of [mission, plans, queue, flight, activity, ...kitViews]) v.invalidate();
     status(`Mission Control: ${errText(e)}`);
   }
-}
-
-// Mission Control web panel action seam (src-tauri/src/lib.rs hook, src/mcactions.ts
-// allowlist): the frame offers each copy record here first; `handled: false` makes the
-// frame copy as before.
-type McReply = { handled: boolean; ok?: boolean; message?: string };
-let confirmMcRun = async (plan: string | null) => {
-  const engine = controls.backend.value;
-  const named = plan ? ` Mission Control named ${plan}; agent-kit run-plan runs the folder's active plan.` : "";
-  return ask(`Start an Agent run of the active plan in ${workspace?.name ?? "this folder"} with ${engine}?${named}`, { title: "Mission Control", kind: "info" });
-};
-async function hostMcAction(record: McRecord): Promise<McReply> {
-  const d = decide(record);
-  if (d.action === "open-file" && workspace) {
-    const abs = `${workspace.root}/${d.path}`;
-    try {
-      await openFile(abs);
-      return editors.active === abs ? { handled: true, message: `Opened ${d.path} in Colony` } : { handled: false };
-    } catch {
-      return { handled: false };
-    }
-  }
-  if (d.action === "run-plan" && workspace) {
-    void confirmMcRun(d.plan).then(async (yes) => {
-      if (!yes) return status("Mission Control: run not started");
-      await controls.start();
-    });
-    return { handled: true, message: "Confirm the run in Colony" };
-  }
-  // Only the run the Ship lane itself names (security review 2026-10-24, finding 7): a
-  // script in the frame cannot fill the Requests list with arbitrary run ids.
-  if (d.action === "rerun-run" && workspace && d.run === snapshot.data?.shipLane?.remote?.tagCi?.runId) {
-    try {
-      const id = await hostApi.local("rerun-checks", { run: d.run });
-      showTab("git");
-      requests.reveal(id);
-      return { handled: true, message: `Approve the rerun of run ${d.run} on its card in Git` };
-    } catch (e) {
-      status(`Mission Control: ${errText(e)}`);
-      return { handled: false };
-    }
-  }
-  const where = record.destination === "terminal" ? "paste it in a Colony terminal (Ctrl+Shift+V)" : `paste it in the ${record.destination || "target"}`;
-  status(`Mission Control copied ${record.subject || "text"}: ${where}`);
-  return { handled: false };
-}
-window.addEventListener("message", (ev) => {
-  if (!mcOrigin || ev.origin !== mcOrigin || ev.source !== mcFrame.contentWindow || ev.data?.colony !== "mc-action") return;
-  const port = ev.ports[0];
-  const a = ev.data.action ?? {};
-  const record: McRecord = { kind: String(a.kind ?? ""), text: String(a.text ?? ""), subject: String(a.subject ?? ""), destination: String(a.destination ?? "") };
-  void hostMcAction(record).then(
-    (reply) => port?.postMessage(reply),
-    () => port?.postMessage({ handled: false }),
-  );
-});
-
-/** COLONY_SMOKE: the kit skin the web panel frame shows (data-dashboard-skin). */
-function frameSkinNow(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve("timeout"), 3000);
-    const onMsg = (ev: MessageEvent) => {
-      if (ev.origin !== mcOrigin || ev.data?.colony !== "mc-smoke-skin-result") return;
-      clearTimeout(timer);
-      window.removeEventListener("message", onMsg);
-      resolve(ev.data.skin ?? null);
-    };
-    window.addEventListener("message", onMsg);
-    mcFrame.contentWindow?.postMessage({ colony: "mc-smoke-skin" }, mcOrigin);
-  });
-}
-
-/** COLONY_SMOKE: run `perform()` inside the web panel frame and wait for its result. */
-function mcPerformInFrame(action: Record<string, string>): Promise<unknown> {
-  const id = Math.random().toString(36).slice(2);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ timeout: true }), 4000);
-    const onMsg = (ev: MessageEvent) => {
-      if (ev.origin !== mcOrigin || ev.data?.colony !== "mc-smoke-result" || ev.data.id !== id) return;
-      clearTimeout(timer);
-      window.removeEventListener("message", onMsg);
-      resolve(ev.data.error ? { error: ev.data.error } : ev.data.result);
-    };
-    window.addEventListener("message", onMsg);
-    mcFrame.contentWindow?.postMessage({ colony: "mc-smoke-perform", id, action }, mcOrigin);
-  });
 }
 
 // ---- keyboard --------------------------------------------------------------------------
@@ -2608,26 +2516,6 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
     }
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
-    // The web panel stays reachable as a fallback (View), with its allowlisted host actions.
-    const cases: [McRecord, string][] = [
-      [{ kind: "copy", text: "README.md", subject: "path", destination: "filePicker" }, "open-file"],
-      [{ kind: "copy", text: "../etc/passwd", subject: "path", destination: "filePicker" }, "copy"],
-      [{ kind: "copy", text: "/run-plan", subject: "/run-plan", destination: "chatInput" }, "run-plan"],
-      [{ kind: "copy", text: "/run-plan mission.plan.md", subject: "", destination: "chatInput" }, "run-plan"],
-      [{ kind: "copy", text: "/run-plan-all", subject: "", destination: "chatInput" }, "copy"],
-      [{ kind: "copy", text: "/git-prod", subject: "", destination: "chatInput" }, "copy"],
-      [{ kind: "copy", text: "/run-plan x; rm -rf ~", subject: "", destination: "chatInput" }, "copy"],
-      [{ kind: "copy", text: "git diff", subject: "", destination: "terminal" }, "copy"],
-      [{ kind: "copy", text: "gh run rerun 4300 --failed", subject: "", destination: "terminal" }, "rerun-run"],
-      [{ kind: "copy", text: "gh run rerun 4300 --failed", subject: "", destination: "chatInput" }, "copy"],
-      [{ kind: "copy", text: "gh run rerun 4300 --failed; rm -rf ~", subject: "", destination: "terminal" }, "copy"],
-      [{ kind: "copy", text: "gh run rerun 0 --failed", subject: "", destination: "terminal" }, "copy"],
-      [{ kind: "copy", text: "gh run rerun 4300", subject: "", destination: "terminal" }, "copy"],
-      [{ kind: "copy", text: "gh pr checks 9", subject: "", destination: "terminal" }, "copy"],
-      [{ kind: "copy", text: "/kit-prod", subject: "", destination: "chatInput" }, "copy"],
-    ];
-    const verdicts = cases.map(([r, want]) => ({ text: r.text, got: decide(r).action, want }));
-    await log("mc-allowlist", verdicts.every((v) => v.got === v.want), verdicts);
     // Command palette: the kit's catalog (the fake agent-kit's fixture, or a real engine),
     // run only for PROMPT_SLASH names, copy for the rest, markup shown as text. An engine
     // without the catalog must show the Update-the-engine gate and no rows.
@@ -2667,29 +2555,208 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const wantActions = paletteActions().map((a) => a.id);
     await log("palette-actions", JSON.stringify(actionRows) === JSON.stringify(wantActions), { rendered: actionRows, want: wantActions });
     palette.hide();
-    const loaded = new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
-    openWebPanel();
-    const frameOk = await Promise.race([loaded, wait(8000).then(() => false)]);
-    await log("mission-control-web", activeTab === "web" && mcFrame.src.startsWith("http://127.0.0.1:"), { src: mcFrame.src, loadEvent: frameOk });
-    await wait(1500);
-    const webSkin = await frameSkinNow();
-    await log("mc-web-skin", webSkin === kitSkinValue("bare-metal"), { skin: webSkin, src: mcFrame.src });
-    const opened = await mcPerformInFrame({ kind: "copy", text: "smoke.txt", subject: "path smoke.txt", destination: "filePicker" });
-    await log("mc-open-file", editors.active === `${root}/smoke.txt` && activeTab === `${root}/smoke.txt`, { result: opened, active: editors.active ? relPath(editors.active) : null });
-    let asked = "";
-    const realConfirm = confirmMcRun;
-    confirmMcRun = async (plan) => {
-      asked = `asked (plan ${plan ?? "none"})`;
-      return false; // the smoke never starts a run from the web panel
+    // ---- s2 acceptance (plan colony-sidebar-native-kit): the rail -----------------------
+    // Every kit item at first level, in the operator's order, no More menu, nothing hidden.
+    const RAIL_WANT: [string, string][] = [
+      ["mission", "Cockpit"], ["queue", "Queue"], ["inbox", "Inbox"], ["chats", "Chats"], ["flight", "Flight Log"], ["review", "Review"],
+      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Colony"],
+    ];
+    const railEls = () => [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
+    const railGot = railEls().map((el) => [el.dataset.tab ?? "", el.querySelector(".lbl")?.textContent ?? ""]);
+    const noMore = !document.querySelector("#more-menu, #rail-more, .rail-more, [data-cmd='more'], [data-tab='more']") && !menuItems().some((i) => /^more$/i.test(i.id));
+    await log("rail-items", JSON.stringify(railGot) === JSON.stringify(RAIL_WANT) && noMore && railEls().every((el) => !el.hidden && el.getClientRects().length > 0), { got: railGot, noMore });
+    // 1024x600, emulated: the shell (the grid that sizes the rail) held at 1024x600 px, since
+    // the window may be tiled and has no set-size permission. The vh-based item padding keeps
+    // the real window's height, so the compact item height itself is a manual check.
+    const railAt = async (labels: boolean) => {
+      settingsPane.querySelector<HTMLButtonElement>(`button[data-setting=rail-labels][data-labels=${labels ? "on" : "off"}]`)!.click();
+      await wait(150);
+      const rail = $("rail");
+      rail.scrollTop = 0;
+      railFade();
+      const atTop = { fadeTop: rail.classList.contains("fade-top"), fadeBottom: rail.classList.contains("fade-bottom") };
+      const overflow = rail.scrollHeight > rail.clientHeight + 1;
+      const reach = railEls().map((el) => {
+        el.scrollIntoView({ block: "nearest" });
+        const r = el.getBoundingClientRect();
+        const b = rail.getBoundingClientRect();
+        return r.top >= b.top - 1 && r.bottom <= b.bottom + 1 && r.height >= 18;
+      });
+      railFade();
+      const atEnd = { fadeTop: rail.classList.contains("fade-top") === overflow, fadeBottom: !rail.classList.contains("fade-bottom") };
+      // The active item scrolls into view on a view change (Cockpit, at the top, then Colony).
+      showTab("mission");
+      rail.scrollTop = 0;
+      await wait(50);
+      showTab("colony");
+      await wait(100);
+      const c = railEls().at(-1)!.getBoundingClientRect();
+      const b = rail.getBoundingClientRect();
+      const activeInView = c.top >= b.top - 1 && c.bottom <= b.bottom + 1;
+      const heights = railEls().map((el) => Math.round(el.getBoundingClientRect().height));
+      return { railHeight: rail.clientHeight, overflow, atTop, atEnd, fadeOk: atTop.fadeTop === false && atTop.fadeBottom === overflow && atEnd.fadeTop && atEnd.fadeBottom, reachable: reach.every(Boolean), activeInView, minItem: Math.min(...heights) };
     };
-    const runReply = await mcPerformInFrame({ kind: "copy", text: "/run-plan demo.plan.md", subject: "/run-plan", destination: "chatInput" });
+    $("shell").style.width = "1024px";
+    $("shell").style.height = "600px";
     await wait(200);
-    confirmMcRun = realConfirm;
-    await log("mc-run-plan", asked === "asked (plan demo.plan.md)" && runs.list().length === 0, { result: runReply, asked });
-    const copied = await mcPerformInFrame({ kind: "copy", text: "colony smoke copy fallback", subject: "smoke text", destination: "terminal", toastMessage: "Copied smoke text" });
-    await log("mc-copy-fallback", JSON.stringify(copied).includes("Colony") && !JSON.stringify(copied).includes("Opened"), copied);
+    const railSmall = { icons: await railAt(false), labels: await railAt(true) };
+    $("shell").style.width = "";
+    $("shell").style.height = "";
+    await wait(150);
+    railFade();
+    showTab("mission");
+    const railSmallOk = Object.values(railSmall).every((v) => v.fadeOk && v.reachable && v.activeInView);
+    await log("rail-scroll-1024x600", railSmallOk, { emulated: "shell held at 1024x600 px", ...railSmall });
+    // Ctrl+1..9 open the first nine items; arrow keys move the focus along the rail.
+    (document.activeElement as HTMLElement | null)?.blur();
+    const ctrl: Record<string, unknown> = {};
+    for (let i = 1; i <= 9; i++) {
+      showTab("mission");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: String(i), code: `Digit${i}`, ctrlKey: true, bubbles: true, cancelable: true }));
+      await wait(50);
+      const want = RAIL[i - 1];
+      ctrl[`ctrl+${i}`] = want.views.includes(activeTab) ? true : activeTab;
+    }
+    const first = railEls()[0];
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    ctrl.arrowDown = document.activeElement === railEls()[1];
+    railEls()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+    ctrl.end = document.activeElement === railEls().at(-1);
+    (document.activeElement as HTMLElement | null)?.blur();
+    await log("rail-keys", Object.values(ctrl).every((v) => v === true), ctrl);
+    // The palette has a Go to row for every rail item and every Workspace section, and a
+    // Go to row opens its view.
+    const goIds = paletteActions().filter((a) => a.name.startsWith("Go to")).map((a) => a.id);
+    const goMissing = [...RAIL.map((r) => [r.id, ...r.views]), ...WORKSPACE_SECTIONS.map((s) => [s])].filter((ids) => !ids.some((v) => goIds.includes(`view:${v}`)));
+    await palette.show();
+    const goRow = palette.el.querySelector<HTMLElement>('.palette-action[data-action="view:processes"]');
+    // The rows act on mousedown (the press must not blur the palette's input first).
+    goRow?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await wait(100);
+    await log("palette-goto", !goMissing.length && !!goRow && activeTab === "processes", { goIds, goMissing, opened: activeTab });
+    palette.hide();
+    showTab("mission");
+    // ---- s3: the native kit views (no web panel) -----------------------------------------
+    const rowsIn = (id: string) => view(id).querySelectorAll<HTMLElement>(".kv-row[data-key]");
+    const nv: Record<string, unknown> = {};
+    const isGate = (id: string) => (view(id).querySelector(".empty-state-headline")?.textContent ?? "") === "Update the engine";
+    const ver = snapshot.version;
+    for (const id of ["terminals", "processes", "colony", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
+      showTab(id);
+      if (id === "commands") await commandsView.load();
+      await wait(250);
+      nv[id] = { pending: !!view(id).querySelector(".ws-pending"), rendered: view(id).querySelectorAll(".card, .empty-state-cta, .kv-row").length };
+      await shot(`native-${id}`);
+    }
+    const nvOk = Object.values(nv).every((v) => !(v as { pending: boolean }).pending && (v as { rendered: number }).rendered > 0);
+    await log("native-views", nvOk && !document.querySelector("iframe") && !tabs.has("web") && !menuItems().some((i) => i.id === "web"), { version: ver, views: nv, iframes: document.querySelectorAll("iframe").length });
+    // Processes: one row per snapshot process (or the All quiet state), Copy PID copies it.
+    showTab("processes");
+    await wait(100);
+    const procRows = rowsIn("processes");
+    let copiedPid = "";
+    const realCopy = host.copy;
+    host.copy = (text) => {
+      copiedPid = text;
+    };
+    kitHost.copy = host.copy;
+    procRows[0]?.querySelector<HTMLButtonElement>('[data-act="copy-pid"]')?.click();
+    host.copy = realCopy;
+    kitHost.copy = realCopy;
+    const procOk = snapshot.processes.length ? procRows.length === snapshot.processes.length && copiedPid === String(snapshot.processes[0].pid) : !!view("processes").querySelector(".empty-state-cta");
+    await log("native-processes", procOk, { snapshot: snapshot.processes.length, rows: procRows.length, copiedPid, audit: snapshot.system.detachedAuditSessions ?? null });
+    // Workspace lists: rows match the snapshot; Decisions and Rules show the engine gate on
+    // data older than 1.10.0 and their rows on 1.10.0 or newer (feature-detected).
+    showTab("decisions");
+    await wait(100);
+    const decIndex = snapshot.decisionIndex;
+    const decRows = rowsIn("decisions").length;
+    let decOpen: string | null = null;
+    if (decIndex?.length) {
+      rowsIn("decisions")[0].querySelector<HTMLButtonElement>('[data-act="open"]')?.click();
+      const want = `${root}/${String(decIndex[0].path)}`;
+      await until(() => activeTab === want, 3000);
+      decOpen = relPath(activeTab);
+      showTab("decisions");
+    }
+    showTab("rules");
+    await wait(100);
+    const rulesRows = rowsIn("rules").length;
+    const wsLists: Record<string, unknown> = {
+      decisions: decIndex ? decRows === Math.min(300, decIndex.length) && (!decIndex.length || decOpen === String(decIndex[0].path)) : isGate("decisions"),
+      rules: snapshot.rules ? rulesRows === snapshot.rules.length : isGate("rules"),
+    };
+    for (const [id, want] of [["agents", snapshot.agents.length], ["skills", snapshot.skills.length], ["health", Array.isArray(snapshot.health.checks) ? snapshot.health.checks.length : 0]] as [string, number][]) {
+      showTab(id);
+      await wait(100);
+      wsLists[id] = rowsIn(id).length === want ? true : { rows: rowsIn(id).length, want };
+    }
+    showTab("memory");
+    await wait(100);
+    wsLists.memory = view("memory").querySelectorAll(".card").length >= 3;
+    const cmdRows = commandsView.rows();
+    showTab("commands");
+    await wait(100);
+    const runBtns = view("commands").querySelectorAll('[data-act="run"]').length;
+    wsLists.commands = commandsView.loadError ? isGate("commands") || !!view("commands").querySelector(".empty-state-cta") : rowsIn("commands").length === cmdRows.length && runBtns === cmdRows.filter((r) => r.run).length && !cmdRows.some((r) => (r.name === "git-prod" || r.name === "kit-prod") && r.run);
+    await log("native-workspace", Object.values(wsLists).every((v) => v === true), { version: ver, decisionIndex: decIndex?.length ?? null, rules: snapshot.rules?.length ?? null, decOpen, commandsError: commandsView.loadError || null, lists: wsLists });
+    // Colony: the map and the five structures; a build seeded as started two hours ago (one
+    // hour long) settles into the Uplink on the map, and the Uplink can no longer be built.
+    const gameKey = `colony-game-state-v1:${root}`;
+    const savedGame = localStorage.getItem(gameKey);
+    localStorage.setItem(gameKey, JSON.stringify({ v: 1, seq: 1, queue: [{ id: 1, structure: "uplink", startedAt: Date.now() - 2 * 3600_000, durationMs: 3600_000 }], built: [], spent: { logic: 0, compute: 3, rare: 0 } }));
+    colonyView.invalidate();
+    showTab("colony");
+    await wait(150);
+    const cv = view("colony");
+    const game = snapshot.outcomeLedger
+      ? {
+          tiles: cv.querySelectorAll(".colony-map polygon").length,
+          cards: cv.querySelectorAll('[data-act="build"]').length,
+          uplinkGlyph: [...cv.querySelectorAll(".colony-glyph")].some((t) => t.textContent === "U"),
+          uplinkBlocked: cv.querySelector<HTMLButtonElement>('[data-structure="uplink"]')?.disabled === true,
+          settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).length === 1,
+          art: [...cv.querySelectorAll<HTMLImageElement>("img.colony-card-art")].map((i) => i.getAttribute("src") ?? "").every((s) => !s.startsWith("http")),
+        }
+      : { gate: isGate("colony") };
+    if (savedGame === null) localStorage.removeItem(gameKey);
+    else localStorage.setItem(gameKey, savedGame);
+    colonyView.invalidate();
+    const gameOk = "gate" in game ? game.gate === true : game.tiles === 61 && game.cards === 5 && game.uplinkGlyph && game.uplinkBlocked && game.settled && game.art;
+    await log("native-colony", gameOk, { ledger: snapshot.outcomeLedger ? { entries: snapshot.outcomeLedger.entries, totals: snapshot.outcomeLedger.totals } : null, ...game });
+    // Terminals: a shell closed in the drawer bar stays listed (closed, its folder), Reopen
+    // starts a new drawer shell, Focus shows the drawer; the rail item never toggles it.
+    toggleTerminal(false);
+    showTab("terminals");
+    await wait(100);
+    const drawerStaysClosed = shell.classList.contains("no-bottom");
+    toggleTerminal(true);
+    await terminals.create();
+    await wait(400);
+    const lastOpen = ttys.list().find((s) => s.place === "drawer" && s.state === "open");
+    const closeX = [...$("term-tabs").querySelectorAll<HTMLElement>(".tab")].at(-1)?.querySelector<HTMLElement>(".tab-close");
+    closeX?.click();
+    await until(() => ttys.get(lastOpen?.key ?? "")?.state === "closed", 3000);
+    showTab("terminals");
+    await wait(150);
+    const closedRow = view("terminals").querySelector<HTMLElement>(`.kv-row[data-key="${lastOpen?.key}"]`);
+    const closedListed = !!closedRow && closedRow.textContent!.includes("closed") && ttys.get(lastOpen?.key ?? "")?.cwd === root;
+    const shells = terminals.count;
+    closedRow?.querySelector<HTMLButtonElement>('[data-act="reopen"]')?.click();
+    await until(() => terminals.count === shells + 1, 3000);
+    const reopened = terminals.count === shells + 1;
+    toggleTerminal(false);
+    showTab("terminals");
+    await wait(150);
+    view("terminals").querySelector<HTMLButtonElement>('.kv-row[data-key^="drawer:"] [data-act="focus"]')?.click();
+    await wait(150);
+    const focusShows = !shell.classList.contains("no-bottom");
+    const tabRows = ttys.list().filter((s) => s.place === "tab").length;
+    await log("native-terminals", drawerStaysClosed && closedListed && reopened && focusShows, { drawerStaysClosed, closed: lastOpen?.key ?? null, closedListed, reopened, focusShows, rows: ttys.list().length, tabRows });
+    showTab("mission");
     // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
-    // settings.json, applied to the chrome and to the web panel; then back to Bare Metal.
+    // settings.json and applied to the chrome and the native views; then back to Bare Metal.
     const pickSkin = (id: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting="skin"][data-skin="${id}"]`)?.click();
     // On Omarchy with no saved skin the window starts on the system theme: start from Bare Metal.
     const startSkin = skin();
@@ -2698,14 +2765,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await wait(800);
     }
     const bareBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
-    const frameLoad = () => new Promise<boolean>((r) => mcFrame.addEventListener("load", () => r(true), { once: true }));
-    let reloaded = frameLoad();
     pickSkin("legacy");
-    await Promise.race([reloaded, wait(8000)]);
     await wait(800);
     const legacyBg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
     const savedSkin = ((await api.settingsGet()).settings as { ui?: { skin?: string } } | null)?.ui?.skin;
-    const frameSkin = await frameSkinNow();
     showTab("mission");
     await wait(200);
     await shot("legacy");
@@ -2714,27 +2777,23 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await wait(200);
       await shot(`legacy-${id}`);
     }
-    reloaded = frameLoad();
     pickSkin("bare-metal");
-    await Promise.race([reloaded, wait(8000)]);
     await wait(800);
-    const backSkin = await frameSkinNow();
-    // Omarchy only: the system theme from colors.toml on the chrome and the terminal font,
-    // the web panel left on Bare Metal; then back where the smoke started.
+    // Omarchy only: the system theme from colors.toml on the chrome and the terminal font;
+    // then back where the smoke started.
     if (omarchyDetected()) {
       const t = omarchyTheme();
-      const before = mcFrame.src;
       pickSkin("omarchy");
       await wait(800);
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg-primary").trim();
-      const ok = document.documentElement.dataset.skin === "omarchy" && bg === t?.tokens["--bg-primary"] && document.documentElement.dataset.mode === t?.mode && (!t?.font || termFont().startsWith(`"${t.font}"`)) && mcFrame.src === before;
-      await log("skin-omarchy", ok, { theme: t?.name, mode: t?.mode, bg, font: t?.font, frameReloaded: mcFrame.src !== before });
+      const ok = document.documentElement.dataset.skin === "omarchy" && bg === t?.tokens["--bg-primary"] && document.documentElement.dataset.mode === t?.mode && (!t?.font || termFont().startsWith(`"${t.font}"`));
+      await log("skin-omarchy", ok, { theme: t?.name, mode: t?.mode, bg, font: t?.font });
       pickSkin("bare-metal");
       await wait(400);
     } else {
       await log("skin-omarchy", !!settingsPane.querySelector<HTMLElement>('button[data-skin="omarchy"]')?.hidden, { detected: false, skip: "not Omarchy (menu entry hidden)" });
     }
-    await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && frameSkin === "legacy" && backSkin === kitSkinValue("bare-metal") && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin, frameSkin, backSkin, frameSrc: mcFrame.src });
+    await log("skin-switch", bareBg === "#141414" && legacyBg === "#0b0e14" && savedSkin === "legacy" && document.documentElement.dataset.skin === "bare-metal", { bareBg, legacyBg, savedSkin });
     if (startSkin !== "bare-metal") pickSkin(startSkin);
     // Omarchy integration: the plan only (read-only); the smoke never installs anything.
     if (omarchyDetected()) {

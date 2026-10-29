@@ -231,15 +231,13 @@ mod tests {
         body.split('|').map(str::to_string).collect()
     }
 
-    /// The page's own allowlists (Inbox "Ask agent", Mission Control run-plan) may only name
-    /// commands this Rust check lets through; it stays the single gate.
+    /// The page's own allowlist (Inbox "Ask agent") may only name commands this Rust check
+    /// lets through; it stays the single gate.
     #[test]
     fn page_allowlists_within_prompt_slash() {
         let inbox = regex_names(include_str!("../../src/inbox.ts"), "ASKABLE");
-        let mc = regex_names(include_str!("../../src/mcactions.ts"), "RUN_PLAN");
         assert!(inbox.len() >= 5, "{inbox:?}");
-        assert_eq!(mc, ["run-plan"]);
-        for name in inbox.iter().chain(&mc) {
+        for name in &inbox {
             assert!(PROMPT_SLASH.contains(&name.as_str()), "{name} is not in PROMPT_SLASH");
         }
         for name in FIRST_RUN {

@@ -159,9 +159,30 @@ pub fn pty_kill(state: State<'_, AppState>, id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// The shell's current folder (Linux: `/proc/<pid>/cwd`), for the Terminals view; `None`
+/// when the session is gone or the platform has no such link. Read-only: nothing is sent to
+/// the shell, so a running program is never interrupted.
+#[tauri::command]
+pub fn pty_cwd(state: State<'_, AppState>, id: u32) -> Option<String> {
+    let pid = state.ptys.sessions.lock().ok()?.get(&id)?.child.process_id()?;
+    proc_cwd(pid)
+}
+
+fn proc_cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok().map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::take_utf8;
+    use super::{proc_cwd, take_utf8};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_cwd_reads_own_folder() {
+        let me = std::process::id();
+        assert_eq!(proc_cwd(me).map(std::path::PathBuf::from), std::env::current_dir().ok());
+        assert_eq!(proc_cwd(u32::MAX), None);
+    }
 
     #[test]
     fn keeps_incomplete_multibyte_tail() {

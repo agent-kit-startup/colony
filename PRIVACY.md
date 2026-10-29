@@ -21,7 +21,7 @@ Colony starts other programs on your machine, and those programs make their own 
 
 - The Agent Kit engine and each vendor's agent CLI (`claude`, `codex`, Cursor `agent`) talk to their vendor. Colony passes them no credentials and reads none; they use the login or API key you set up for them.
 - `git` and `gh` (Git, Pull requests and CI/CD views, host requests you approve) talk to your git remote and to GitHub, exactly as they do in your own terminal.
-- The Mission Control web panel is the engine's local dashboard server on `127.0.0.1`.
+- The native kit views read the engine's local dashboard server on `127.0.0.1` (its data API only; Colony shows no web page from it).
 
 ## Data that stays on your machine
 

@@ -213,87 +213,6 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
     state.startup.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
-/// Mission Control action seam (embeddable contract): defined only inside the Mission
-/// Control iframe on 127.0.0.1, before the panel script runs. It also selects the panel's
-/// skin that matches Colony's (passed in the frame URL). Every record (always
-/// `kind: "copy"`) is first offered to the Colony window over a MessageChannel; the window
-/// runs a real host action only for an allowlisted record (open a repo file, start a
-/// plan run after a native confirmation; src/mcactions.ts) and answers `handled`.
-/// Anything else, a refusal or no answer within 1.5 s falls back to the clipboard copy.
-const MC_ACTION_HOOK: &str = r#"
-(function () {
-  try {
-    if (window === window.top || location.hostname !== '127.0.0.1') return;
-    // One look across Colony and Mission Control: Colony loads the panel with
-    // `?colony-skin=<kit skin value>` (src/skin.ts kitSkinValue) and the panel restores its
-    // skin from this key before first paint. Unknown values are ignored.
-    try {
-      var want = new URLSearchParams(location.search).get('colony-skin');
-      if (want === 'cursor' || want === 'legacy' || want === 'bare-metal') localStorage.setItem('agent-kit:dashboard-skin', want);
-    } catch (e) {}
-    var copy = function (action) {
-      var done = function () { return { ok: true, message: (action.toastMessage || 'Copied') + ' (Colony)' }; };
-      try {
-        return navigator.clipboard.writeText(action.text).then(done, function () {
-          return { ok: true, message: 'Sent to Colony (clipboard unavailable in the frame)' };
-        });
-      } catch (e) {
-        return Promise.resolve({ ok: true, message: 'Sent to Colony' });
-      }
-    };
-    var askHost = function (record) {
-      return new Promise(function (resolve) {
-        var settled = false;
-        var finish = function (v) { if (!settled) { settled = true; resolve(v); } };
-        var timer = setTimeout(function () { finish(null); }, 1500);
-        try {
-          var ch = new MessageChannel();
-          ch.port1.onmessage = function (ev) { clearTimeout(timer); finish(ev.data || null); };
-          window.top.postMessage({ colony: 'mc-action', action: record }, '*', [ch.port2]);
-        } catch (e) { clearTimeout(timer); finish(null); }
-      });
-    };
-    var hook = Object.freeze({
-      perform: function (action) {
-        if (!action || action.kind !== 'copy' || typeof action.text !== 'string') {
-          return Promise.reject(new Error('Colony: action not allowed'));
-        }
-        var record = { kind: 'copy', text: action.text, subject: String(action.subject || ''), destination: String(action.destination || '') };
-        return askHost(record).then(function (reply) {
-          if (reply && reply.handled === true) {
-            return { ok: reply.ok !== false, message: String(reply.message || 'Done in Colony') };
-          }
-          return copy(action);
-        });
-      }
-    });
-    Object.defineProperty(window, '__MISSION_CONTROL_ACTIONS__', { value: hook, writable: false, configurable: false });
-    /*COLONY_SMOKE*/
-  } catch (e) {}
-})();
-"#;
-
-/// COLONY_SMOKE only: let the Colony window call `perform()` inside the frame, so the
-/// smoke covers the frame -> host -> frame round trip without clicking in the page.
-const MC_SMOKE_BRIDGE: &str = r#"
-    window.addEventListener('message', function (ev) {
-      if (ev.source === window.top && ev.data && ev.data.colony === 'mc-smoke-skin') {
-        window.top.postMessage({ colony: 'mc-smoke-skin-result', skin: document.documentElement.getAttribute('data-dashboard-skin') }, '*');
-        return;
-      }
-      if (ev.source !== window.top || !ev.data || ev.data.colony !== 'mc-smoke-perform') return;
-      var id = ev.data.id;
-      hook.perform(ev.data.action).then(
-        function (r) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, result: r }, '*'); },
-        function (e) { window.top.postMessage({ colony: 'mc-smoke-result', id: id, error: String(e && e.message || e) }, '*'); }
-      );
-    });
-"#;
-
-fn mc_action_hook(smoke: bool) -> String {
-    MC_ACTION_HOOK.replace("/*COLONY_SMOKE*/", if smoke { MC_SMOKE_BRIDGE } else { "" })
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `colony request ...`: the host-action CLI (hostreq.rs), no GUI.
@@ -333,7 +252,6 @@ pub fn run() {
         tiling_wm: tiling_wm(),
     };
 
-    let hook = mc_action_hook(startup.smoke.is_some());
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
@@ -391,6 +309,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            pty::pty_cwd,
             agent::agent_start,
             agent::agent_backends,
             agent::agent_reply,
@@ -479,7 +398,6 @@ pub fn run() {
                 // `navigator.clipboard.readText()` and `execCommand('paste')` are refused, so
                 // the terminal's Ctrl+Shift+V and Monaco's menu Paste paste nothing.
                 .enable_clipboard_access()
-                .initialization_script_for_all_frames(&hook)
                 .build()?;
             Ok(())
         })
@@ -509,6 +427,21 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// Colony embeds no web page (plan colony-sidebar-native-kit s3): every kit item is a
+    /// native view, so the window allows no frame at all and no page defines a frame hook.
+    #[test]
+    fn no_frames_no_web_panel() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
+        assert!(csp.contains("frame-src 'none'"), "{csp}");
+        assert!(!csp.contains("127.0.0.1"), "{csp}");
+        let main = include_str!("../../src/main.ts");
+        for gone in ["h(\"iframe\"", "__MISSION_CONTROL_ACTIONS__", "openWebPanel", "mc-action"] {
+            assert!(!main.contains(gone), "src/main.ts still has {gone}");
+        }
+        assert!(!include_str!("../../src/menu.json").contains("\"web\""));
+    }
+
     #[test]
     fn scrubs_parent_session_markers_only() {
         std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1");

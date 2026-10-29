@@ -40,8 +40,7 @@ pub struct WorkspaceSettings {
 }
 
 /// Look of the whole window. `skin`: `bare-metal` (default), `legacy`, or `omarchy` (the
-/// live Omarchy theme, the default on Omarchy when unset); Colony also selects the
-/// matching skin of the Mission Control web panel.
+/// live Omarchy theme, the default on Omarchy when unset).
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UiSettings {

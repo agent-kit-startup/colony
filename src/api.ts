@@ -165,6 +165,8 @@ export const api = {
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
+  /** The shell's current folder (Linux /proc), null when the session is gone. */
+  ptyCwd: (id: number) => invoke<string | null>("pty_cwd", { id }),
   agentStart: (o: { backend: string; maxTicks: number; cwd?: string; onLimit?: string; model?: string; command?: RunCommand; note?: string; onEvent: Channel<AgentEvent> }) =>
     invoke<AgentStarted>("agent_start", {
       backend: o.backend,

@@ -203,7 +203,6 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tab-add { border: 0; background: transparent; padding: 0 12px; font-size: 16px; color: var(--text-secondary); }
 #views { flex: 1; position: relative; min-height: 0; }
 .view { position: absolute; inset: 0; }
-#mc { width: 100%; height: 100%; border: 0; background: var(--bg-primary); }
 #welcome { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg-primary); }
 #welcome h1 { display: flex; align-items: center; gap: 12px; margin: 0; font-weight: 600; }
 #recents { display: flex; flex-direction: column; gap: 4px; align-items: stretch; min-width: 360px; margin-top: 12px; }
@@ -765,7 +764,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-gate.closed .gate-title { color: var(--text-secondary); }
 .tr-review { color: var(--text-secondary); }
 
-/* ---- center terminals, web panel, menu ---------------------------------------------- */
+/* ---- center terminals, menu ---------------------------------------------- */
 .term-center { background: var(--bg-primary); display: flex; flex-direction: column; }
 .term-center .term-pane { position: absolute; inset: 6px 4px 4px 10px; }
 .term-center .term-wrap { position: relative; flex: 1; min-height: 0; }
@@ -795,7 +794,6 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .row.held { color: var(--yellow); }
 .q-row.held { border-color: var(--yellow); }
 .q-row.held .now-step-marker { border-color: var(--yellow); background: var(--yellow-bg); color: var(--yellow); }
-.web-view #mc { width: 100%; height: 100%; border: 0; background: var(--bg-primary); }
 .menu { position: fixed; z-index: 60; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--mc-radius); box-shadow: var(--mc-shadow-popover); display: flex; flex-direction: column; padding: 4px; min-width: 240px; }
 .menu button { text-align: left; border: 0; background: transparent; padding: 6px 10px; font-size: var(--mc-chrome-label-size); border-radius: var(--mc-radius-chrome); }
 .menu button:hover { background: var(--bg-card-hover); }
@@ -836,3 +834,28 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .settings-pane button:hover { border-color: var(--border); }
 .settings-pane button.on { border-color: var(--border-active); color: var(--text-primary); }
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
+
+/* Native kit views (src/kitviews.ts): list rows, and the Colony game. Active filters and
+   rows change only their 1px border colour (no bar, no inset, no tint). */
+.kv-row { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-sm) 0; border-top: 1px solid var(--border); min-width: 0; }
+.card-header + .kv-row { border-top: 0; }
+.kv-row .row { padding: 0; }
+.kv-row .now-meta { margin-top: 2px; }
+button.kv-filter.on { background: transparent; border-color: var(--border-active); }
+.colony-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: var(--mc-space-xl); align-items: start; }
+@media (max-width: 1100px) { .colony-layout { grid-template-columns: minmax(0, 1fr); } }
+.colony-map { display: block; width: 100%; max-width: 420px; margin: 0 auto; height: auto; }
+.colony-tile { stroke: var(--bg-primary); stroke-width: 1; }
+.colony-tile[data-tile="fog"] { fill: var(--bg-secondary); }
+.colony-tile[data-tile="barren"] { fill: #4b5563; }
+.colony-tile[data-tile="green"] { fill: #3f7d5a; }
+.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: none; }
+.colony-side { display: flex; flex-direction: column; gap: var(--mc-space-lg); }
+.colony-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--mc-space-md); }
+.colony-resource { border: 1px solid var(--border); border-radius: var(--mc-radius); padding: var(--mc-space-md); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.colony-resource-value { font: 600 20px var(--mc-font-mono); color: var(--text-primary); }
+.colony-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--mc-space-lg); }
+.colony-card { gap: 6px; }
+.colony-card-art { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--mc-radius-chrome); background: var(--bg-secondary); }
+.colony-card button { align-self: flex-start; }
+.colony-card button:disabled { cursor: not-allowed; opacity: 0.6; }

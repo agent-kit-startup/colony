@@ -154,6 +154,33 @@ class SnapshotStore {
   get processes(): J[] {
     return arr(this.data?.processes);
   }
+  /** The snapshot's data model version ("" before the first snapshot). */
+  get version(): string {
+    return str(this.data?.dashboardDataVersion);
+  }
+  get memory(): J {
+    return obj(this.data?.memory);
+  }
+  /** `.cursor/rules` rows (1.10.0); null when the snapshot has no such field (older engine). */
+  get rules(): J[] | null {
+    return Array.isArray(this.data?.rules) ? this.data.rules : null;
+  }
+  /** `memory.decisionIndex` (1.10.0); null when the snapshot has no such field (older engine). */
+  get decisionIndex(): J[] | null {
+    const d = this.memory.decisionIndex;
+    return Array.isArray(d) ? d : null;
+  }
+  get agents(): J[] {
+    return arr(this.data?.agents);
+  }
+  get skills(): J[] {
+    return arr(this.data?.skills);
+  }
+  /** `outcomeLedger` (1.9.0); null when the snapshot has no such field (older engine). */
+  get outcomeLedger(): J | null {
+    const l = this.data?.outcomeLedger;
+    return l && typeof l === "object" && !Array.isArray(l) ? l : null;
+  }
 
   /** The plan `agent-kit run-plan` will run: the HANDOFF plan, per the snapshot. */
   get activePlanFile(): string {

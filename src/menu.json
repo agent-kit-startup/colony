@@ -38,7 +38,6 @@
         { "id": "quick-open", "label": "Go to file…" },
         { "id": "commands", "label": "Commands…" },
         { "separator": true },
-        { "id": "web", "label": "Mission Control (web panel)" },
         { "id": "refresh", "label": "Reload Mission Control data" }
       ]
     },
