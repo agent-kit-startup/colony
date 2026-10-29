@@ -195,15 +195,15 @@ const RAIL: RailItem[] = [
   { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
   { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
   { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+3)", views: ["inbox"] },
-  { id: "chats", label: "Chats", icon: "agents", tip: "Chats: the saved agent chats of this folder, resumable (Ctrl+4)", views: ["chats"] },
-  { id: "flight", label: "Flight Log", icon: "field-report", tip: "Flight Log: residuals, warnings, tick logs (Ctrl+5)", views: ["flight"] },
+  { id: "chats", label: "Chats", icon: "chats", tip: "Chats: the saved agent chats of this folder, resumable (Ctrl+4)", views: ["chats"] },
+  { id: "flight", label: "Flight Log", icon: "flight-log", tip: "Flight Log: residuals, warnings, tick logs (Ctrl+5)", views: ["flight"] },
   { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+6)", views: ["review"] },
-  { id: "ship", label: "Ship", icon: "git", tip: "Ship: Git (host requests, pull requests, branch flow, commit, push) and CI/CD (Ctrl+7)", views: ["git", "cicd"] },
+  { id: "ship", label: "Ship", icon: "ship", tip: "Ship: Git (host requests, pull requests, branch flow, commit, push) and CI/CD (Ctrl+7)", views: ["git", "cicd"] },
   { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
-  { id: "workspace", label: "Workspace", icon: "folder", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, inner: true, home: "plans" },
-  { id: "colony", label: "Colony", icon: "overview", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, inner: true, home: "plans" },
+  { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
 ];
 /** Ctrl+1..9: the first nine rail items. The rail tooltips name these keys (cargo test
  *  terminal_drawer checks both); the terminal drawer toggles with Ctrl+` instead. */

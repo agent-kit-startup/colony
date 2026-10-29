@@ -31,7 +31,7 @@ button.has-icon, button.status-bar-btn, button.primary { min-height: 26px; }
 button:disabled { opacity: 0.5; cursor: default; }
 /* A button whose action is running (ui.ts busy): readable, not greyed out like a refusal. */
 button.is-busy:disabled { opacity: 1; cursor: progress; }
-.busy-spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
+.busy-spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: mc-spin 0.8s linear infinite; }
 button.is-busy .btn-icon { animation: mc-spin 0.8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .busy-spin, button.is-busy .btn-icon { animation: none; } }
 input, select, textarea { font: inherit; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 4px 8px; }
@@ -119,7 +119,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #top-actions > .folded { display: none; }
 #btn-top-more { display: inline-flex; align-items: center; justify-content: center; }
 #btn-top-more[hidden] { display: none; }
-#btn-top-more svg { width: 14px; height: 14px; }
+#btn-top-more svg { width: 16px; height: 16px; }
 #btn-top-more[aria-expanded="true"] { border-color: var(--border-active); }
 #btn-plans { display: inline-flex; align-items: center; gap: 4px; }
 #btn-plans svg { width: 12px; height: 12px; }
@@ -142,7 +142,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #top-menus button:hover, #win-controls button:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
 #win-controls button { display: inline-flex; align-items: center; }
 #win-controls button.win-close:hover { border-color: var(--red); color: var(--red); }
-#win-controls svg { width: 14px; height: 14px; }
+#win-controls svg { width: 16px; height: 16px; }
 
 /* Rail: every kit item at first level, no More menu (ADR 2026-10-24 amend 2026-10-28).
    Labels under the icons by default, icons only on request (Workspace → Config → Rail);
@@ -169,7 +169,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #tabs.tabbar-empty { display: none; }
 .rail-item .lbl { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
 .rail-icon-wrap { position: relative; display: inline-flex; }
-.rail-icon { width: 18px; height: 18px; }
+.rail-icon { width: 16px; height: 16px; }
 .rail-item.active .rail-icon { color: var(--blue); }
 .rail-icon-wrap .badge { position: absolute; top: -6px; left: 12px; font-size: 10px; line-height: 14px; min-width: 14px; padding: 0 4px; }
 .rail-icon-wrap .badge + .badge { left: auto; right: 12px; top: 10px; }
@@ -177,23 +177,23 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .view-switch { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 6px; }
 .view-switch-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--mc-radius-chrome); background: transparent; border-color: transparent; }
 .view-switch-btn.active { background: var(--bg-card); border-color: var(--border-active); color: var(--text-primary); }
-.tab-svg { width: 14px; height: 14px; flex: none; }
+.tab-svg { width: 16px; height: 16px; flex: none; }
 button.toggle.on { border-color: var(--blue); color: #fff; background: var(--blue-bg); }
 button.icon { padding: 0 6px; background: transparent; border-color: transparent; }
 
 #side { grid-area: side; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .side-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); color: var(--text-secondary); }
 #tree { overflow: auto; flex: 1; padding-bottom: 12px; }
-.tree-row { display: flex; gap: 4px; align-items: center; padding: 2px 8px; cursor: pointer; white-space: nowrap; user-select: none; min-width: 0; }
+.tree-row { display: flex; gap: 4px; align-items: center; padding: 1px 7px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; user-select: none; min-width: 0; }
 .tree-row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tree-row:hover { background: var(--bg-card-hover); }
-.tree-row.active { background: var(--blue-bg); }
+.tree-row.active { border-color: var(--blue); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
 .tree-row.dir .name { color: var(--text-primary); }
 
 #center { grid-area: center; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .tabbar { display: flex; align-items: stretch; gap: 1px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); overflow-x: auto; min-height: 32px; flex: none; }
-.tabbar .tab { border: 0; border-radius: 0; background: transparent; color: var(--text-secondary); padding: 6px 12px; display: inline-flex; gap: 8px; align-items: center; white-space: nowrap; border-bottom: 2px solid transparent; }
+.tabbar .tab { border: 0; border-radius: 0; background: transparent; color: var(--text-secondary); padding: 6px 12px; display: inline-flex; gap: 8px; align-items: center; white-space: nowrap; border-bottom: 1px solid transparent; }
 .tabbar .tab.active { color: var(--text-primary); background: var(--bg-primary); border-bottom-color: var(--blue); }
 .tabbar .tab.home { font-weight: 600; }
 .tabbar .tab.dirty { font-style: italic; }
@@ -265,7 +265,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
    from it while it is closed. */
 .term-toggle { display: inline-flex; align-items: center; padding: 2px 5px; margin-right: 6px; background: transparent; border-color: transparent; color: var(--text-muted); }
 .term-toggle:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
-.term-toggle svg { width: 14px; height: 14px; }
+.term-toggle svg { width: 16px; height: 16px; }
 #shell[data-dock="top"] .term-toggle svg { transform: rotate(180deg); }
 #shell[data-dock="side"] .term-toggle svg { transform: rotate(-90deg); }
 #shell.no-bottom .term-toggle svg { transform: rotate(180deg); }
@@ -292,7 +292,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .dock-group button { display: inline-flex; align-items: center; padding: 2px 5px; background: transparent; border-color: transparent; color: var(--text-muted); }
 .dock-group button:hover { background: transparent; border-color: var(--border-active); color: var(--text-primary); }
 .dock-group button.on { border-color: var(--border-active); color: var(--text-primary); }
-.dock-group svg { width: 14px; height: 14px; }
+.dock-group svg { width: 16px; height: 16px; }
 #terms { flex: 1; position: relative; min-height: 0; }
 .term-pane { position: absolute; inset: 4px 0 0 8px; }
 
@@ -377,7 +377,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .tab-nav button:disabled { background: transparent; border-color: transparent; color: var(--text-muted); }
 .tabbar .tab.run-live .tab-icon { color: var(--green); }
 .tabbar .tab.run-gate .tab-icon { color: var(--yellow); }
-.tabbar .tab.run-gate { box-shadow: inset 0 -2px 0 var(--yellow); }
+.tabbar .tab.run-gate { border-bottom-color: var(--yellow); }
 
 /* ---- cockpit: views ----------------------------------------------------------------- */
 /* Components of the kit's web Mission Control (dashboard.html: .card, .card-header,
@@ -475,7 +475,7 @@ button.empty-state-btn:active { transform: scale(0.98); }
 .now-stepper { list-style: none; margin: var(--mc-space-xs) 0 0; padding: 0; }
 .now-step { position: relative; display: flex; gap: 10px; padding-bottom: var(--mc-space-lg); }
 .now-step:last-child { padding-bottom: 0; }
-.now-step:not(:last-child)::before { content: ""; position: absolute; left: 9px; top: 20px; bottom: 0; width: 2px; background: var(--border); }
+.now-step:not(:last-child)::before { content: ""; position: absolute; left: 10px; top: 20px; bottom: 0; width: 1px; background: var(--border); }
 .now-step-done:not(:last-child)::before { background: var(--green); }
 .now-step-marker { position: relative; z-index: 1; flex: none; width: var(--mc-step-marker-size); height: var(--mc-step-marker-size); border-radius: 50%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-muted); font-size: 10px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .now-step-done .now-step-marker { border-color: var(--green); background: var(--green-bg); color: var(--green); }
@@ -567,8 +567,8 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .first-run .fr-facts { display: flex; flex-direction: column; gap: 2px; font-size: var(--mc-chrome-subtitle-size); color: var(--text-secondary); overflow-wrap: anywhere; }
 .first-run .fr-next { font-size: var(--mc-chrome-subtitle-size); color: var(--text-primary); overflow-wrap: anywhere; }
 .fr-missions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.fr-mission { display: flex; align-items: center; gap: var(--mc-space-md); min-width: 0; padding: 5px 6px; border-radius: var(--mc-radius-chrome); }
-.fr-mission.current { background: var(--blue-bg); }
+.fr-mission { display: flex; align-items: center; gap: var(--mc-space-md); min-width: 0; padding: 4px 5px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); }
+.fr-mission.current { border-color: var(--blue); }
 .fr-mission.done .now-step-marker { border-color: var(--green); background: var(--green-bg); color: var(--green); }
 .fr-mission.current .now-step-marker { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
 .fr-mission-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
