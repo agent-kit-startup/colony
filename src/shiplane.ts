@@ -1,6 +1,6 @@
 // Ship lane tile of the Git e CI/CD view (ADR 2026-10-23 git-cicd-tab-read-in-mc-act-in-colony,
 // kit agent-kit-dev .cursor/memory/decisions/). Read side: the snapshot's `shipLane` field
-// (Mission Control data 1.8.0, Agent Kit 6.9.0 and later), the same rows the web panel's
+// (Mission Control data 1.8.0, Agent Kit 6.9.0 and later), the same rows the kit web page's
 // Ship lane card shows. Act side: a row gets a Colony button only when its action is one of
 // the host allowlist kinds (src-tauri/src/hostreq.rs KINDS), and the button only opens an
 // approval card under Requests; nothing runs before Approve, and a merge into a production

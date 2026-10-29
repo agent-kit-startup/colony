@@ -1,7 +1,9 @@
 // The terminal drawer: the user's shells (or an editor argv) in the opened folder. The
 // interactive vendor CLIs and the queue runners are centre tabs and are not listed here.
-import { errText, h } from "./api";
+// Every shell is also a row of the Terminals view (./ttys.ts), closed ones included.
+import { api, errText, h } from "./api";
 import { TermView } from "./termview";
+import { ttys } from "./ttys";
 
 interface Tab {
   n: number;
@@ -18,6 +20,8 @@ export class Terminals {
     private tabBar: HTMLElement,
     private host: HTMLElement,
     private onError: (msg: string) => void,
+    /** The opened folder (where a new shell starts), for the Terminals view's rows. */
+    private root: () => string = () => "",
   ) {
     new ResizeObserver(() => this.fitActive()).observe(host);
   }
@@ -39,7 +43,13 @@ export class Terminals {
     const t: Tab = { n, view, tab };
     this.tabs.push(t);
     this.show(t);
-    view.onExit = () => tab.classList.add("exited");
+    const key = `drawer:${n}`;
+    ttys.add({ key, place: "drawer", label: label ?? `bash ${n}`, argv: command ?? null, root: this.root(), startedAt: Date.now() });
+    view.onExit = (code) => {
+      tab.classList.add("exited");
+      ttys.exited(key, code);
+    };
+    view.term.onTitleChange((title) => ttys.update(key, { title: title.slice(0, 200) }));
     tab.addEventListener("click", (ev) => {
       if (ev.target === close) this.close(t);
       else this.show(t);
@@ -48,9 +58,19 @@ export class Terminals {
       await view.spawn(command);
     } catch (e) {
       this.onError(`Terminal: ${errText(e)}`);
+      ttys.exited(key, null);
       return;
     }
+    ttys.update(key, { ptyId: view.id });
     this.fitActive();
+  }
+
+  /** Show the drawer shell numbered `n` (the Terminals view's Focus); false if it is gone. */
+  focusShell(n: number): boolean {
+    const t = this.tabs.find((x) => x.n === n);
+    if (!t) return false;
+    this.show(t);
+    return true;
   }
 
   private show(t: Tab) {
@@ -91,7 +111,11 @@ export class Terminals {
   }
 
   close(t: Tab) {
-    t.view.dispose();
+    const key = `drawer:${t.n}`;
+    // The last folder the shell was in is read before the process goes; the row then closes
+    // and the PTY is killed (the pane is hidden at once).
+    const cwd = t.view.exited || t.view.id < 0 ? Promise.resolve(null) : api.ptyCwd(t.view.id).catch(() => null);
+    t.view.pane.style.display = "none";
     t.tab.remove();
     this.tabs = this.tabs.filter((x) => x !== t);
     if (this.active === t) {
@@ -99,6 +123,11 @@ export class Terminals {
       const next = this.tabs[this.tabs.length - 1];
       if (next) this.show(next);
     }
+    void cwd.then((c) => {
+      if (c) ttys.update(key, { cwd: c });
+      ttys.closed(key);
+      t.view.dispose();
+    });
   }
 
   closeAll() {

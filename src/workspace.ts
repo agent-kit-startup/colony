@@ -4,7 +4,6 @@
 // Forward, `view:<section>` and the palette reach it like any other view.
 import { h } from "./api";
 import { icon, type IconKind } from "./icons";
-import { btn } from "./ui";
 
 export interface WorkspaceSection { id: string; label: string; icon: IconKind; tip: string }
 
@@ -41,27 +40,4 @@ export function workspaceSection(id: string, order: string[], body: HTMLElement,
     }),
   );
   return h("div", { class: "ws-view" }, nav, h("div", { class: "ws-body" }, body));
-}
-
-/**
- * A rail item or section whose native view is not built yet (plan colony-sidebar-native-kit,
- * to-do s3). It says so and offers the way that works until then: the kit's web panel at the
- * matching section, or another action.
- */
-export function pendingView(title: string, text: string, actions: { label: string; run: () => void; title?: string }[] = []): HTMLElement {
-  return h(
-    "div",
-    { class: "cv ws-pending" },
-    h(
-      "div",
-      { class: "cv-body" },
-      h(
-        "div",
-        { class: "empty-state-cta" },
-        h("div", { class: "empty-state-headline" }, title),
-        h("p", { class: "empty-state-support" }, text),
-        h("div", { class: "empty-state-actions" }, ...actions.map((a) => btn(a.label, a.run, a.title ? { title: a.title } : {}))),
-      ),
-    ),
-  );
 }

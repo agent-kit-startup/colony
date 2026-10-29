@@ -47,7 +47,7 @@ export interface CockpitHost {
 }
 
 /** Base: a scrollable center view that re-renders on snapshot or run changes while shown. */
-abstract class View {
+export abstract class View {
   readonly el: HTMLElement;
   protected body = h("div", { class: "cv-body" });
   private dirty = true;

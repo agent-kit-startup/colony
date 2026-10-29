@@ -1,5 +1,5 @@
 // Back-forward history of the main pane (pure: no DOM, no imports). An entry is a tab id
-// (a rail view, a run, a terminal, a file, the web panel); the tab strip itself holds
+// (a rail view, a run, a terminal, a file); the tab strip itself holds
 // documents only, so Back / Forward (Alt+Left / Alt+Right) are how the user returns to a
 // view. Browser semantics: a new visit drops the forward entries, a closed tab leaves the
 // history, and moves skip ids whose tab is gone.

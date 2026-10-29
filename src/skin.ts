@@ -1,6 +1,5 @@
 // Window skins. One design token set (src/tokens.css, named as in the kit dashboard) with
-// palettes for the whole window, Colony chrome, native views and the Mission Control
-// web panel alike:
+// palettes for the whole window, Colony chrome and native views alike:
 // "Bare Metal" (default, neutral greys), "Legacy" (the kit panel's original slate
 // palette) and, on Omarchy only, "Omarchy": the live system theme and monospace font
 // (src-tauri/src/omarchy.rs maps colors.toml onto the same tokens and reports every
@@ -25,20 +24,6 @@ export function omarchyDetected(): boolean {
 }
 export function omarchyTheme(): OmarchyTheme | null {
   return omarchy;
-}
-
-/**
- * The kit panel stores its skin in localStorage `agent-kit:dashboard-skin` as 'bare-metal'
- * or 'legacy'. Kits before the rename (agent-kit #1260) spelled Bare Metal 'cursor'; newer
- * kits still read 'cursor' as an alias, and older ones fall back to their default (Bare
- * Metal) on 'bare-metal' (parseSkin accepts both spellings).
- */
-const KIT_SPELLS_BARE_METAL = true;
-
-export function kitSkinValue(s: Skin): "cursor" | "bare-metal" | "legacy" {
-  if (s === "legacy") return "legacy";
-  // The kit panel has no Omarchy skin: it stays on its neutral Bare Metal.
-  return KIT_SPELLS_BARE_METAL ? "bare-metal" : "cursor";
 }
 
 /** A saved skin; unset or unknown is the platform default (Omarchy there, else Bare Metal). */

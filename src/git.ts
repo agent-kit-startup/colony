@@ -196,7 +196,7 @@ export class GitPanel {
 }
 
 /**
- * Git e CI/CD center tab, one bento grid like the web panel's section of the same name: the
+ * Git e CI/CD center tab, one bento grid like the kit web page's section of the same name: the
  * Ship lane tile leads (snapshot `shipLane`, with the host-allowlist actions), then Requests,
  * Pull requests, the snapshot's branch flow and graph, the working tree and the production
  * promotion card. Colony never runs /git-prod or any prod promotion: the card only reveals
