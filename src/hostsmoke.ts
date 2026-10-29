@@ -56,7 +56,8 @@ export async function hostSmoke(c: SmokeCtx) {
     c.showTab("git");
     await file(`merge-pr 7 --reason "smoke: checks are green"`, "hostreq-merge7.out");
     const m7 = await ready("merge-pr", 7);
-    const badge = document.querySelector('.tab[data-tab="git"] .badge')?.textContent;
+    // The Ship rail item carries the Git view's badge.
+    const badge = document.querySelector('.tab[data-tab="ship"] .badge')?.textContent;
     const text = m7?.textContent ?? "";
     const runningShown = !!m7?.querySelector(".chip-running")?.getClientRects().length;
     await c.log("host-request-card", !!m7 && !runningShown && m7.dataset.production === "no" && text.includes("Smoke PR seven") && text.includes("feat/base ← feat/seven") && text.includes("smoke: checks are green") && badge === "1", { badge, runningShown, production: m7?.dataset.production, text: text.slice(0, 300) });

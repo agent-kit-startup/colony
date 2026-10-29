@@ -144,17 +144,24 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls button.win-close:hover { border-color: var(--red); color: var(--red); }
 #win-controls svg { width: 14px; height: 14px; }
 
-/* Rail: the primary views and More at the bottom. Labels under the icons by default,
-   icons only on request (More → Rail); every item keeps its tooltip and accessible name. */
-#rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
+/* Rail: every kit item at first level, no More menu (ADR 2026-10-24 amend 2026-10-28).
+   Labels under the icons by default, icons only on request (Workspace → Config → Rail);
+   every item keeps its tooltip and accessible name. At any window height the rail scrolls
+   (wheel, touch, keys): an edge with items out of view fades, and its first pixel stays a
+   1px line in the border colour. Items shrink with the window down to a legible minimum. */
+#rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); border-top: 1px solid transparent; border-bottom: 1px solid transparent; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+#rail::-webkit-scrollbar { display: none; }
+#rail.fade-top { border-top-color: var(--border); -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); }
+#rail.fade-bottom { border-bottom-color: var(--border); -webkit-mask-image: linear-gradient(to top, #000 0, #000 1px, transparent 1px, #000 18px); mask-image: linear-gradient(to top, #000 0, #000 1px, transparent 1px, #000 18px); }
+#rail.fade-top.fade-bottom { -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent calc(100% - 1px), #000 calc(100% - 1px)); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent calc(100% - 1px), #000 calc(100% - 1px)); }
 #shell[data-rail="right"] #rail { border-right: 0; border-left: 1px solid var(--border); }
 #shell.rail-icons .rail-item .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-#shell.rail-icons .rail-item { padding: 9px 2px; }
+#shell.rail-icons .rail-item { padding: clamp(5px, 1.2vh, 9px) 2px; }
 /* The 40px item: the count badges sit closer to the icon so they stay inside it. */
 #shell.rail-icons .rail-icon-wrap .badge { left: 9px; }
 #shell.rail-icons .rail-icon-wrap .badge + .badge { left: auto; right: 9px; }
 #shell.no-folder #rail { visibility: hidden; }
-.rail-item { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
+.rail-item { display: flex; flex: none; flex-direction: column; align-items: center; gap: clamp(1px, 0.35vh, 3px); padding: clamp(3px, 0.8vh, 7px) 2px clamp(2px, 0.7vh, 6px); border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); font-size: var(--mc-chrome-meta-size); line-height: 1.2; position: relative; }
 .rail-item:hover { background: var(--bg-card-hover); color: var(--text-primary); border-color: transparent; }
 .rail-item.active { color: var(--text-primary); border-color: var(--border-active); }
 .rail-item.on { color: var(--text-primary); }
@@ -166,7 +173,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active .rail-icon { color: var(--blue); }
 .rail-icon-wrap .badge { position: absolute; top: -6px; left: 12px; font-size: 10px; line-height: 14px; min-width: 14px; padding: 0 4px; }
 .rail-icon-wrap .badge + .badge { left: auto; right: 12px; top: 10px; }
-/* A rail group with more than one view (Pipelines): its switch heads the tab strip. */
+/* A rail group with more than one view (Ship): its switch heads the tab strip. */
 .view-switch { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 6px; }
 .view-switch-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--mc-radius-chrome); background: transparent; border-color: transparent; }
 .view-switch-btn.active { background: var(--bg-card); border-color: var(--border-active); color: var(--text-primary); }
@@ -812,3 +819,20 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .omarchy-steps { margin: 4px 0 8px; padding-left: 20px; font-size: 12px; }
 .omarchy-steps li { margin: 2px 0; overflow-wrap: anywhere; }
 .omarchy-steps code { font-family: var(--mc-font-mono); }
+
+/* Workspace (ADR 2026-10-24 amend 2026-10-28 point 5): its sections switch with an inner
+   navigation at the head of the view, not in the tab strip. The current section changes only
+   its 1px border colour. */
+.ws-view { display: flex; flex-direction: column; background: var(--bg-primary); }
+.ws-nav { display: flex; flex: none; flex-wrap: wrap; gap: 2px; padding: 6px var(--mc-space-xl); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.ws-nav-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); background: transparent; color: var(--text-muted); }
+.ws-nav-btn:hover { border-color: var(--border); color: var(--text-primary); }
+.ws-nav-btn.active { border-color: var(--border-active); color: var(--text-primary); }
+.ws-body { flex: 1; min-height: 0; position: relative; overflow: auto; }
+.ws-body > .cv { position: absolute; inset: 0; }
+/* Workspace → Config: Colony's settings, the rows the rail's More menu held. */
+.settings-pane { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-xl); max-width: 560px; }
+.settings-pane button { text-align: left; border: 1px solid transparent; background: transparent; padding: 6px 10px; font-size: var(--mc-chrome-label-size); border-radius: var(--mc-radius-chrome); }
+.settings-pane button:hover { border-color: var(--border); }
+.settings-pane button.on { border-color: var(--border-active); color: var(--text-primary); }
+.settings-pane .menu-label { padding-top: var(--mc-space-md); }

@@ -702,14 +702,14 @@ export class MissionView extends View {
   }
 }
 
-// ---- Activity ------------------------------------------------------------------------
-/** Saved chats, the kit's recent activity and the health checks: out of the Mission fold. */
-export class ActivityView extends View {
-  /** The Chats card lists every chat of the read, not only the newest few. */
+// ---- Chats ---------------------------------------------------------------------------
+/** The folder's saved agent chats (the Chats rail item): every chat of the read, resumable. */
+export class ChatsView extends View {
+  /** The list shows the newest few until the operator asks for all of them. */
   private allChats = false;
 
   constructor(host: CockpitHost) {
-    super(host, "cv-activity");
+    super(host, "cv-chats");
     chats.on(() => {
       // A new folder (or a failed read) starts folded again.
       if (!chats.list) this.allChats = false;
@@ -717,10 +717,9 @@ export class ActivityView extends View {
     });
   }
 
+  /** Saved chats do not need the kit's data. */
   protected render(): Node[] {
-    // Saved chats do not need the kit's data.
-    if (!snapshot.data) return [h("div", { class: "grid" }, this.chatsCard()), ...(this.noData() ?? [])];
-    return [h("div", { class: "grid" }, this.chatsCard(), this.activityCard(), this.healthCard())];
+    return [h("div", { class: "grid" }, this.chatsCard())];
   }
 
   private chatsCard(): HTMLElement {
@@ -744,6 +743,18 @@ export class ActivityView extends View {
     );
     const body = chats.error ? [empty(`Saved chats unavailable: ${chats.error}`)] : rows.length ? rows : [none];
     return card({ title: "Chats", aside: [...(l?.total && !chats.error ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []), refresh] }, ...body);
+  }
+}
+
+// ---- Activity ------------------------------------------------------------------------
+/** The kit's recent activity and the health checks: out of the Cockpit fold. */
+export class ActivityView extends View {
+  constructor(host: CockpitHost) {
+    super(host, "cv-activity");
+  }
+
+  protected render(): Node[] {
+    return this.noData() ?? [h("div", { class: "grid" }, this.activityCard(), this.healthCard())];
   }
 
   private activityCard(): HTMLElement {
