@@ -5,6 +5,7 @@
 //  - an Explorer row or the Explorer: the files are copied into that folder (or the
 //    folder of the row's file; the workspace root below the rows);
 //  - anywhere else in the centre: the editor opens each file.
+// While the drag is held over the window, the zone it would land in is outlined (dropTarget).
 // Pure: no DOM types, so Node runs it with its types stripped (scripts/droproute.test.mjs).
 
 /** The part of a DOM element the routing reads. */
@@ -28,6 +29,19 @@ export function dropZone(hit: DropHit | null, root: string | null): DropZone {
     if (hit.closest("#center")) return { kind: "editor" };
   }
   return { kind: "none" };
+}
+
+/**
+ * What a drag over `zone` outlines while it is held (a 1px border, no fill): the terminal
+ * pane, the folder row the files would land in (`rowFor(dir)`: for a file row, its parent's
+ * row), else the Explorer, the centre; nothing where a drop does not land.
+ */
+export function dropTarget(hit: DropHit | null, zone: DropZone, rowFor: (dir: string) => DropHit | null): DropHit | null {
+  if (!hit) return null;
+  if (zone.kind === "terminal") return hit.closest(".term-pane") ?? hit.closest(".xterm");
+  if (zone.kind === "explorer") return rowFor(zone.dir) ?? hit.closest("#side");
+  if (zone.kind === "editor") return hit.closest("#center");
+  return null;
 }
 
 export function parentDir(p: string): string {

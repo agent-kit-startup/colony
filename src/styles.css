@@ -188,6 +188,8 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tree-row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tree-row:hover { background: var(--bg-card-hover); }
 .tree-row.active { border-color: var(--blue); }
+/* Where a drag from the desktop would land (main.ts markDrop): a 1px border over it, no fill. */
+#drop-mark { position: fixed; z-index: 70; pointer-events: none; border: 1px solid var(--blue); border-radius: var(--mc-radius-sm); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
 .tree-row.dir .name { color: var(--text-primary); }
 

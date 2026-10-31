@@ -2,7 +2,7 @@
 // the types (Node 22.18 or later; src/droproute.ts keeps to erasable syntax). Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dropPoint, dropZone, parentDir, shellQuote, terminalText } from "../src/droproute.ts";
+import { dropPoint, dropTarget, dropZone, parentDir, shellQuote, terminalText } from "../src/droproute.ts";
 
 /** A fake element: `chain` lists it and its ancestors as { sel, path?, dir? } (a selector
  *  it matches: ".xterm", ".tree-row", "#side", "#center"). */
@@ -11,6 +11,7 @@ function hit(...chain) {
     if (i >= chain.length) return null;
     const c = chain[i];
     return {
+      sel: c.sel,
       dataset: c.path ? { path: c.path } : {},
       classList: { contains: (t) => (t === "dir" ? !!c.dir : false) },
       closest: (sel) => {
@@ -60,4 +61,30 @@ test("the drop point: CSS pixels as is on Linux, device pixels scaled elsewhere"
 test("parent folder", () => {
   assert.equal(parentDir("/a/b/c.txt"), "/a/b");
   assert.equal(parentDir("/c.txt"), "/");
+});
+
+test("a held drag outlines where the drop lands", () => {
+  const sel = (h) => h?.sel ?? null;
+  const noRow = () => null;
+  const term = hit({ sel: "canvas" }, { sel: ".xterm" }, { sel: ".term-pane" }, { sel: "#center" });
+  assert.equal(sel(dropTarget(term, dropZone(term, root), noRow)), ".term-pane", "the terminal pane");
+  const bare = hit({ sel: "canvas" }, { sel: ".xterm" });
+  assert.equal(sel(dropTarget(bare, dropZone(bare, root), noRow)), ".xterm", "no pane: the terminal itself");
+
+  const rows = { [`${root}/src`]: { sel: "row:src" } };
+  const rowFor = (dir) => rows[dir] ?? null;
+  const fileRow = hit({ sel: ".tree-row", path: `${root}/src/a.ts` }, { sel: "#side" });
+  assert.equal(sel(dropTarget(fileRow, dropZone(fileRow, root), rowFor)), "row:src", "a file row: its folder's row");
+  const dirRow = hit({ sel: ".tree-row", path: `${root}/src`, dir: true }, { sel: "#side" });
+  assert.equal(sel(dropTarget(dirRow, dropZone(dirRow, root), rowFor)), "row:src", "a folder row: itself");
+  const topFile = hit({ sel: ".tree-row", path: `${root}/README.md` }, { sel: "#side" });
+  assert.equal(sel(dropTarget(topFile, dropZone(topFile, root), rowFor)), "#side", "a top-level file: the Explorer (the root has no row)");
+  const below = hit({ sel: "#tree" }, { sel: "#side" });
+  assert.equal(sel(dropTarget(below, dropZone(below, root), rowFor)), "#side", "below the rows: the Explorer");
+
+  const centre = hit({ sel: "div" }, { sel: "#center" });
+  assert.equal(sel(dropTarget(centre, dropZone(centre, root), noRow)), "#center");
+  const rail = hit({ sel: "#rail" });
+  assert.equal(dropTarget(rail, dropZone(rail, root), noRow), null, "no drop there: no outline");
+  assert.equal(dropTarget(null, { kind: "none" }, noRow), null);
 });
