@@ -187,7 +187,12 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tree-row { display: flex; gap: 4px; align-items: center; padding: 1px 7px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; user-select: none; min-width: 0; }
 .tree-row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tree-row:hover { background: var(--bg-card-hover); }
+.tree-row.selected { border-color: var(--border-active); }
 .tree-row.active { border-color: var(--blue); }
+/* Inline name field (new item, rename): the same 1px border rule, no tinted background. */
+.tree-row.editing { cursor: default; }
+.tree-row.editing:hover { background: transparent; }
+.tree-input { flex: 1; min-width: 0; font: inherit; color: var(--text-primary); background: transparent; border: 1px solid var(--blue); border-radius: var(--mc-radius-chrome); padding: 0 4px; outline: none; }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
 .tree-row.dir .name { color: var(--text-primary); }
 
