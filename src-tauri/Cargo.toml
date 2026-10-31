@@ -30,6 +30,9 @@ sha2 = "0.10"
 # Engine signature over SHA256SUMS (engine.rs verify_sums_signature): minisign format,
 # pure Rust, no dependencies; the same crate tauri-plugin-updater verifies with.
 minisign-verify = "0.3"
+# Explorer Delete (workspace.rs trash_path): the freedesktop.org Trash on Linux, never a
+# permanent unlink (ADR 2026-10-15 amend 2026-10-29 point 2).
+trash = "5.2"
 
 [features]
 # Build-time distribution channel: `direct` (default; GitHub Releases, in-app updates of

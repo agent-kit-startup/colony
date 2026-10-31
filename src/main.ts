@@ -26,7 +26,7 @@ import { closePlanMenu } from "./planmenu";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
-import { FileTree } from "./filetree";
+import { FileTree, type TreeContext } from "./filetree";
 import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
@@ -419,7 +419,7 @@ function navigate(step: "back" | "forward") {
 
 // ---- editor ----------------------------------------------------------------------------
 const editors = new Editors($("monaco-host"), () => renderTabs());
-const tree = new FileTree($("tree"), (p) => void openFile(p), status, (p) => void openInEditor(p));
+const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx));
 const isFile = (id: string) => id.startsWith("/");
 
 function relPath(p: string) {
@@ -658,6 +658,146 @@ async function openInEditor(path?: string) {
   }
 }
 $("btn-editor").addEventListener("click", () => void openInEditor());
+
+// ---- Explorer file operations (ADR 2026-10-24 amend 2026-10-29 points 1 and 4) -----------
+// Typed Rust commands jailed to the workspace (workspace.rs); Delete moves to the trash.
+
+/** File → New file / New folder and the Explorer menu rows: the name is typed inline in `dir`
+ *  (default: the Explorer's selected folder, else the root). A new file opens in the editor. */
+async function newItem(kind: "file" | "folder", dir?: string) {
+  if (!workspace) return status("Open a folder first");
+  if (shell.classList.contains("no-side")) toggleExplorer(true);
+  const into = dir ?? tree.targetDir();
+  const name = await tree.askName(into, kind);
+  if (name === null) return status(`New ${kind}: cancelled`);
+  try {
+    const created = kind === "file" ? await api.createTextFile(`${into}/${name}`, "") : await api.createDir(`${into}/${name}`);
+    await tree.reveal(created, kind === "folder");
+    if (kind === "file") await openFile(created);
+    status(`Created ${relPath(created)}`);
+    void gitView.panel.refresh();
+  } catch (e) {
+    status(`New ${kind} failed: ${errText(e)}`);
+  }
+}
+
+/** The open file tabs at `path`, or under it when it is a folder. */
+const tabsUnder = (path: string) => [...tabs.keys()].filter((id) => isFile(id) && (id === path || id.startsWith(`${path}/`)));
+
+/** Explorer → Rename: a new name in the same folder, typed in place of the row's label. Open
+ *  tabs under the path close and the active one reopens at the new path; unsaved edits block. */
+async function renameItem(path: string, isDir: boolean) {
+  const open = tabsUnder(path);
+  const dirty = open.find((p) => editors.isDirty(p));
+  if (dirty) return status(`Rename: ${relPath(dirty)} has unsaved changes: save it first`);
+  const old = path.slice(path.lastIndexOf("/") + 1);
+  const name = await tree.askRename(path);
+  if (name === null || name === old) return status("Rename: cancelled");
+  if (name.includes("/")) return status("Rename failed: a name cannot contain /");
+  try {
+    const renamed = await api.renamePath(path, `${path.slice(0, path.lastIndexOf("/"))}/${name}`);
+    const wasActive = open.includes(activeTab) ? activeTab : null;
+    for (const id of open) await closeTab(id);
+    await tree.reveal(renamed, isDir);
+    if (wasActive) await openFile(renamed + wasActive.slice(path.length));
+    status(`Renamed ${relPath(path)} to ${relPath(renamed)}`);
+    void gitView.panel.refresh();
+  } catch (e) {
+    status(`Rename failed: ${errText(e)}`);
+  }
+}
+
+/** Explorer → Delete's question (the code-path smoke answers it). */
+let confirmTrash = (message: string) => ask(message, { title: "Colony", kind: "warning" });
+
+/** Explorer → Delete: after a confirmation, move the file or folder to the system trash and
+ *  close its tabs (unsaved edits in them are named in the question). */
+async function trashItem(path: string, isDir: boolean) {
+  const open = tabsUnder(path);
+  const dirty = open.filter((p) => editors.isDirty(p));
+  const what = `${isDir ? "the folder " : ""}${relPath(path)}`;
+  const lost = dirty.length ? `\n\nUnsaved changes in ${dirty.length} open file(s) will be lost.` : "";
+  if (!(await confirmTrash(`Move ${what} to the trash?${lost}`))) return status("Delete: cancelled");
+  try {
+    await api.trashPath(path);
+  } catch (e) {
+    return status(`Delete failed: ${errText(e)}`);
+  }
+  for (const id of open) {
+    editors.close(id); // already confirmed: closeTab must not ask again
+    await closeTab(id);
+  }
+  // Select the parent: a selection left on the trashed path would make New file recreate it.
+  await tree.reveal(path.slice(0, path.lastIndexOf("/")), true);
+  status(`Moved ${what} to the trash`);
+  void gitView.panel.refresh();
+}
+
+/** Explorer → Open terminal here: a drawer shell with `dir` as its cwd. */
+async function terminalHere(dir: string) {
+  const made = terminals.create(undefined, dir === workspace?.root ? undefined : dir.slice(dir.lastIndexOf("/") + 1), dir);
+  // The tab exists now, so showing the drawer does not start a second shell.
+  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  await made;
+}
+
+/** The Explorer's own menu (right-click on a row or on the empty Explorer): contextual rows
+ *  bound to the clicked path. New file / New folder are the File menu's actions with the row's
+ *  folder as the target; the other rows need a path, so they have no menu-bar entry. */
+let treeMenu: HTMLElement | null = null;
+const closeTreeMenu = () => treeMenu && (treeMenu.hidden = true);
+function openTreeMenu(ctx: TreeContext) {
+  if (!workspace) return;
+  if (!treeMenu) {
+    const m = h("div", { id: "tree-menu", class: "menu", role: "menu", "aria-label": "Explorer", hidden: "" });
+    for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, closeTreeMenu);
+    window.addEventListener("colony:popover", (ev) => (ev as CustomEvent).detail !== "tree" && closeTreeMenu());
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || m.hidden) return;
+      ev.preventDefault();
+      closeTreeMenu();
+    });
+    document.body.append(m);
+    treeMenu = m;
+  }
+  // One popover at a time (termview.ts, planmenu.ts).
+  window.dispatchEvent(new CustomEvent("colony:popover", { detail: "tree" }));
+  const root = workspace.root;
+  const path = ctx.path;
+  const dir = path === null ? root : ctx.isDir ? path : path.slice(0, path.lastIndexOf("/"));
+  const row = (act: string, label: string, title: string, run: () => unknown) => {
+    const b = h("button", { role: "menuitem", "data-act": act, title, "aria-label": title }, label);
+    b.addEventListener("click", () => {
+      closeTreeMenu();
+      void Promise.resolve(run()).catch((e) => status(`${label}: ${errText(e)}`));
+    });
+    return b;
+  };
+  const where = relPath(dir) === root ? workspace.name : relPath(dir);
+  const rows: HTMLElement[] = [
+    row("tree-new-file", "New file", `New file in ${where}`, () => newItem("file", dir)),
+    row("tree-new-folder", "New folder", `New folder in ${where}`, () => newItem("folder", dir)),
+    h("div", { class: "menu-sep" }),
+  ];
+  if (path) {
+    const rel = relPath(path);
+    rows.push(
+      row("tree-rename", "Rename", `Rename ${rel}`, () => renameItem(path, ctx.isDir)),
+      row("tree-delete", "Delete", `Move ${rel} to the trash (asks first)`, () => trashItem(path, ctx.isDir)),
+      h("div", { class: "menu-sep" }),
+      row("tree-copy-path", "Copy path", `Copy ${path}`, () => copyText(path).then((ok) => status(ok ? `Copied ${path}` : `Could not copy ${path}`))),
+    );
+  }
+  rows.push(
+    row("tree-terminal", "Open terminal here", `New shell in ${where}`, () => terminalHere(dir)),
+    row("tree-editor", "Open in editor", `Open ${path ? relPath(path) : workspace.name} in your editor`, () => openInEditor(path ?? root)),
+  );
+  treeMenu.replaceChildren(...rows);
+  treeMenu.hidden = false;
+  const r = treeMenu.getBoundingClientRect();
+  treeMenu.style.left = `${Math.max(4, Math.min(ctx.x, window.innerWidth - r.width - 4))}px`;
+  treeMenu.style.top = `${Math.max(4, Math.min(ctx.y, window.innerHeight - r.height - 4))}px`;
+}
 async function openSettings() {
   try {
     await openFile(await api.settingsEnsure());
@@ -1545,6 +1685,8 @@ function applyTitleBar(info: StartupInfo) {
 const ACTIONS: Record<string, () => unknown> = {
   "open-folder": () => pickFolder(),
   "run-elsewhere": () => controls.startElsewhere(),
+  "new-file": () => newItem("file"),
+  "new-folder": () => newItem("folder"),
   save: () => saveActive(),
   "save-as": () => saveAs(),
   "open-in-editor": () => openInEditor(),
@@ -2368,6 +2510,55 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         devicePixelRatio: window.devicePixelRatio,
       });
       await closeTab(src);
+    }
+    // Explorer file operations, through the same paths as a person: the Explorer menu opened
+    // by a contextmenu event on the tree, File → New file through the native menu's click
+    // event, names typed in the inline field (value + Enter on the focused field), Delete's
+    // question answered here. Everything happens in a new folder of the scratch workspace.
+    {
+      const dir = `${root}/smoke-explorer-ops`;
+      const note = `${dir}/note.md`;
+      const renamed = `${dir}/renamed.md`;
+      const exists = async (p: string) => (await api.listDir(p.slice(0, p.lastIndexOf("/"))).catch(() => [])).some((e) => e.path === p);
+      const rowOf = (p: string) => $("tree").querySelector<HTMLElement>(`.tree-row[data-path="${CSS.escape(p)}"]`);
+      const menuAt = async (el: HTMLElement | null, act: string) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + r.height / 2 }));
+        const b = document.querySelector<HTMLButtonElement>(`#tree-menu:not([hidden]) button[data-act="${act}"]`);
+        if (act === "tree-new-folder") await shot("explorer-menu");
+        b?.click();
+        return !!b;
+      };
+      const typeName = async (name: string, shotName?: string) => {
+        const ok = await until(() => document.activeElement?.classList.contains("tree-input") ?? false, 3000);
+        const input = document.activeElement as HTMLInputElement;
+        if (!ok) return false;
+        input.value = name;
+        if (shotName) await shot(shotName);
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        return true;
+      };
+      const r: Record<string, unknown> = {};
+      r.newFolder = (await menuAt($("tree"), "tree-new-folder")) && (await typeName("smoke-explorer-ops", "explorer-new-folder")) && (await until(() => !!rowOf(dir), 4000));
+      await api.smokeMenuClick("new-file"); // the selected folder is the new one (reveal selects it)
+      r.newFile = (await typeName("note.md")) && (await until(() => editors.active === note && activeTab === note, 4000));
+      r.rename = (await menuAt(rowOf(note), "tree-rename")) && (await typeName("renamed.md", "explorer-rename")) && (await until(() => activeTab === renamed, 4000)) && !(await exists(note)) && (await exists(renamed));
+      const panes = () => [...$("terms").querySelectorAll<HTMLElement>(".term-pane")];
+      const before = panes().length;
+      r.terminalHere = (await menuAt(rowOf(dir), "tree-terminal")) && (await until(() => panes().length === before + 1 && TermView.at(panes()[before])?.id !== undefined, 4000));
+      const here = TermView.at(panes()[before] ?? null);
+      r.terminalCwd = here?.id !== undefined ? await api.ptyCwd(here.id) : null;
+      const realConfirmTrash = confirmTrash;
+      let asked = "";
+      confirmTrash = async (m) => ((asked = m), true);
+      r.trash = (await menuAt(rowOf(dir), "tree-delete")) && (await until(() => !rowOf(dir), 4000)) && !(await exists(dir)) && !tabs.has(renamed);
+      confirmTrash = realConfirmTrash;
+      r.asked = asked;
+      // The jail refuses an escape and an overwrite (the same check as the Rust tests, end to end).
+      r.escapeRefused = await api.renamePath(`${root}/README.md`, `${root}/../escaped.md`).then(() => false, () => true);
+      r.overwriteRefused = await api.createDir(`${root}/README.md`).then(() => false, () => true);
+      await log("explorer-ops", !!(r.newFolder && r.newFile && r.rename && r.terminalHere && r.terminalCwd === dir && r.trash && r.escapeRefused && r.overwriteRefused), r);
     }
     // Panels: the terminal docks at the top, the side and back at the bottom (the menu's
     // path), refitting its xterm each time; the Explorer hides and comes back; both
