@@ -1,10 +1,12 @@
 // Forge views (src-tauri/src/forge.rs) through the operator's own `gh`: the Git tab's
-// "Pull requests" card (Merge goes through the same approval card and production rule as
-// an agent's request) and the CI/CD center tab (workflow runs, rerun failed jobs).
+// "Pull requests" card, the tab's one PR list (Merge goes through the same approval card and
+// production rule as an agent's request; method and gate from src/prgate.ts, shared with the
+// Ship lane rows) and the CI/CD center tab (workflow runs, rerun failed jobs).
 // Colony reads no token: when gh is missing or logged out, the views say so.
 import { invoke } from "@tauri-apps/api/core";
 import { api, errText, h } from "./api";
 import { hostApi } from "./hostreq";
+import { isStagingSync, mergeBlock, prMethod } from "./prgate";
 import { ago, btn, busy, card, chip, empty, iconBtn, rerender } from "./ui";
 
 export interface ForgeStatus { provider: string; bin: string | null; authenticated: boolean; detail: string }
@@ -27,15 +29,17 @@ function forgeProblem(st: ForgeStatus): HTMLElement | null {
   return null;
 }
 
-/** statusCheckRollup → pass / fail / pending counts. */
-export function checksSummary(rollup: unknown): { pass: number; fail: number; pending: number } {
-  const out = { pass: 0, fail: 0, pending: 0 };
+/** statusCheckRollup → pass / fail / pending counts, plus the failing checks' names. */
+export function checksSummary(rollup: unknown): { pass: number; fail: number; pending: number; failing: string[] } {
+  const out = { pass: 0, fail: 0, pending: 0, failing: [] as string[] };
   for (const c of Array.isArray(rollup) ? (rollup as J[]) : []) {
     const state = s(c.conclusion || c.state).toUpperCase();
     if (c.status && s(c.status).toUpperCase() !== "COMPLETED") out.pending++;
     else if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(state)) out.pass++;
-    else if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(state)) out.fail++;
-    else out.pending++;
+    else if (["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(state)) {
+      out.fail++;
+      out.failing.push(s(c.name || c.context) || "?");
+    } else out.pending++;
   }
   return out;
 }
@@ -85,20 +89,36 @@ export class PullRequestsSection {
 
   private row(p: J): HTMLElement {
     const n = Number(p.number);
-    const method = h("select", { title: "Merge method" }, ...["squash", "merge", "rebase"].map((m) => h("option", { value: m }, m)));
-    const merge = btn(
-      "Merge…",
-      () => {
-        void hostApi.local("merge-pr", { number: n, method: method.value }).then(
-          (id) => {
-            this.status(`Merge #${n}: approve it on its card under Requests`);
-            this.onCard(id);
+    const head = s(p.headRefName);
+    const base = s(p.baseRefName);
+    const checks = checksSummary(p.statusCheckRollup);
+    const preferred = prMethod(head, base);
+    const block = mergeBlock({ head, base, draft: p.isDraft === true, mergeable: s(p.mergeable), pendingChecks: checks.pending });
+    const acts: HTMLElement[] = [];
+    if (block) {
+      // Why there is no Merge, in words on the row (not only in a tooltip); conflicts already
+      // read on the mergeable chip.
+      if (block !== "conflicts") acts.push(chip(block, "chip-gate"));
+    } else {
+      const method = h("select", { title: preferred === "merge" ? `Merge commit preselected: ${isStagingSync(head, base) ? "a squash would leave main outside staging and the sync row would never clear" : "main stays an ancestor of staging"}` : "Merge method" }, ...["squash", "merge", "rebase"].map((m) => h("option", { value: m }, m)));
+      method.value = preferred;
+      acts.push(
+        method,
+        btn(
+          "Merge…",
+          () => {
+            void hostApi.local("merge-pr", { number: n, method: method.value }).then(
+              (id) => {
+                this.status(`Merge #${n}: approve it on its card under Requests`);
+                this.onCard(id);
+              },
+              (e) => this.status(errText(e)),
+            );
           },
-          (e) => this.status(errText(e)),
-        );
-      },
-      { title: "Opens an approval card (a production base needs a typed yes)", "data-act": "merge" },
-    );
+          { title: "Opens an approval card (a production base needs a typed yes)", "data-act": "merge" },
+        ),
+      );
+    }
     const el = h(
       "div",
       { class: "pr-row" },
@@ -106,13 +126,13 @@ export class PullRequestsSection {
       h(
         "div",
         { class: "row small" },
-        h("span", { class: "mono dim ellipsis grow", title: `${s(p.baseRefName)} ← ${s(p.headRefName)}` }, `${s(p.baseRefName)} ← ${s(p.headRefName)}`),
+        h("span", { class: "mono dim ellipsis grow", title: `${base} ← ${head}` }, `${base} ← ${head}`),
         checksChip(p.statusCheckRollup),
         chip(s(p.mergeable).toLowerCase() || "?", p.mergeable === "MERGEABLE" ? "chip-done" : p.mergeable === "CONFLICTING" ? "chip-failed" : ""),
         ...(p.reviewDecision ? [chip(s(p.reviewDecision).toLowerCase().replace(/_/g, " "))] : []),
-        method,
-        merge,
+        ...acts,
       ),
+      ...(checks.failing.length ? [h("div", { class: "pr-failing small mono ellipsis", title: checks.failing.join(", ") }, `failing: ${checks.failing.join(", ")}`)] : []),
     );
     el.dataset.pr = String(n);
     return el;
