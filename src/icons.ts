@@ -112,8 +112,11 @@ const markState = new Map<string, string>();
  */
 export function stateMark(group: StateGroup, state: string, opts: { key?: string; still?: boolean } = {}): HTMLElement {
   const row = stateRow(group, state);
-  const prev = opts.key ? markState.get(opts.key) : undefined;
-  if (opts.key) markState.set(opts.key, state);
+  // A still mark neither reads nor records the key: a still copy of a run's state drawn earlier
+  // in the same render must not use up the enter of the mark that animates it.
+  const key = opts.still ? "" : (opts.key ?? "");
+  const prev = key ? markState.get(key) : undefined;
+  if (key) markState.set(key, state);
   const motion = opts.still || (row.motion === "enter" && !enterPlays(prev, state)) ? "none" : row.motion;
   const el = document.createElement("span");
   el.className = `state-mark motion-${motion}`;
