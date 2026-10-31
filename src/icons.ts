@@ -16,6 +16,8 @@
 // icon set does not follow this restyle (Colony-only, the plan's default).
 // Static markup only: never concatenate untrusted text into these strings.
 
+import { enterPlays, phaseDelay, type StateGroup, stateRow } from "./drivermotion";
+
 const PATHS = {
   // Cockpit: a rocket
   "current-mission":
@@ -68,6 +70,12 @@ const PATHS = {
   play: '<path d="M4.5 3l8 5-8 5z"/>',
   pause: '<path d="M5.5 3v10M10.5 3v10"/>',
   stop: '<rect x="3.5" y="3.5" width="9" height="9"/>',
+  // Driver state marks (kit ADR 2026-10-29_colony-driver-motion-contract.md): a gate waiting
+  // for you (the bar and triangle of the old U+23EF), done, failed, idle (the old U+25CB)
+  gate: '<path d="M2.5 3l7 5-7 5z"/><path d="M12.5 3v10"/>',
+  check: '<path d="M3 8.5l3.5 3.5L13 4.5"/>',
+  cross: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  idle: '<circle cx="8" cy="8" r="4.5"/>',
   // Back / Forward in the main pane's history
   back: '<path d="M10 3.5L5.5 8l4.5 4.5"/>',
   forward: '<path d="M6 3.5L10.5 8 6 12.5"/>',
@@ -87,4 +95,41 @@ export function icon(kind: IconKind, cls = "space-icon"): SVGSVGElement {
   const t = document.createElement("template");
   t.innerHTML = `<svg class="${cls}" ${ICON_SHELL} aria-hidden="true">${PATHS[kind]}</svg>`;
   return t.content.firstElementChild as SVGSVGElement;
+}
+
+/** The activity ring of a running mark: a 1px three-quarter arc at r 7.5 (cx±r on half
+ *  coordinates), clear of every glyph, which styles.css scales inside it while it turns. */
+const RING = '<path d="M8 0.5A7.5 7.5 0 1 1 0.5 8"/>';
+
+/** Last state drawn per mark key, so the one-shot enter plays on a change only. */
+const markState = new Map<string, string>();
+
+/**
+ * A driver state mark (12px, inline in a pill or chip): the state's icon with its motion
+ * class from src/drivermotion.ts. `key` names the thing whose state it shows (a run tab, the
+ * mission, the queue hero) and enables the one-shot enter on a state change. `still` draws the
+ * icon without motion: a card has one loop at most, on its status mark (ADR point 2).
+ */
+export function stateMark(group: StateGroup, state: string, opts: { key?: string; still?: boolean } = {}): HTMLElement {
+  const row = stateRow(group, state);
+  const prev = opts.key ? markState.get(opts.key) : undefined;
+  if (opts.key) markState.set(opts.key, state);
+  const motion = opts.still || (row.motion === "enter" && !enterPlays(prev, state)) ? "none" : row.motion;
+  const el = document.createElement("span");
+  el.className = `state-mark motion-${motion}`;
+  el.dataset.state = `${group}:${row.known ? state : "idle"}`;
+  el.dataset.motion = row.motion;
+  el.setAttribute("aria-hidden", "true");
+  const glyph = icon(row.icon, "state-icon");
+  el.append(glyph);
+  const delay = phaseDelay(motion, performance.now());
+  if (motion === "pulse") glyph.style.animationDelay = delay;
+  if (motion === "loop") {
+    const t = document.createElement("template");
+    t.innerHTML = `<svg class="state-ring" ${ICON_SHELL} aria-hidden="true">${RING}</svg>`;
+    const ring = t.content.firstElementChild as SVGSVGElement;
+    ring.style.animationDelay = delay;
+    el.append(ring);
+  }
+  return el;
 }

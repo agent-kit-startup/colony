@@ -50,8 +50,9 @@ export type Tone = "executing" | "running" | "awaiting" | "parked" | "backlog" |
  * Solid status pill (dashboard .lifecycle-pill / .now-status): filled semantic surface,
  * uppercase 11px, squared to --mc-radius-chrome, with a mark glyph as the non-color cue.
  */
-export function pill(label: string, tone: Tone, mark = ""): HTMLElement {
-  return h("span", { class: `pill pill-${tone}` }, ...(mark ? [h("span", { class: "pill-mark", "aria-hidden": "true" }, mark)] : []), label);
+export function pill(label: string, tone: Tone, mark: string | HTMLElement = ""): HTMLElement {
+  const m = typeof mark === "string" ? (mark ? h("span", { class: "pill-mark", "aria-hidden": "true" }, mark) : null) : mark;
+  return h("span", { class: `pill pill-${tone}` }, ...(m ? [m] : []), label);
 }
 
 /** Lifecycle labels and marks of the dashboard's lifecycleMeta() (parked: U+23F8 instead of the
@@ -143,8 +144,6 @@ export interface Meta {
   title?: string;
   /** Monospace value (paths, ids, times). */
   mono?: boolean;
-  /** Spin the icon (the dashboard's executing Mode icon). */
-  live?: boolean;
   /** Make the item a button (e.g. the engine opens the run dialog). */
   onClick?: () => void;
 }
@@ -157,7 +156,7 @@ export function metaRow(items: (Meta | null | false | undefined)[], cls = ""): H
     ...items
       .filter((m): m is Meta => !!m && !!m.text)
       .map((m) => {
-        const parts = [icon(m.icon, `now-meta-icon${m.live ? " now-meta-icon-executing" : ""}`), h("span", { class: `now-meta-value${m.mono ? " mono" : ""}` }, m.text)];
+        const parts = [icon(m.icon, "now-meta-icon"), h("span", { class: `now-meta-value${m.mono ? " mono" : ""}` }, m.text)];
         if (!m.onClick) return h("span", { class: "now-meta-item", title: m.title ?? m.text }, ...parts);
         const b = btn("", m.onClick, { class: "now-meta-item now-meta-btn", title: m.title ?? m.text });
         b.replaceChildren(...parts);

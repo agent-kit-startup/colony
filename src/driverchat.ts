@@ -12,6 +12,7 @@
 import { api, errText, h, type WorkspaceSettings } from "./api";
 import type { CockpitHost } from "./cockpit";
 import { pendingGates } from "./gates";
+import { stateMark } from "./icons";
 import { gateCard } from "./inbox";
 import { CHAT_ENGINES, chatModel, type GatesDecision, gatesChange, gatesKey, NEVER_PREANSWER, noteProblem, offerRelaunch, parseDecision, PREANSWER_PROTOCOL, PREANSWERS, preanswerSetting } from "./resolver";
 import { liveQueueRun, type Run, runs, runTokens } from "./runs";
@@ -257,7 +258,7 @@ export class DriverChat {
       title: "Driver chat",
       icon: "queue",
       aside: [
-        ...(live?.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", "⏯")] : []),
+        ...(live?.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate"))] : []),
         ...(this.offered.length ? [pill("Gate moved", "awaiting", "↻")] : []),
         pill(gates.length ? `${gates.length} deferred` : this.supported === false ? "No helper" : "Nothing deferred", gates.length ? "awaiting" : "idle"),
       ],

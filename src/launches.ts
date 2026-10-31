@@ -25,6 +25,8 @@ export interface Launch {
   startedAt: string;
   state: LaunchState;
   exitCode: number | null | undefined;
+  /** Driver runs: `run_end.reason` ("" while running; a terminal tab has none). */
+  reason?: string;
   /** Open gate id (driver: the protocol's; terminal: the last `HITL_GATE:` line seen). */
   gate: string | null;
   runId?: number;
@@ -196,6 +198,7 @@ class LaunchStore {
       startedAt: r.startedAt,
       state,
       exitCode: r.exitCode,
+      reason: r.reason,
       gate: r.gate?.askId ?? null,
       runId: r.id,
       ...(queue ? { queue: r.queue } : {}),

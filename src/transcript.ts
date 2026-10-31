@@ -7,7 +7,8 @@
 import { errText, h, type TickReview } from "./api";
 import { gateControls } from "./agent";
 import { ContextStrip } from "./contextstrip";
-import { icon } from "./icons";
+import { runState } from "./drivermotion";
+import { icon, stateMark } from "./icons";
 import { type Align, type Block, type ListItem, linkKind, parseBlocks, parseInline } from "./markdown";
 import { type Ev, type Run, type RunItem, runLabel, runs, runTokens } from "./runs";
 
@@ -185,9 +186,15 @@ export class AgentTab {
 
   private renderHead() {
     const r = this.run;
-    const state = r.gate ? "gate" : r.running ? "running" : r.exitCode === 0 ? "done" : "failed";
-    this.chip.className = `chip chip-${state}`;
-    this.chip.textContent = r.gate ? "waiting for you" : r.running ? "running" : `exited ${r.exitCode ?? "(signal)"}`;
+    const state = runState(r);
+    // Stopped by request reuses the done chip colours: a clean end, not a failure.
+    this.chip.className = `chip chip-${state === "stopped" ? "done" : state}`;
+    const text = r.gate ? "waiting for you" : r.running ? "running" : state === "stopped" ? `stopped · exit ${r.exitCode ?? "(signal)"}` : `exited ${r.exitCode ?? "(signal)"}`;
+    // The chip updates in place on every run event: the mark is rebuilt on a state change only.
+    if (this.chip.dataset.state !== state) {
+      this.chip.replaceChildren(stateMark("run", state, { key: `run:${r.id}` }), h("span", {}, text));
+      this.chip.dataset.state = state;
+    } else (this.chip.lastChild as HTMLElement).textContent = text;
     this.title.textContent = runLabel(r);
     this.title.title = r.cmd;
     const t = runTokens(r);
