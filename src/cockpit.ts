@@ -8,7 +8,8 @@ import { type ChatSession, h } from "./api";
 import type { RunControls } from "./agent";
 import { chats } from "./chats";
 import { pendingGates } from "./gates";
-import { icon, type IconKind } from "./icons";
+import { missionState, runState } from "./drivermotion";
+import { icon, type IconKind, stateMark } from "./icons";
 import { gateCard, triageChip } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "./readiness";
@@ -198,10 +199,16 @@ const KIND_ICON: Record<Launch["kind"], IconKind> = { driver: "play", interactiv
 const planName = (f: string) => f.replace(/\.plan\.md$/, "");
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-function stateChip(l: Launch): HTMLElement {
-  if (l.state === "ended") return l.exitCode === 0 ? pill("Ended · exit 0", "completed", "\u2713") : pill(`Ended · exit ${l.exitCode ?? "signal"}`, "failed", "\u2715");
-  if (l.state === "gate") return pill("Awaiting gate", "awaiting", "\u23EF");
-  return l.state === "running" ? pill("Running", "running", "\u25B6") : pill(l.state, "backlog", "\u25CB");
+/** A launch's state pill. `still`: no motion, when the card already shows a loop (ADR point 2). */
+function stateChip(l: Launch, still = false): HTMLElement {
+  if (l.state === "starting") return pill(l.state, "backlog", stateMark("run", "starting", { still: true }));
+  const st = runState({ gate: l.state === "gate", running: l.state === "running", exitCode: l.exitCode, reason: l.reason });
+  const mark = stateMark("run", st, { key: `launch:${l.tabId}`, still });
+  if (st === "gate") return pill("Awaiting gate", "awaiting", mark);
+  if (st === "running") return pill("Running", "running", mark);
+  // A stop by request is a clean end at a tick boundary, not a failure (driver protocol 1.5.0).
+  if (st === "stopped") return pill(`Stopped · exit ${l.exitCode ?? "signal"}`, "idle", mark);
+  return st === "done" ? pill("Ended · exit 0", "completed", mark) : pill(`Ended · exit ${l.exitCode ?? "signal"}`, "failed", mark);
 }
 
 /** One Colony launch (driver run or agent terminal tab); a click focuses its tab. */
@@ -277,8 +284,8 @@ function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
   const note = h(
     "div",
     { class: "launch-pending click queue-live", title: "Open its tab" },
-    held ? pill("Queue held", "awaiting", "\u23F8") : pill("Queue run", "running", "\u21F6"),
-    ...(live.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", "\u23EF")] : []),
+    held ? pill("Queue held", "awaiting", stateMark("queue", "held")) : pill("Queue run", "running", stateMark("queue", "running", { still: true })),
+    ...(live.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate", { still: true }))] : []),
     h("span", { class: "grow" }, `#${live.id} · ${live.backend} · ${q ? `${queueText(q)}${q.status ? ` · ${q.status}` : ""}` : "waiting for the first queue_state"} · started ${clock(live.startedAt)} (${elapsed(live.startedAt)})${live.gate ? " · answer it in the Inbox" : ""}`),
   );
   note.dataset.run = String(live.id);
@@ -555,14 +562,14 @@ export class MissionView extends View {
     const todo = (t: J | null | undefined): Todo => (t && obj(t).id ? { id: str(t.id), content: str(t.content) } : null);
     const lc = pend ? (pp?.lifecycle ?? "") : str(now.lifecycle);
     const status = pend ? (pend.state === "gate" ? "awaiting_user" : pend.state === "ended" ? "idle" : "executing") : str(now.status, plan ? "idle" : "");
-    const [stLabel, stTone, stMark] = statusMeta(status);
+    const [stLabel, stTone] = statusMeta(status);
     let pending: HTMLElement[] = [];
     if (pend) {
       const note = h(
         "div",
         { class: "launch-pending click", title: "Open its tab" },
-        pill("Launched from Colony", "running", "▶"),
-        stateChip(pend),
+        pill("Launched from Colony", "running", stateMark("run", "running", { still: true })),
+        stateChip(pend, true),
         h("span", { class: "grow" }, `${KIND_LABEL[pend.kind]} · ${pend.backend} · started ${clock(pend.startedAt)} (${elapsed(pend.startedAt)}) · waiting for HANDOFF to switch to this plan. HANDOFF still names ${plan ? planName(plan) : "no plan"}; Run plan runs that one.`),
       );
       note.dataset.plan = pend.plan;
@@ -578,7 +585,7 @@ export class MissionView extends View {
     const meta = metaRow([
       { icon: "folder", text: str(sys.name), title: `Folder: ${str(sys.name)}` },
       { icon: "git", text: str(snapshot.git.branch), mono: true, title: `Branch: ${str(snapshot.git.branch)}` },
-      { icon: "mode", text: mode, title: `Mode: ${mode}`, live: status === "executing" },
+      { icon: "mode", text: mode, title: `Mode: ${mode}` },
       engine ? { icon: "engine", text: engine, mono: true, title: `Engine: ${engine} (Run plan, Run queue and Open interactive in the top bar). Change it in the top bar's Run plan dialog.` } : null,
       pend ? { icon: "elapsed", text: `${clock(pend.startedAt)} · ${elapsed(pend.startedAt)}`, mono: true, title: `Started ${pend.startedAt}` } : null,
       !pend && str(now.modifiedAt) ? { icon: "updated", text: ago(now.modifiedAt), mono: true, title: `Updated ${str(now.modifiedAt)}` } : null,
@@ -588,7 +595,7 @@ export class MissionView extends View {
     const hero = h(
       "section",
       { class: "hero card" },
-      cardHeader({ title: "Current mission", aside: [...(status ? [pill(stLabel, stTone, stMark)] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
+      cardHeader({ title: "Current mission", aside: [...(status ? [pill(stLabel, stTone, stateMark("mission", missionState(status), { key: "mission" }))] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
       h("h2", { class: "now-plan-name" }, title),
       h("div", { class: "hero-file mono" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”."),
       ...pending,
@@ -610,7 +617,7 @@ export class MissionView extends View {
     const s = h(
       "section",
       { class: "gate-strip", "aria-label": "Gates waiting for Ground Control" },
-      h("div", { class: "panel-row" }, pill(`${gates.length} gate${gates.length === 1 ? "" : "s"} waiting for Ground Control`, "awaiting", "⏯"), h("span", { class: "grow" }), btn("Open Inbox", () => this.host.showTab("inbox"), { class: "link" })),
+      h("div", { class: "panel-row" }, pill(`${gates.length} gate${gates.length === 1 ? "" : "s"} waiting for Ground Control`, "awaiting", stateMark("run", "gate", { still: true })), h("span", { class: "grow" }), btn("Open Inbox", () => this.host.showTab("inbox"), { class: "link" })),
       ...gates.map((g) => gateCard(g, this.host, "compact mission-gate")),
     );
     return [s];
@@ -635,7 +642,7 @@ export class MissionView extends View {
     const n = gates.length + att.length + tickets.length;
     const hidden = att.length - Math.min(att.length, 4);
     const c = card(
-      { title: "Needs you", aside: n ? [gates.length ? pill(`${n} waiting`, "awaiting", "⏯") : chip(String(n))] : [] },
+      { title: "Needs you", aside: n ? [gates.length ? pill(`${n} waiting`, "awaiting", stateMark("run", "gate", { still: true })) : chip(String(n))] : [] },
       ...(items.length ? items : [emptyCta({ headline: "Nothing waits for you", support: "Gates, attention items and gate-exit tickets land here and in the Inbox.", compact: true })]),
       ...(hidden ? [btn(`+${hidden} more in the Inbox`, () => this.host.showTab("inbox"), { class: "link", "data-act": "needs-more" })] : []),
     );
@@ -655,7 +662,7 @@ export class MissionView extends View {
     }
     const live = mine.filter((l) => l.state !== "ended").length;
     // The web Mission Control's name for this panel: Crew Monitor.
-    const c = card({ title: "Crew Monitor", aside: live ? [pill(`${live} live`, "running", "▶")] : [] }, ...(rows.length ? rows : [this.noRuns()]));
+    const c = card({ title: "Crew Monitor", aside: live ? [pill(`${live} live`, "running", stateMark("run", "running", { still: true }))] : [] }, ...(rows.length ? rows : [this.noRuns()]));
     c.classList.add("runs-card");
     c.dataset.keepScroll = "runs";
     return c;
@@ -939,11 +946,11 @@ export class QueueView extends View {
     const done = queue.filter((f) => finished(q, f)).length;
     const runnable = queueRunnable(q, queue, cursor, !!hold);
     const running = live ? live.queue?.status?.toLowerCase() !== "stopped" : /\brunning\b/i.test(str(q.status));
-    const [stLabel, stTone, stMark]: [string, Tone, string] = hold ? ["Held", "awaiting", "\u23F8"] : running ? ["Running", "executing", "\u25B6"] : queue.length ? ["Idle", "idle", "\u25CB"] : ["No queue", "idle", "\u25CB"];
+    const [stLabel, stTone, stState]: [string, Tone, string] = hold ? ["Held", "awaiting", "held"] : running ? ["Running", "executing", "running"] : queue.length ? ["Idle", "idle", "idle"] : ["No queue", "idle", "idle"];
     const head = h(
       "section",
       { class: "hero card" },
-      cardHeader({ title: "Run queue", icon: "queue", aside: [pill(stLabel, stTone, stMark)] }),
+      cardHeader({ title: "Run queue", icon: "queue", aside: [pill(stLabel, stTone, stateMark("queue", stState, { key: "queue-hero" }))] }),
       h("h2", { class: "now-plan-name" }, queue.length ? `${queue.length} plans · cursor ${cursor >= 0 ? cursor + 1 : "-"}${hold ? " · held" : ""}` : "No queue"),
       ...(queue.length ? [stepbar(done, queue.length, cursor >= 0 && cursor < queue.length && !hold, true, "plans done")] : []),
       metaRow([
@@ -952,7 +959,7 @@ export class QueueView extends View {
         // No cut at a fixed length: the meta value ellipsizes by width, the title has it all.
         str(q.status) ? { icon: "updated", text: str(q.status).split("\n")[0], title: str(q.status) } : null,
       ]),
-      ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "\u23F8"), h("span", { class: "grow" }, holdText(hold, queue[cursor] ?? ""), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
+      ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", stateMark("queue", "held")), h("span", { class: "grow" }, holdText(hold, queue[cursor] ?? ""), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
       ...(live ? [liveQueueNote(live, this.host)] : []),
       h(
         "div",
