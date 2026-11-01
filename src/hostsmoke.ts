@@ -165,7 +165,9 @@ export async function gitCicdSmoke(c: SmokeCtx) {
     const t = tile();
     const ids = [...(t?.querySelectorAll<HTMLElement>(".ship-row") ?? [])].map((e) => e.dataset.row);
     const acts = (id: string) => [...(row(id)?.querySelectorAll<HTMLButtonElement>("button[data-act]") ?? [])].map((b) => b.dataset.act);
-    const pr11 = t?.querySelector<HTMLElement>('.ship-pr[data-pr="11"]');
+    // One PR list: the Pull requests tile (live gh). Its titles are forge text, as text nodes.
+    await c.until(() => !!git.querySelector('.pr-row[data-pr="8"]'), 15000);
+    const pr8 = git.querySelector<HTMLElement>('.pr-row[data-pr="8"]');
     const bento = git.querySelector(".git-bento");
     const noBars = [...(bento?.querySelectorAll<HTMLElement>("*") ?? [])].every((e) => !e.style.borderLeft && !e.style.boxShadow);
     await c.log(
@@ -177,8 +179,9 @@ export async function gitCicdSmoke(c: SmokeCtx) {
         acts("staging-main").includes("ship-open-pr") &&
         acts("tag-ci").includes("ship-rerun-checks") &&
         acts("staging-sync").includes("ship-open-pr") &&
-        !!pr11?.textContent?.includes("<img src=x") &&
-        !t?.querySelector("img") &&
+        !t?.querySelector(".ship-pr, .ship-prs") &&
+        !!pr8?.textContent?.includes("<img src=x") &&
+        !git.querySelector(".git-bento img") &&
         noBars &&
         t?.dataset.gate === "",
       { version: snapshot.data?.dashboardDataVersion, rows: ids, actions: Object.fromEntries(ids.map((id) => [id, acts(String(id))])), gate: t?.dataset.gate },
@@ -187,9 +190,15 @@ export async function gitCicdSmoke(c: SmokeCtx) {
 
     // The action table and the engine gate, on fixed lanes (pure functions of the tile).
     const lane = (o: Record<string, unknown>) => ({ remote: { available: true, prs: [], ...((o.remote as object) ?? {}) }, local: { stagingAheadOfMain: 2, mainInStaging: true, ...((o.local as object) ?? {}) } });
-    const promote = { number: 9, head: "staging", base: "main", draft: false };
+    const promote = { number: 9, head: "staging", base: "main", draft: false, mergeable: "mergeable", checks: { failing: [], pending: 0 } };
+    const sync = { number: 12, head: "chore/sync-staging-main-578dc26", base: "staging", draft: false, mergeable: "mergeable", checks: { failing: [], pending: 0 } };
     const cases: [string, unknown, string][] = [
       ["promote PR open -> merge with a merge commit", rowAction({ id: "staging-main", state: "pending" }, lane({ remote: { prs: [promote] } }))?.action, JSON.stringify({ kind: "merge-pr", args: { number: 9, method: "merge" } })],
+      ["promote PR checks running -> no merge, no second PR", rowAction({ id: "staging-main", state: "pending" }, lane({ remote: { prs: [{ ...promote, checks: { failing: [], pending: 2 } }] } })), "null"],
+      ["promote PR conflicting -> no merge", prAction({ ...promote, mergeable: "conflicting" }), "null"],
+      ["promote PR mergeability unknown -> no merge", prAction({ ...promote, mergeable: "unknown" }), "null"],
+      ["sync PR open -> merge it with a merge commit, no Open sync PR", rowAction({ id: "staging-sync", state: "red" }, lane({ remote: { prs: [sync] }, local: { mainInStaging: false } }))?.action, JSON.stringify({ kind: "merge-pr", args: { number: 12, method: "merge" } })],
+      ["main not in staging, no sync PR -> open-pr staging-sync", rowAction({ id: "staging-sync", state: "red" }, lane({ local: { mainInStaging: false } }))?.action, JSON.stringify({ kind: "open-pr", args: { shape: "staging-sync" } })],
       ["staging ahead, no PR -> open-pr promote", rowAction({ id: "staging-main", state: "pending" }, lane({}))?.action, JSON.stringify({ kind: "open-pr", args: { shape: "promote" } })],
       ["staging-main green -> nothing", rowAction({ id: "staging-main", state: "green" }, lane({ local: { stagingAheadOfMain: 0 } })), "null"],
       ["tag CI red, no run id -> nothing", rowAction({ id: "tag-ci", state: "red" }, lane({ remote: { tagCi: { runId: null } } })), "null"],

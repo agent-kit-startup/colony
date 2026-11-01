@@ -20,6 +20,7 @@
 .hostreq-done-out { min-height: 0; max-height: 200px; flex: none; margin: 2px 0 6px; font-size: 11px; }
 .pr-row { border-top: 1px solid var(--border); padding: 6px 0; display: flex; flex-direction: column; gap: 2px; }
 .pr-row:first-child { border-top: 0; }
+.pr-failing { color: var(--red); }
 .cicd-run { border-top: 1px solid var(--border); padding: 4px 0; }
 .cicd-run:first-child { border-top: 0; }
 .cv-cicd .filters { display: flex; gap: 4px; }

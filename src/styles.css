@@ -699,7 +699,6 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .git-graph { margin: 0; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 6px; min-width: 0; }
 .git-graph-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .prod-card { border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
-.prod-card input.yes { width: 110px; }
 
 /* ---- agent tab (transcript) --------------------------------------------------------- */
 .run-view { display: flex; flex-direction: column; background: var(--bg-primary); }
@@ -720,7 +719,6 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-tick .link { font-family: var(--mc-font-mono); font-weight: 400; }
 .tr-line { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .tr-icon { vertical-align: -2px; }
-.git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .tr-msg { padding: 2px 0; }
 .prose { font-size: 13.5px; line-height: 1.55; }
 .prose p { margin: 4px 0; }
