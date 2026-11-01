@@ -20,7 +20,7 @@ pr_json() {
   [ "$1" = 10 ] && cross=true owner=mallory
   case "$1" in
     7) base=feat/base head=feat/seven title="Smoke PR seven" ;;
-    8) base=release head=feat/eight title="Smoke PR eight (release)" ;;
+    8) base=release head=feat/eight title="Smoke PR eight (release) <img src=x onerror=alert(1)>" ;;
     9) base=main head=staging title="Promote staging to main" ;;
     11) base=staging head=chore/close-release-6.9.1 title="chore: close release 6.9.1" ;;
     10) base=main head=staging title="Promote staging to main (fork)" ;;

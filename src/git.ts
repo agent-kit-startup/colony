@@ -1,9 +1,8 @@
 // Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
-import { icon } from "./icons";
 import { api, errText, h, type GitStatus } from "./api";
 import { obj, snapshot, str } from "./snapshot";
 import { type ShipHost, ShipLaneTile } from "./shiplane";
-import { btn, busy, card, chip, empty, iconBtn } from "./ui";
+import { btn, busy, card, empty, iconBtn } from "./ui";
 
 const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -199,8 +198,8 @@ export class GitPanel {
  * Git e CI/CD center tab, one bento grid like the kit web page's section of the same name: the
  * Ship lane tile leads (snapshot `shipLane`, with the host-allowlist actions), then Requests,
  * Pull requests, the snapshot's branch flow and graph, the working tree and the production
- * promotion card. Colony never runs /git-prod or any prod promotion: the card only reveals
- * the command after a typed yes, for the operator's own agent session.
+ * promotion card. Colony never runs /git-prod or any prod promotion: the card only copies the
+ * command, for the operator's own agent session.
  */
 export class GitView {
   readonly el: HTMLElement;
@@ -289,7 +288,8 @@ export class GitView {
     this.repo.replaceChildren(
       card(
         "Repository",
-        h("div", { class: "row" }, h("strong", { class: "git-branch" }, icon("git", "btn-icon"), str(g.branch, "?")), chip(g.dirty ? `${g.dirtyCount ?? "?"} changed` : "clean", g.dirty ? "chip-gate" : "chip-done"), h("span", { class: "dim" }, `↑${g.ahead ?? 0} ↓${g.behind ?? 0} upstream`)),
+        // Branch, upstream and changed files live once, in the Working tree (read live from
+        // git status); this card is the history: last commit, branch flow, graph.
         ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
         // On staging, "vs main" and "staging vs main" are the same count: show it once.
         ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), sameCount(flow.vsMain, flow.stagingVsMain) ? null : ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
@@ -301,23 +301,20 @@ export class GitView {
   }
 
   private prodCard(): HTMLElement {
-    const yes = h("input", { type: "text", placeholder: "type yes", class: "yes" });
+    // Copy-only, so no typed yes here: the Git tab's one production yes guards the one
+    // production action Colony runs itself (the Working tree push of a production branch); a
+    // merge into main asks its own on the approval card (ADR 2026-10-23 point 5).
     const out = h("div", { class: "hint" });
-    const reveal = btn("Show /git-prod", () => {
-      if (yes.value.trim() !== "yes") {
-        out.textContent = "Production promotion: type yes first. Colony shows the command; it never runs it.";
-        return;
-      }
-      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (Open interactive in Mission) and answer its gate there.");
+    const copy = btn("Copy /git-prod", () => {
       this.copy("/git-prod", "/git-prod");
-      yes.value = "";
-    });
+      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (Open interactive in Mission) and answer its gate there.");
+    }, { "data-act": "copy-git-prod" });
     return h(
       "section",
       { class: "card prod-card bento-tile bento-prod" },
       h("div", { class: "card-title" }, "Production promotion"),
-      h("div", { class: "hint warn" }, "Never run from Colony or from a headless tick. /git-prod stays an operator action in your own agent session."),
-      h("div", { class: "prod-confirm" }, yes, reveal),
+      h("div", { class: "hint warn" }, "Never run from Colony or from a headless tick. /git-prod stays an operator action in your own agent session; Colony only copies it."),
+      h("div", { class: "prod-confirm" }, copy),
       out,
     );
   }

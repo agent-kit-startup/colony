@@ -71,12 +71,17 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     command: Option<Vec<String>>,
+    cwd: Option<String>,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32, String> {
-    let cwd = workspace::workspace_root(&state)
-        .ok()
-        .or_else(|| std::env::var_os("HOME").map(Into::into))
-        .unwrap_or_else(|| "/".into());
+    // `cwd`: a folder of the workspace (Explorer → Open terminal here); else the root.
+    let cwd = match cwd {
+        Some(dir) => workspace::jail_dir(&state, &dir)?,
+        None => workspace::workspace_root(&state)
+            .ok()
+            .or_else(|| std::env::var_os("HOME").map(Into::into))
+            .unwrap_or_else(|| "/".into()),
+    };
     let pair = native_pty_system()
         .openpty(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("openpty failed: {e}"))?;

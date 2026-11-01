@@ -974,6 +974,11 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
             if ahead == 0 {
                 return Err(format!("Refused: origin/staging has nothing that origin/{main} lacks"));
             }
+            // Ahead only by the staging sync's merge commit: same tree, nothing to promote. A
+            // PR for it merges zero files and the promote -> sync -> promote loop never ends.
+            if gitops::git(cwd, &["diff", "--quiet", &base_ref, &head_ref, "--"]).is_ok() {
+                return Err(format!("Refused: origin/staging has the same files as origin/{main} (only merge commits ahead), nothing to promote"));
+            }
             let log = log_of(&format!("{base_ref}..{head_ref}"))?;
             // Commit subjects are repo text: inside a code block they cannot ping, link or
             // close issues (security review 2026-10-24, finding 8); backticks cannot end it.
@@ -1367,6 +1372,13 @@ mod tests {
         g(&["rev-parse", "HEAD"])
     }
 
+    /// A commit that changes one file, so its tree differs from its parent's.
+    fn mk_file(g: &dyn Fn(&[&str]) -> String, dir: &Path, name: &str, msg: &str) -> String {
+        std::fs::write(dir.join(name), msg).unwrap();
+        g(&["add", name]);
+        mk(g, msg)
+    }
+
     #[test]
     fn write_atomic_does_not_follow_a_planted_symlink() {
         let d = test_dir("symlink");
@@ -1412,9 +1424,9 @@ mod tests {
         assert!(production_gate(&Action::OpenPr { shape: PrShape::Promote }, &cwd).is_err());
 
         // staging two ahead (one subject is hostile text): the promote plan is fixed fields.
-        let s1 = mk(&g, "feat: one");
+        let s1 = mk_file(&g, &cwd, "one.txt", "feat: one");
         g(&["update-ref", "refs/remotes/origin/staging", &s1]);
-        let s2 = mk(&g, "fix: $(curl x) `two`; --admin");
+        let s2 = mk_file(&g, &cwd, "two.txt", "fix: $(curl x) `two`; --admin");
         g(&["update-ref", "refs/remotes/origin/staging", &s2]);
         let p = pr_plan(PrShape::Promote, &cwd).unwrap();
         assert_eq!((p.base.as_str(), p.head.as_str(), p.title.as_str(), p.push_sha.as_deref()), ("main", "staging", "Promote staging to main", None));
@@ -1438,6 +1450,15 @@ mod tests {
         g(&["update-ref", "refs/remotes/origin/main", &m2]);
         let e = execute(&Action::OpenPr { shape: PrShape::StagingSync }, &cwd, Some(&Pin::Plan(p))).unwrap_err();
         assert!(e.contains("moved since the card"), "{e}");
+
+        // Staging ahead of main only by a commit with main's own tree (the sync merge commit's
+        // shape, kit #1326 had 0 files): the commit count says 1, the promote is refused.
+        let x = mk_file(&g, &cwd, "three.txt", "feat: three");
+        g(&["update-ref", "refs/remotes/origin/main", &x]);
+        let y = mk(&g, "Merge pull request #2 from chore/sync-staging-main");
+        g(&["update-ref", "refs/remotes/origin/staging", &y]);
+        let e = pr_plan(PrShape::Promote, &cwd).unwrap_err();
+        assert!(e.contains("same files"), "{e}");
         let _ = std::fs::remove_dir_all(&cwd);
     }
 

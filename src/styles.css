@@ -4,6 +4,13 @@
 @import "./tokens.css";
 :root {
   color-scheme: dark;
+  /* Motion tokens of the kit ADR 2026-10-29_colony-driver-motion-contract.md (point 3): not a
+     skin concern, so not in tokens.css. --motion-loop and --motion-pulse match LOOP_MS and
+     PULSE_MS in src/drivermotion.ts. */
+  --motion-fast: 150ms;
+  --motion-enter: 400ms;
+  --motion-loop: 1.6s;
+  --motion-pulse: 2s;
 }
 /* A light Omarchy theme (src/skin.ts sets data-mode from colors.toml). */
 html[data-mode="light"] {
@@ -187,7 +194,12 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tree-row { display: flex; gap: 4px; align-items: center; padding: 1px 7px; border: 1px solid transparent; cursor: pointer; white-space: nowrap; user-select: none; min-width: 0; }
 .tree-row .name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tree-row:hover { background: var(--bg-card-hover); }
+.tree-row.selected { border-color: var(--border-active); }
 .tree-row.active { border-color: var(--blue); }
+/* Inline name field (new item, rename): the same 1px border rule, no tinted background. */
+.tree-row.editing { cursor: default; }
+.tree-row.editing:hover { background: transparent; }
+.tree-input { flex: 1; min-width: 0; font: inherit; color: var(--text-primary); background: transparent; border: 1px solid var(--blue); border-radius: var(--mc-radius-chrome); padding: 0 4px; outline: none; }
 /* Where a drag from the desktop would land (main.ts markDrop): a 1px border over it, no fill. */
 #drop-mark { position: fixed; z-index: 70; pointer-events: none; border: 1px solid var(--blue); border-radius: var(--mc-radius-sm); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
@@ -441,6 +453,22 @@ button.empty-state-btn:active { transform: scale(0.98); }
 .pill { display: inline-flex; align-items: center; gap: var(--mc-space-xs); font-size: var(--mc-chrome-meta-size); font-weight: 600; letter-spacing: 0.02em; line-height: 1.3; padding: 2px 6px; border-radius: var(--mc-radius-chrome); color: var(--text-muted); background: var(--bg-secondary); text-transform: uppercase; white-space: nowrap; flex: none; }
 .card-header .pill { padding: 3px var(--mc-space-md); }
 .pill-mark { font-size: 10px; line-height: 1; }
+/* Driver state marks (src/icons.ts stateMark, motion ADR point 1): the state icon at 12px,
+   with its ring stacked on it. Transform and opacity only, no will-change (point 2). Loops
+   and pulses are opt-in under no-preference; reduced motion keeps the static icon (point 4). */
+.state-mark { position: relative; display: inline-flex; flex: none; width: 12px; height: 12px; }
+.state-mark svg { display: block; width: 12px; height: 12px; }
+.state-mark .state-ring { position: absolute; inset: 0; display: none; transform-origin: 50% 50%; }
+.state-icon { transform-origin: 50% 50%; }
+.state-mark.motion-enter .state-icon { animation: state-enter var(--motion-enter) ease-out both; }
+@keyframes state-enter { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+@keyframes state-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@media (prefers-reduced-motion: no-preference) {
+  .state-mark.motion-loop .state-ring { display: block; animation: mc-spin var(--motion-loop) linear infinite; }
+  .state-mark.motion-loop .state-icon { transform: scale(0.75); }
+  .state-mark.motion-pulse .state-icon { animation: state-pulse var(--motion-pulse) ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) { .state-mark.motion-enter .state-icon { animation: none; } }
 .pill-executing { background: var(--blue-bg); color: var(--blue); }
 .pill-running { background: var(--green-bg); color: var(--green); }
 .pill-awaiting { background: var(--yellow-bg); color: var(--yellow); }
@@ -502,7 +530,6 @@ button.empty-state-btn:active { transform: scale(0.98); }
 .now-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: var(--mc-space-xs); padding-top: var(--mc-space-md); border-top: 1px solid var(--border); font-size: var(--mc-chrome-meta-size); color: var(--text-muted); line-height: 1.35; min-width: 0; }
 .now-meta-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
 .now-meta-icon { flex-shrink: 0; width: var(--mc-chrome-subtitle-size); height: var(--mc-chrome-subtitle-size); color: var(--text-muted); opacity: 0.85; }
-.now-meta-icon-executing { animation: mc-spin 1.6s linear infinite; transform-origin: 50% 50%; }
 @keyframes mc-spin { to { transform: rotate(360deg); } }
 .now-meta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .now-actions { margin-top: var(--mc-space-xs); }
@@ -674,7 +701,6 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .git-graph { margin: 0; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 6px; min-width: 0; }
 .git-graph-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .prod-card { border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
-.prod-card input.yes { width: 110px; }
 
 /* ---- agent tab (transcript) --------------------------------------------------------- */
 .run-view { display: flex; flex-direction: column; background: var(--bg-primary); }
@@ -695,7 +721,6 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-tick .link { font-family: var(--mc-font-mono); font-weight: 400; }
 .tr-line { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .tr-icon { vertical-align: -2px; }
-.git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .tr-msg { padding: 2px 0; }
 .prose { font-size: 13.5px; line-height: 1.55; }
 .prose p { margin: 4px 0; }

@@ -30,8 +30,9 @@ export class Terminals {
     return this.tabs.length;
   }
 
-  /** New tab running the user's shell, or `command` (argv) labelled `label`. */
-  async create(command?: string[], label?: string) {
+  /** New tab running the user's shell, or `command` (argv) labelled `label`; in `cwd` (a
+   *  folder of the workspace) when given, else the workspace root. */
+  async create(command?: string[], label?: string, cwd?: string) {
     const pane = h("div", { class: "term-pane" });
     this.host.append(pane);
     const view = new TermView(pane);
@@ -44,7 +45,7 @@ export class Terminals {
     this.tabs.push(t);
     this.show(t);
     const key = `drawer:${n}`;
-    ttys.add({ key, place: "drawer", label: label ?? `bash ${n}`, argv: command ?? null, root: this.root(), startedAt: Date.now() });
+    ttys.add({ key, place: "drawer", label: label ?? `bash ${n}`, argv: command ?? null, root: cwd ?? this.root(), startedAt: Date.now() });
     view.onExit = (code) => {
       tab.classList.add("exited");
       ttys.exited(key, code);
@@ -55,7 +56,7 @@ export class Terminals {
       else this.show(t);
     });
     try {
-      await view.spawn(command);
+      await view.spawn(command, cwd);
     } catch (e) {
       this.onError(`Terminal: ${errText(e)}`);
       ttys.exited(key, null);

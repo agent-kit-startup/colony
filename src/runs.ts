@@ -75,6 +75,8 @@ export interface Run {
   note: string;
   /** `run_start.protocol` ("" until it arrives). */
   protocol: string;
+  /** `run_end.reason` ("" until the run ends): a stop by request is keyed on it, not on the exit code. */
+  reason: string;
   /** The run reports token usage: its protocol is 1.3.0 or newer (usage.ts). */
   usageSupported: boolean;
   /** Tokens so far: the sum of `tick_end.usage`, replaced by `run_end.usage` when it
@@ -194,6 +196,7 @@ class RunStore {
       queue: null,
       note: opts.note?.trim() ?? "",
       protocol: "",
+      reason: "",
       usageSupported: false,
       usage: null,
     };
@@ -380,6 +383,7 @@ class RunStore {
       case "log":
         return this.row(run, String(ev.message ?? ""), ev.level === "error" ? "ag-err" : ev.level === "warn" ? "ag-warn" : "ag-dim");
       case "run_end":
+        run.reason = typeof ev.reason === "string" ? ev.reason : "";
         if (run.gate) this.setGate(run, null);
         if (run.usageSupported) {
           // The kit's run total is authoritative (run-plan: the ticks' sum; run-plan-all: the session).
