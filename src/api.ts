@@ -135,6 +135,10 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   createTextFile: (path: string, contents: string) => invoke<string>("create_text_file", { path, contents }),
+  /** Explorer file operations, jailed to the workspace (workspace.rs); Delete goes to the trash. */
+  createDir: (path: string) => invoke<string>("create_dir", { path }),
+  renamePath: (from: string, to: string) => invoke<string>("rename_path", { from, to }),
+  trashPath: (path: string) => invoke<void>("trash_path", { path }),
   /** Copy files dropped on the window into a workspace folder (dragdrop.rs). */
   dropCopy: (paths: string[], dir: string) => invoke<string[]>("drop_copy", { paths, dir }),
   dashboardStart: () => invoke<DashboardInfo>("dashboard_start"),
@@ -160,8 +164,8 @@ export const api = {
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
   commandsCatalog: () => invoke<CommandsCatalog>("commands_catalog"),
   chatSessions: (vendor = "claude") => invoke<ChatList>("chat_sessions", { vendor }),
-  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[]) =>
-    invoke<number>("pty_spawn", { cols, rows, command: command ?? null, onEvent }),
+  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[], cwd?: string) =>
+    invoke<number>("pty_spawn", { cols, rows, command: command ?? null, cwd: cwd ?? null, onEvent }),
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
