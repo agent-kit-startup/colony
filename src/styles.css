@@ -200,6 +200,8 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tree-row.editing { cursor: default; }
 .tree-row.editing:hover { background: transparent; }
 .tree-input { flex: 1; min-width: 0; font: inherit; color: var(--text-primary); background: transparent; border: 1px solid var(--blue); border-radius: var(--mc-radius-chrome); padding: 0 4px; outline: none; }
+/* Where a drag from the desktop would land (main.ts markDrop): a 1px border over it, no fill. */
+#drop-mark { position: fixed; z-index: 70; pointer-events: none; border: 1px solid var(--blue); border-radius: var(--mc-radius-sm); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
 .tree-row.dir .name { color: var(--text-primary); }
 

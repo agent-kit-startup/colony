@@ -35,7 +35,7 @@ import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq
 import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
-import { type DropHit, dropPoint, dropZone, terminalText } from "./droproute";
+import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
@@ -2135,9 +2135,35 @@ async function handleDrop(paths: string[], pos: { x: number; y: number }): Promi
   }
   return zone.kind;
 }
+// While a drag is held, #drop-mark (1px border, no fill, never hit by elementFromPoint)
+// sits over the element the drop would land in, or hides where a drop does nothing.
+const dropMark = document.createElement("div");
+dropMark.id = "drop-mark";
+dropMark.hidden = true;
+document.body.append(dropMark);
+function markDrop(pos: { x: number; y: number } | null) {
+  let target: Element | null = null;
+  if (pos) {
+    const pt = dropPoint(pos, navigator.userAgent.includes("Linux"), window.devicePixelRatio);
+    const el = document.elementFromPoint(pt.x, pt.y);
+    const zone = dropZone(el as DropHit | null, workspace?.root ?? null);
+    const rowFor = (dir: string) => document.querySelector(`#tree .tree-row.dir[data-path="${CSS.escape(dir)}"]`) as DropHit | null;
+    target = dropTarget(el as DropHit | null, zone, rowFor) as Element | null;
+  }
+  if (!target) {
+    dropMark.hidden = true;
+    return;
+  }
+  const r = target.getBoundingClientRect();
+  Object.assign(dropMark.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  dropMark.hidden = false;
+}
 let lastDrop: Promise<string> | null = null;
 void getCurrentWebview().onDragDropEvent((ev) => {
-  if (ev.payload.type === "drop") lastDrop = handleDrop(ev.payload.paths, ev.payload.position);
+  const p = ev.payload;
+  if (p.type === "enter" || p.type === "over") markDrop(p.position);
+  else markDrop(null);
+  if (p.type === "drop") lastDrop = handleDrop(p.paths, p.position);
 });
 
 window.addEventListener("beforeunload", (ev) => {
