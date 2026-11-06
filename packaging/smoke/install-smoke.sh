@@ -50,6 +50,21 @@ grep -q "signature ok (openssl" <<<"$out" || fail "openssl verifier not used: $o
 grep -q '^X-Colony-Install=1' "$home/.local/share/applications/colony.desktop" || fail "desktop entry"
 ok "install 0.0.1 from LATEST, openssl signature check, launcher, desktop entry"
 
+handler="$home/.local/share/applications/colony-handler.desktop"
+grep -qx 'MimeType=x-scheme-handler/colony;' "$handler" || fail "the link handler has no scheme"
+grep -qx "Exec=$home/.local/share/colony/app/current/colony %u" "$handler" || fail "the link handler does not take a URL"
+grep -qx 'NoDisplay=true' "$handler" || fail "the link handler shows in the app menu"
+grep -q ' %f$' "$home/.local/share/applications/colony.desktop" || fail "the app entry lost its folder argument"
+grep -q 'MimeType' "$home/.local/share/applications/colony.desktop" && fail "the app entry claims a scheme"
+# A stub xdg-mime on PATH, so the install's default is seen and nothing real is touched.
+mkdir -p "$work/withmime"
+cp -a "$work/nominisign/." "$work/withmime/"
+printf '#!/bin/sh\necho "$@" >> "%s"\n' "$work/xdg-mime.log" > "$work/withmime/xdg-mime"
+chmod 755 "$work/withmime/xdg-mime"
+env -i HOME="$home" PATH="$work/withmime" COLONY_DOWNLOAD_BASE="file://$work/base" sh "$work/install.sh" >/dev/null 2>&1 || fail "install with xdg-mime"
+grep -qx 'default colony-handler.desktop x-scheme-handler/colony' "$work/xdg-mime.log" || fail "xdg-mime default not set"
+ok "the link handler takes a colony:// URL and the app entry keeps its folder argument"
+
 if command -v minisign >/dev/null; then
   out="$(env -i HOME="$home" PATH="$path:$(dirname "$(command -v minisign)")" COLONY_DOWNLOAD_BASE="file://$work/base" sh "$work/install.sh" 2>&1)" || fail "minisign install: $out"
   grep -q "signature ok (minisign" <<<"$out" || fail "minisign verifier not used: $out"
@@ -97,9 +112,9 @@ ok "upgrade keeps exactly the previous version"
 
 mkdir -p "$home/.local/share/colony/engine/x"
 out="$(run sh "$work/install.sh" --uninstall 2>&1)" || fail "uninstall: $out"
-[[ ! -e "$home/.local/bin/colony" && ! -e "$home/.local/share/colony/app" && ! -e "$home/.local/share/applications/colony.desktop" ]] || fail "uninstall left files"
+[[ ! -e "$home/.local/bin/colony" && ! -e "$home/.local/share/colony/app" && ! -e "$home/.local/share/applications/colony.desktop" && ! -e "$home/.local/share/applications/colony-handler.desktop" ]] || fail "uninstall left files"
 [[ -d "$home/.local/share/colony/engine/x" ]] || fail "uninstall removed the engine"
-ok "uninstall removes app, launcher and desktop entry, keeps the engine"
+ok "uninstall removes app, launcher, desktop entry and link handler, keeps the engine"
 
 printf '#!/bin/sh\necho mine\n' > "$home/.local/bin/colony"
 out="$(run sh "$work/install.sh" 2>&1)" && fail "overwrote a foreign launcher"

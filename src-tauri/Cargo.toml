@@ -33,6 +33,7 @@ minisign-verify = "0.3"
 # Explorer Delete (workspace.rs trash_path): the freedesktop.org Trash on Linux, never a
 # permanent unlink (ADR 2026-10-15 amend 2026-10-29 point 2).
 trash = "5.2"
+tauri-plugin-deep-link = "2"
 
 [features]
 # Build-time distribution channel: `direct` (default; GitHub Releases, in-app updates of
