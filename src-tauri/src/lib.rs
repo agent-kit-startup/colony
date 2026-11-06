@@ -7,6 +7,7 @@ mod catalog;
 mod chats;
 mod context;
 mod dashboard;
+mod deeplink;
 mod dragdrop;
 mod engine;
 mod forge;
@@ -146,9 +147,7 @@ fn scrub_parent_session_env() {
 }
 
 fn initial_workspace() -> Option<String> {
-    std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-'))
+    deeplink::folder_arg(std::env::args().skip(1))
         .and_then(|a| PathBuf::from(a).canonicalize().ok())
         .filter(|p| p.is_dir())
         .map(|p| p.display().to_string())
@@ -224,6 +223,12 @@ pub fn run() {
     if std::env::args().nth(1).as_deref() == Some("status") {
         std::process::exit(omarchy_shell::cli_main());
     }
+    // A link comes from a web page, so anything but `colony://play` ends here: no window, no
+    // folder, no dialog and nothing sent to a running window.
+    if deeplink::classify(std::env::args().skip(1)) == deeplink::Link::Refused {
+        eprintln!("colony: refused a link: only {} is accepted", deeplink::PLAY_URL);
+        std::process::exit(2);
+    }
     // Single instance: a running window for this binary and engine takes the request
     // (it raises itself and opens the folder, if any) and this process ends here.
     #[cfg(unix)]
@@ -253,6 +258,7 @@ pub fn run() {
     };
 
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
     let app = appupdate::register(builder)
@@ -353,6 +359,14 @@ pub fn run() {
         ])
         .setup(move |app| {
             host_requests.start_watcher();
+            // An AppImage has no installer to write its desktop entry. The other installs
+            // register the scheme when they install (packaging/install.sh, the .deb).
+            if app.env().appimage.is_some() && std::env::var_os("COLONY_SMOKE").is_none() {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register_all() {
+                    eprintln!("colony: could not register the colony:// link: {e}");
+                }
+            }
             #[cfg(unix)]
             if let Some((listener, path)) = instance {
                 let handle = app.handle().clone();

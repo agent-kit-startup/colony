@@ -2,6 +2,7 @@
 # Install a per-user launcher for a local Colony build (no sudo):
 #   ~/.local/bin/colony                          wrapper around the release binary
 #   ~/.local/share/applications/colony.desktop   app launcher entry (walker / rofi / GNOME)
+#   ~/.local/share/applications/colony-handler.desktop   the colony://play link
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="$repo/src-tauri/target/release/colony"
@@ -25,5 +26,17 @@ Terminal=false
 Categories=Development;IDE;
 StartupWMClass=colony
 DESK
+cat > "$HOME/.local/share/applications/colony-handler.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=Colony
+Comment=Opens the game in Colony from a colony://play link
+Exec=$bin %u
+Icon=$icon
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/colony;
+DESK
 command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+command -v xdg-mime >/dev/null && xdg-mime default colony-handler.desktop x-scheme-handler/colony >/dev/null 2>&1 || true
 echo "Installed: $HOME/.local/bin/colony and $HOME/.local/share/applications/colony.desktop"

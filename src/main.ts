@@ -3426,12 +3426,16 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
   await api.smokeExit();
 }
 
-/** `colony --inbox` / `colony --open-folder` (menu entries, bar widget): show that view. */
+/** `colony --inbox` / `colony --open-folder` (menu entries, bar widget) and the `colony://play` link: show that view. */
 function showView(view: string) {
   if (view === "inbox") {
     if (workspace) showTab("inbox");
     else status("Open a folder first: the Inbox belongs to a folder");
   } else if (view === "open-folder") void pickFolder();
+  else if (view === "play") {
+    if (workspace) showTab("colony");
+    else status("Open a folder first: the game belongs to a folder");
+  }
 }
 
 // ---- boot ------------------------------------------------------------------------------
