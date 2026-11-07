@@ -39,6 +39,7 @@ import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./d
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
 import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
+import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
@@ -2741,6 +2742,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       return { edge, lbls, named, width: Math.round(r.width) };
     };
     const rail: Record<string, unknown> = {};
+    // Labels on: every label reads as whole words in each rail position and dock (rail-labels-whole).
+    const railWhole: Record<string, RailFit> = {};
     for (const d of ["bottom", "side", "top"] as Dock[]) {
       await api.smokeMenuClick(`dock:${d}`);
       await until(() => dock() === d, 2000);
@@ -2750,6 +2753,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           settingRow(`rail-labels][data-labels=${labels ? "on" : "off"}`);
           await wait(120);
           rail[`${d} ${pos} ${labels ? "labels" : "icons"}`] = railCase(pos, labels);
+          if (labels) railWhole[`${d} ${pos}`] = railFit($("rail"));
         }
       }
     }
@@ -2921,6 +2925,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     $("shell").style.height = "600px";
     await wait(200);
     const railSmall = { icons: await railAt(false), labels: await railAt(true) };
+    railWhole["1024x600 left"] = railFit($("rail"));
     $("shell").style.width = "";
     $("shell").style.height = "";
     await wait(150);
@@ -2928,6 +2933,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     showTab("mission");
     const railSmallOk = Object.values(railSmall).every((v) => v.fadeOk && v.reachable && v.activeInView);
     await log("rail-scroll-1024x600", railSmallOk, { emulated: "shell held at 1024x600 px", ...railSmall });
+    // Plan colony-rail-labels-whole-words: no label breaks inside a word ("Processe/s"), none
+    // runs past its item, and the rail never scrolls sideways, at the window size and at 1024x600.
+    const railWholeBad = Object.entries(railWhole).flatMap(([k, f]) => (f.ok ? [] : [{ case: k, railOverflowX: f.railOverflowX, labels: f.labels.filter((l) => l.broken.length || l.overflow) }]));
+    await log("rail-labels-whole", Object.keys(railWhole).length === 7 && !railWholeBad.length, { cases: Object.keys(railWhole), bad: railWholeBad });
     // Ctrl+1..9 open the first nine items; arrow keys move the focus along the rail.
     (document.activeElement as HTMLElement | null)?.blur();
     const ctrl: Record<string, unknown> = {};

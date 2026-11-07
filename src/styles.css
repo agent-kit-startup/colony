@@ -61,7 +61,9 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
    at the bottom, the top or the side by data-dock; #resizer is its splitter). A hidden
    Explorer's tracks collapse to 0; a closed terminal drawer keeps its bar (no-bottom). */
 #shell {
-  --rail-w: 68px;
+  /* Labels on: the widest word, Workspace, is 58.75px at 11px in Adwaita Sans (system-ui on
+     GNOME/Omarchy); the item's content box is --rail-w minus 15px (rail 4+4+1, item 2+2+1+1). */
+  --rail-w: 76px;
   --side-w: 240px;
   --bottom-h: 200px;
   --term-w: min(480px, 38vw);
@@ -174,7 +176,8 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.on { color: var(--text-primary); }
 .rail-item.on .rail-icon { color: var(--green); }
 #tabs.tabbar-empty { display: none; }
-.rail-item .lbl { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
+/* Whole words only: a label wraps between words (Flight Log), never inside one. */
+.rail-item .lbl { max-width: 100%; text-align: center; }
 .rail-icon-wrap { position: relative; display: inline-flex; }
 .rail-icon { width: 16px; height: 16px; }
 .rail-item.active .rail-icon { color: var(--blue); }
