@@ -221,6 +221,9 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 #welcome h1 { display: flex; align-items: center; gap: 12px; margin: 0; font-weight: 600; }
 #recents { display: flex; flex-direction: column; gap: 4px; align-items: stretch; min-width: 360px; margin-top: 12px; }
 button.recent { text-align: left; font-family: var(--mc-font-mono); font-size: 12px; background: transparent; }
+.recent-row { display: flex; gap: 4px; align-items: stretch; }
+.recent-row button.recent { flex: 1; min-width: 0; }
+button.recent-new { flex: none; font-size: 12px; background: transparent; }
 
 .panel { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 10px; min-height: 0; }
 .panel-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

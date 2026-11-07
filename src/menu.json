@@ -4,6 +4,7 @@
     {
       "label": "File",
       "items": [
+        { "id": "new-window", "label": "New window" },
         { "id": "open-folder", "label": "Open folder…" },
         { "id": "run-elsewhere", "label": "Run plan in another folder…" },
         { "separator": true },

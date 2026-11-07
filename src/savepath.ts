@@ -7,6 +7,7 @@
 export const SHORTCUTS: Readonly<Record<string, string>> = {
   save: "Ctrl+S",
   "open-folder": "Ctrl+O",
+  "new-window": "Ctrl+Shift+N",
   "quick-open": "Ctrl+P",
   commands: "Ctrl+Shift+P",
   "open-in-editor": "Ctrl+Shift+E",

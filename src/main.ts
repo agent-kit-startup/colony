@@ -16,7 +16,7 @@ import { ask, open } from "@tauri-apps/plugin-dialog";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { DriverChat, type DriverChatHost } from "./driverchat";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
@@ -1683,6 +1683,7 @@ function applyTitleBar(info: StartupInfo) {
 
 // ---- actions: the native menu bar and Workspace → Config (src/menu.json), and the palette -
 const ACTIONS: Record<string, () => unknown> = {
+  "new-window": () => newWindow(),
   "open-folder": () => pickFolder(),
   "run-elsewhere": () => controls.startElsewhere(),
   "new-file": () => newItem("file"),
@@ -1923,9 +1924,27 @@ function renderRecents() {
     ...list.map((r) => {
       const b = h("button", { class: "recent" }, r);
       b.addEventListener("click", () => void openWorkspace(r));
-      return b;
+      const nw = h("button", { class: "recent-new", title: `Open ${r} in a new window`, "aria-label": `Open ${r} in a new window` }, "New window");
+      nw.addEventListener("click", () => void newWindow(r));
+      return h("div", { class: "recent-row" }, b, nw);
     }),
   );
+}
+
+/** The last New window this window started (the smoke reads it). */
+let lastNewWindow: NewWindowLaunch | null = null;
+
+/** File → New window (Ctrl+Shift+N), or a recent folder's New window: another Colony process
+ *  with `--new-instance` (newwindow.rs). This window keeps its folder and its single-instance
+ *  socket, so the desktop entry still focuses it. No folder: the new window opens on welcome. */
+async function newWindow(folder?: string) {
+  try {
+    lastNewWindow = await api.spawnNewWindow(folder);
+    status(folder ? `Opening ${folder} in a new window` : "Opening a new window");
+  } catch (e) {
+    status(`New window: ${errText(e)}`);
+  }
+  return lastNewWindow;
 }
 
 async function pickFolder() {
@@ -2066,6 +2085,7 @@ window.addEventListener(
     else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
+    else if (key === "n" && ev.shiftKey) runAction("new-window");
     else if (!ev.shiftKey && !inTerm && /^[1-9]$/.test(key) && workspace) {
       // Ctrl+1..9: the first nine rail items (Ctrl+` toggles the terminal drawer).
       const r = RAIL.find((x) => x.id === CTRL_DIGITS[Number(key) - 1]);
@@ -2798,6 +2818,25 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       proof = await api.readTextFile(`${root}/editor-proof.txt`).catch(() => "");
     }
     await log("open-in-editor", proof.trim() === `opened ${file}`, { launch, proof: proof.trim() });
+    // File → New window and a recent folder's New window: the smoke gets the plan and starts
+    // nothing (newwindow.rs); this window keeps its folder either way.
+    {
+      const before = workspace?.root;
+      lastNewWindow = null;
+      await api.smokeMenuClick("new-window");
+      await until(() => !!lastNewWindow, 3000);
+      const bare = lastNewWindow as NewWindowLaunch | null;
+      const withFolder = await newWindow(root);
+      const missing = await api.spawnNewWindow(`${root}/no-such-folder`).then(() => "started", (e) => errText(e));
+      const rows = $("recents").querySelectorAll(".recent-row").length;
+      const ok =
+        !!bare && bare.argv.length === 2 && bare.argv[1] === "--new-instance" && !bare.spawned &&
+        !!withFolder && withFolder.argv.slice(1).join(" ") === `--new-instance ${root}` && !withFolder.spawned &&
+        missing !== "started" &&
+        rows === $("recents").querySelectorAll(".recent-new").length &&
+        workspace?.root === before;
+      await log("new-window", ok, { bare, withFolder, missing, recentRows: rows, keptWorkspace: workspace?.root === before });
+    }
     // Command palette: the kit's catalog (the fake agent-kit's fixture, or a real engine),
     // run only for PROMPT_SLASH names, copy for the rest, markup shown as text. An engine
     // without the catalog must show the Update-the-engine gate and no rows.
@@ -3463,7 +3502,9 @@ api
     renderTitleBarMenu();
     const savedLayout = await loadLayout();
     await loadSkin();
-    const start = info.initialWorkspace ?? recents()[0];
+    // A New window with no folder opens on the welcome screen: the window that started it
+    // already has the last folder open.
+    const start = info.initialWorkspace ?? (info.newInstance ? undefined : recents()[0]);
     if (start) await openWorkspace(start);
     // Single instance: `colony <folder>` from a terminal or launcher while this window
     // runs raises it (Rust side) and opens that folder here, after the startup folder.
