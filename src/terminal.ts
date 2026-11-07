@@ -22,6 +22,8 @@ export interface AdoptedHooks {
 export interface Released {
   key: string;
   label: string;
+  /** The drawer tab's tooltip (a shell's argv). */
+  tip?: string;
   view: TermView;
   /** The element that sat in the drawer (the pane of a shell; a centre PTY's own element). */
   el: HTMLElement;
@@ -32,6 +34,7 @@ export interface Released {
 interface Tab {
   key: string;
   label: string;
+  tip: string;
   view: TermView;
   el: HTMLElement;
   tab: HTMLElement;
@@ -92,7 +95,7 @@ export class Terminals {
   adopt(r: Released) {
     r.el.hidden = false;
     this.host.append(r.el);
-    this.add(r, r.hooks?.tip ?? "");
+    this.add(r, r.hooks?.tip ?? r.tip ?? "");
   }
 
   /** Take a terminal out of the drawer without stopping it (it moves to the editor area). */
@@ -101,13 +104,13 @@ export class Terminals {
     if (!t) return null;
     this.drop(t);
     t.el.style.display = "";
-    return { key: t.key, label: t.label, view: t.view, el: t.el, hooks: t.hooks };
+    return { key: t.key, label: t.label, tip: t.tip, view: t.view, el: t.el, hooks: t.hooks };
   }
 
   private add(r: Released, tip: string): Tab {
     const tab = h("button", { class: "tab", title: tip });
     tab.dataset.key = r.key;
-    const t: Tab = { key: r.key, label: r.label, view: r.view, el: r.el, tab, hooks: r.hooks };
+    const t: Tab = { key: r.key, label: r.label, tip, view: r.view, el: r.el, tab, hooks: r.hooks };
     this.renderTab(t);
     this.tabBar.insertBefore(tab, this.tabBar.querySelector(".tab-add"));
     tab.addEventListener("click", (ev) => {
@@ -167,7 +170,8 @@ export class Terminals {
 
   private show(t: Tab) {
     this.active = t;
-    for (const x of this.tabs) x.el.style.display = x === t ? "block" : "none";
+    // "" for the shown one: a pane is a block, a moved centre PTY's element keeps its flex.
+    for (const x of this.tabs) x.el.style.display = x === t ? "" : "none";
     this.refresh();
     requestAnimationFrame(() => {
       this.fitActive();

@@ -1116,6 +1116,8 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
 // close; a drawer shell keeps its last-folder close. The placement lasts until the tab closes.
 /** Centre tabs held by the drawer, put back as they were when they move back. */
 const parkedTabs = new Map<string, Tab>();
+/** A drawer shell's own tooltip (its argv) while it sits in the editor area. */
+const shellTips = new Map<string, string>();
 
 function ptyPlace(id: string): Place | null {
   if (!isPtyTab(id)) return null;
@@ -1150,7 +1152,8 @@ function movePty(id: string, to: Place): boolean {
     centerTerms.delete(id);
     if (id.startsWith("drawer:")) {
       // A shell going home: its pane back into the drawer, the editor-area wrapper dropped.
-      terminals.adopt({ key: id, label: t.label, view, el: view.pane });
+      terminals.adopt({ key: id, label: t.label, tip: shellTips.get(id), view, el: view.pane });
+      shellTips.delete(id);
       t.el.remove();
     } else {
       parkedTabs.set(id, t);
@@ -1178,6 +1181,7 @@ function movePty(id: string, to: Place): boolean {
   } else {
     const r = terminals.release(id)!;
     centerTerms.set(id, r.view);
+    if (!r.hooks && r.tip) shellTips.set(id, r.tip);
     const parked = parkedTabs.get(id);
     parkedTabs.delete(id);
     if (parked) addTab(parked);
