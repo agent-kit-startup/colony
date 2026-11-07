@@ -1,0 +1,50 @@
+---
+description: Voice for public copy about Colony (launch posts, landing text, social, release notes read by outsiders). Reference post, sentence rules, anti-patterns. Apply whenever asked to write about the product for an external audience.
+alwaysApply: false
+---
+
+# Public copy voice
+
+Reference model: Cursor's launch posts. One true sentence about the gap, then what you can now do, then how it works, then availability. Plain declaratives. No story, no hook, no "we built".
+
+## Reference post (operator-approved, 2026-11-07)
+
+Keep this as the canonical sample. New copy should read like a sibling of it.
+
+> Agents in Colony handle short plans or long-term projects on their own. Steer them as you need with almost zero context degradation.
+>
+> Open a project, select a plan, and press Run. Work starts in a Drive mode tab. Mission Control tracks each run tick. Questions or blockers appear in the Flight Log so you can act. The Crew Monitor shows the live activity of each headless agent.
+>
+> Colony collects no telemetry and reads only the folder you open. You can view the raw execution of each step. Hooks and guards protect the environment outside the agent's reach.
+>
+> The IDE features autonomous queues and reviews, Git, CI/CD, and deployment integration, so you can go from plan to production from one app.
+>
+> Harnessed and driven by the agent-kit open protocol, works with your Claude Code, Codex, Cursor, or OpenRouter subscription. If you don't find the integration you want, just open a PR.
+>
+> Open source under Apache 2.0 on alpha cockpit. Find the install command on our website.
+
+## Structure
+
+1. Capability statement, two sentences max. What the agents do, how the user steers.
+2. The loop in imperatives: open, select, press. Then one sentence per surface the user will see (tab, Mission Control, Flight Log, Crew Monitor). Name the real feature.
+3. Trust line: telemetry, folder scope, raw execution, hooks and guards.
+4. Scope of the IDE in one sentence ending in the outcome (plan to production, one app).
+5. Protocol and vendors by name. Invite PRs.
+6. License, status, where to get it.
+
+## Sentence rules
+
+- One idea per sentence. Subject, verb, object. Period.
+- No subordinate pile-ups. Count "what", "which", "when", "that", "so you can" before sending; more than one per paragraph is a rewrite.
+- Name features by their product name (Drive mode, Mission Control, Flight Log, Crew Monitor, Run plan, Run queue). Do not paraphrase them.
+- Second person for the user. The product is the subject when it acts.
+- No em dashes. Commas, periods, parentheses.
+- No adjectives doing the work a feature name should do.
+
+## Anti-patterns (rejected in review)
+
+- Rewording the reference post of another company and swapping nouns. Build the narrative from Colony's own features.
+- Opening with an anecdote ("You start an agent... an hour later...") or a slogan ("We built Colony for that hour").
+- Clauses chained with what/which/when to describe three features in one sentence.
+- Marketing vocabulary (seamless, powerful, effortless, supercharge) and the words listed in the operator's style preferences (testament to, plays a vital role, rich tapestry, "it's not X, it's Y", trailing "ensuring..." / "highlighting...").
+- Social proof lines with no source. If there is no concrete user or team to name, drop the paragraph.
