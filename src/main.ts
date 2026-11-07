@@ -578,6 +578,7 @@ async function saveActive() {
     status(`Saved ${relPath(p)}`);
     if (p.endsWith("/settings.json") && !p.startsWith(`${workspace?.root}/`)) void loadSkin();
     void gitView.panel.refresh();
+    tree.refreshMarks();
   } catch (e) {
     status(`Save failed: ${relPath(activeTab)}: ${errText(e)}`);
   }
@@ -1833,13 +1834,19 @@ snapshot.on((why) => {
   renderTopActions();
   if (why === "data") {
     renderTabs();
+    // Mission Control watches the repository: a new snapshot is the cue to re-read the
+    // Explorer's git marks (debounced, one git status call).
+    tree.refreshMarks();
     // A plan shown rendered: its to-do table follows the snapshot (rebuilt only on a change).
     if (tabs.get(activeTab)?.mode === "preview") renderDocMode(activeTab, false);
   }
 });
 setInterval(renderFeed, 5000);
 // Back from the agent or a terminal elsewhere: the readiness report may have changed.
-window.addEventListener("focus", () => void readiness.load(2000));
+window.addEventListener("focus", () => {
+  void readiness.load(2000);
+  tree.refreshMarks(); // a commit or an edit made in another program
+});
 
 // ---- quick open ------------------------------------------------------------------------
 let quickFiles: string[] = [];

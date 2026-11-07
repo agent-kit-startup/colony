@@ -1,6 +1,8 @@
 // Explorer: lazy file tree of the opened workspace. Clicking a row selects it (the target
 // folder of New file / New folder); names for a new item or a rename are typed inline.
+// Each row carries its git mark (src/gitmarks.ts), refreshed in place without a re-render.
 import { api, errText, h, type Entry } from "./api";
+import { buildMarkIndex, debounce, type MarkIndex } from "./gitmarks";
 
 /** Right-click on a row (`path` set) or on the empty Explorer (`path` null: the root). */
 export type TreeContext = { path: string | null; isDir: boolean; x: number; y: number };
@@ -18,6 +20,11 @@ export class FileTree {
    *  the field never vanishes under the typing. */
   private editing = false;
   private refreshWanted = false;
+  /** The last git marks read (empty outside a repository). */
+  private marks: MarkIndex = buildMarkIndex([]);
+  private marksSeq = 0;
+  /** One `git_marks` call per burst of refresh requests (focus, snapshot, save, git panel). */
+  readonly refreshMarks = debounce(() => void this.loadMarks(), 400);
 
   constructor(
     private el: HTMLElement,
@@ -49,6 +56,44 @@ export class FileTree {
     this.dirs.clear();
     const list = await this.renderDir(this.root, 0);
     this.el.replaceChildren(list);
+    this.refreshMarks();
+  }
+
+  /** Read the marks (one git status call for the whole repository) and paint every row. */
+  private async loadMarks() {
+    if (!this.root) return;
+    const seq = ++this.marksSeq;
+    let next: MarkIndex;
+    try {
+      const r = await api.gitMarks();
+      next = buildMarkIndex(r.isRepo ? r.marks : []);
+    } catch {
+      next = buildMarkIndex([]); // no git, or git failed: no marks, never an error dialog
+    }
+    if (seq !== this.marksSeq) return; // a newer read is on its way
+    this.marks = next;
+    for (const row of this.el.querySelectorAll<HTMLElement>(".tree-row[data-path]")) this.paintMark(row);
+  }
+
+  /** The row's letter (coloured by its skin token in CSS), title and ignored dimming. */
+  private paintMark(row: HTMLElement) {
+    const path = row.dataset.path;
+    if (!path) return;
+    const m = this.marks.get(path, row.classList.contains("dir"));
+    row.classList.toggle("git-ignored", m.ignored);
+    let badge = row.querySelector<HTMLElement>(".git-mark");
+    if (!m.letter) {
+      badge?.remove();
+      row.title = m.ignored ? `${path} (ignored)` : path;
+      return;
+    }
+    if (!badge) {
+      badge = h("span", { class: "git-mark", "aria-hidden": "true" });
+      row.append(badge);
+    }
+    badge.textContent = m.letter;
+    badge.dataset.mark = m.letter;
+    row.title = `${path} (${m.title})`;
   }
 
   setActive(path: string) {
@@ -138,6 +183,7 @@ export class FileTree {
       row.style.paddingLeft = `${8 + depth * 12}px`;
       const caret = h("span", { class: "caret" }, entry.isDir ? (this.expanded.has(entry.path) ? "▾" : "▸") : "");
       row.append(caret, h("span", { class: "name" }, entry.name));
+      this.paintMark(row);
       if (entry.path === this.active) row.classList.add("active");
       if (entry.path === this.selected?.path) row.classList.add("selected");
       row.addEventListener("contextmenu", (ev) => {
