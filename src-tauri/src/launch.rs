@@ -76,8 +76,19 @@ fn plan(cfg: &settings::EditorSettings, env: impl Fn(&str) -> Option<String>, pa
 
 /// Start a GUI program in its own session with no stdio, so it outlives Colony.
 fn spawn_detached(argv: &[String], cwd: &Path) -> Result<(), String> {
+    spawn_detached_env(argv, cwd, &[])
+}
+
+/// `spawn_detached` with environment changes: `(name, Some(value))` sets, `(name, None)` removes.
+pub(crate) fn spawn_detached_env(argv: &[String], cwd: &Path, env: &[(String, Option<String>)]) -> Result<(), String> {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    for (k, v) in env {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

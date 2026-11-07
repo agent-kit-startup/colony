@@ -20,6 +20,7 @@ mod instance;
 mod launch;
 mod mcdata;
 mod menu;
+mod newwindow;
 mod omarchy;
 mod omarchy_shell;
 mod pty;
@@ -62,6 +63,9 @@ struct StartupInfo {
     initial_workspace: Option<String>,
     /// `--inbox` / `--open-folder` on a first launch: the view to show once the folder is open.
     initial_view: Option<String>,
+    /// `--new-instance` (File → New window): with no folder this window opens on the welcome
+    /// screen, not on the last folder (the window that spawned it has that one open).
+    new_instance: bool,
     webkit_dmabuf: String,
     path_added: Vec<String>,
     agent_kit: Option<String>,
@@ -246,6 +250,7 @@ pub fn run() {
         version: env!("CARGO_PKG_VERSION").into(),
         initial_workspace: initial_workspace(),
         initial_view: instance::view_arg(std::env::args().skip(1)),
+        new_instance: instance::skips_socket(std::env::args().skip(1)),
         webkit_dmabuf: dmabuf,
         path_added: added.iter().map(|p| p.display().to_string()).collect(),
         agent_kit: engine::kit_command().ok().map(|k| format!("{} ({})", k.display(), k.source)),
@@ -348,6 +353,7 @@ pub fn run() {
             settings::settings_title_bar,
             settings::settings_set_layout,
             launch::open_in_editor,
+            newwindow::spawn_new_window,
             omarchy::omarchy_subscribe,
             omarchy_shell::omarchy_integration_plan,
             omarchy_shell::omarchy_integration_apply,

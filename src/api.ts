@@ -6,6 +6,8 @@ export interface StartupInfo {
   initialWorkspace: string | null;
   /** `colony --inbox`, `colony --open-folder` or the `colony://play` link on a first launch. */
   initialView: string | null;
+  /** `--new-instance` (File → New window): with no folder, open on the welcome screen. */
+  newInstance: boolean;
   webkitDmabuf: string;
   pathAdded: string[];
   agentKit: string | null;
@@ -18,6 +20,8 @@ export interface StartupInfo {
   /** A tiling window manager (Hyprland, sway, niri, i3), or null. */
   tilingWm: string | null;
 }
+/** File → New window (newwindow.rs): what was started; `spawned` is false on a smoke run. */
+export interface NewWindowLaunch { argv: string[]; engine: string | null; spawned: boolean }
 /** One menu of the native menu bar, read back from the window (menu.rs menu_state). */
 export interface MenuState { label: string; items: { id: string; label: string; enabled: boolean }[] }
 /** settings.json `ui.layout` (settings.rs LayoutSettings): unset fields keep the defaults. */
@@ -200,6 +204,8 @@ export const api = {
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
+  /** A new Colony window on `folder`, or on the welcome screen (newwindow.rs). */
+  spawnNewWindow: (folder?: string) => invoke<NewWindowLaunch>("spawn_new_window", { folder: folder ?? null }),
   reviewTicks: () => invoke<TickReview[]>("review_ticks"),
   reviewFile: (runId: number, tick: number, path: string, oldPath?: string) =>
     invoke<FileVersions>("review_file", { runId, tick, path, oldPath: oldPath ?? null }),

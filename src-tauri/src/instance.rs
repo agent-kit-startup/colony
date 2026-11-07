@@ -68,7 +68,7 @@ pub fn socket_path() -> Option<PathBuf> {
     if std::env::var_os("COLONY_SMOKE").is_some_and(|s| !s.is_empty()) {
         return None;
     }
-    if std::env::args().skip(1).any(|a| a == "--new-instance") {
+    if skips_socket(std::env::args().skip(1)) {
         return None;
     }
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").filter(|s| !s.is_empty())?);
@@ -78,6 +78,12 @@ pub fn socket_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let engine = std::env::var("COLONY_ENGINE").unwrap_or_default();
     Some(runtime.join(format!("colony-{}.sock", instance_key(&exe, &engine))))
+}
+
+/// `--new-instance` (`colony --new-instance`, File → New window): a window of its own, which
+/// neither asks the running window nor takes its socket.
+pub fn skips_socket<I: IntoIterator<Item = String>>(args: I) -> bool {
+    args.into_iter().any(|a| a == crate::newwindow::NEW_INSTANCE)
 }
 
 /// Stable short key for (binary, engine).
