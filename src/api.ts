@@ -4,7 +4,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 export interface StartupInfo {
   version: string;
   initialWorkspace: string | null;
-  /** `colony --inbox` / `colony --open-folder` on a first launch. */
+  /** `colony --inbox`, `colony --open-folder` or the `colony://play` link on a first launch. */
   initialView: string | null;
   webkitDmabuf: string;
   pathAdded: string[];

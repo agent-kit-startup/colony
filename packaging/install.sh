@@ -28,6 +28,7 @@
 #   ${XDG_DATA_HOME:-~/.local/share}/colony/app/current      symlink to the version in use
 #   ~/.local/bin/colony                                      launcher
 #   ${XDG_DATA_HOME:-~/.local/share}/applications/colony.desktop
+#   ${XDG_DATA_HOME:-~/.local/share}/applications/colony-handler.desktop  the colony://play link
 #
 # Environment:
 #   COLONY_DOWNLOAD_BASE  download base, https:// or file:// (default: the GitHub
@@ -52,6 +53,7 @@ app_root="$data_home/colony/app"
 bin_dir="${COLONY_BIN_DIR:-$HOME/.local/bin}"
 launcher="$bin_dir/colony"
 desktop="$data_home/applications/colony.desktop"
+url_handler="$data_home/applications/colony-handler.desktop"
 marker="# colony-install launcher"
 
 usage() {
@@ -93,6 +95,9 @@ uninstall() {
   fi
   if [ -f "$desktop" ] && grep -q "^X-Colony-Install=1" "$desktop" 2>/dev/null; then
     rm -f "$desktop"; say "removed $desktop"; removed=1
+  fi
+  if [ -f "$url_handler" ] && grep -q "^X-Colony-Install=1" "$url_handler" 2>/dev/null; then
+    rm -f "$url_handler"; say "removed $url_handler"; removed=1
   fi
   [ "$removed" = 1 ] || say "nothing to remove"
   say "left in place (delete by hand if you want them gone):"
@@ -247,7 +252,23 @@ Categories=Development;IDE;
 StartupWMClass=colony
 X-Colony-Install=1
 EOF
+# The colony:// link has its own entry: %u hands this app a URL, and the entry above keeps %f
+# so a file manager still hands it a folder path. The app accepts colony://play and refuses
+# anything else (src-tauri/src/deeplink.rs).
+cat > "$url_handler" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Colony
+Comment=Opens the game in Colony from a colony://play link
+Exec=$app_root/current/colony %u
+Icon=$app_root/current/colony.png
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/colony;
+X-Colony-Install=1
+EOF
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$desktop")" >/dev/null 2>&1 || true
+command -v xdg-mime >/dev/null 2>&1 && xdg-mime default colony-handler.desktop x-scheme-handler/colony >/dev/null 2>&1 || true
 
 # Keep the version just replaced (to go back: --version <it>), drop older ones.
 for old in "$app_root"/*; do

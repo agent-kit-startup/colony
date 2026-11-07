@@ -38,8 +38,10 @@ struct Request {
     view: Option<String>,
 }
 
-/// The views a launch may ask the running window to show.
-pub const VIEWS: &[(&str, &str)] = &[("--inbox", "inbox"), ("--open-folder", "open-folder")];
+/// The views a launch may ask the running window to show. `colony://play` is the one link
+/// Colony accepts (deeplink.rs): it travels this socket like any other view, with no payload.
+pub const VIEWS: &[(&str, &str)] =
+    &[("--inbox", "inbox"), ("--open-folder", "open-folder"), (crate::deeplink::PLAY_URL, "play")];
 
 /// The view the command line asks for (`--inbox` / `--open-folder`), if any.
 pub fn view_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
@@ -305,6 +307,28 @@ mod tests {
         BufReader::new(c).read_line(&mut r).unwrap();
         assert_eq!(serde_json::from_str::<Reply>(r.trim()).unwrap(), Reply { handled: true });
         assert_eq!(*seen.lock().unwrap(), vec![Some("inbox".to_string()), None]);
+    }
+
+    #[test]
+    fn colony_play_reaches_a_running_window_as_a_view_and_nothing_else_does() {
+        assert_eq!(view_arg(["colony://play".to_string()]), Some("play".into()));
+        for bad in ["colony://play?x=1", "colony://play/", "colony://Play", "colony:play", "play"] {
+            assert_eq!(view_arg([bad.to_string()]), None, "{bad}");
+        }
+        let path = sock("play");
+        let Claim::Primary(listener, _) = claim_at(&path, None, None) else { panic!("primary") };
+        let inbox = Arc::new(Inbox::default());
+        let seen = inbox.clone();
+        serve(listener, move |_, view| {
+            if let Some(v) = view {
+                seen.show(&v);
+            }
+            true
+        });
+        assert!(matches!(claim_at(&path, None, Some("play")), Claim::Forwarded));
+        // The socket is local, but the window still only shows the views it knows.
+        assert!(matches!(claim_at(&path, None, Some("colony://play?x=1")), Claim::Forwarded));
+        assert_eq!(inbox.inner.lock().unwrap().pending, vec![InstanceEvent::Show { view: "play".into() }]);
     }
 
     #[test]

@@ -49,6 +49,8 @@ curl -fsSL https://github.com/agent-kit-startup/colony/releases/latest/download/
 
 `packaging/install.sh` checks the release signature (minisign key `9A9BB4349C2248C6`, with `minisign` or OpenSSL 3) and the sha256 before it installs anything, installs per user without sudo, and `--uninstall` removes it again. `Help → About Colony…` shows the version and the distribution channel: the AppImage of a release updates itself in place (signed, user-started); a tarball install updates by running the install line again; distro packages update through the package manager. Releases come from a pushed `v<version>` tag (`.github/workflows/release.yml`) and live in this repository's GitHub Releases; `install.sh` installs the Latest one unless `--version` names another. `https://colony.missionkit.io/install.sh` is meant to redirect to the URL above (not set up yet). See [docs/release.md](docs/release.md) for the release files, the identity checklist and the install smoke.
 
+The installer also registers the `colony://play` link in `colony-handler.desktop`, the `.deb` declares it in its desktop entry, and an AppImage registers it when it runs. A web page can open the game with that link. Colony accepts that exact URL with no parameters and refuses anything else (`src-tauri/src/deeplink.rs`).
+
 ## Requirements (Linux)
 
 - Rust stable via rustup (`~/.cargo/bin` on PATH for builds).
@@ -74,7 +76,7 @@ pnpm tauri build
 packaging/install-local-launcher.sh
 ```
 
-This writes `~/.local/bin/colony` (wrapper around `src-tauri/target/release/colony`) and `~/.local/share/applications/colony.desktop`, so Colony shows up in the app launcher. `colony ~/code/some-repo` opens a folder directly. Rebuilding updates the same binary; the launcher does not need to be reinstalled.
+This writes `~/.local/bin/colony` (wrapper around `src-tauri/target/release/colony`) and `~/.local/share/applications/colony.desktop`, so Colony shows up in the app launcher, and `colony-handler.desktop` for the `colony://play` link. `colony ~/code/some-repo` opens a folder directly. Rebuilding updates the same binary; the launcher does not need to be reinstalled.
 
 ## Omarchy
 
