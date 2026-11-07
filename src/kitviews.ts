@@ -181,7 +181,9 @@ export class TerminalsView extends View {
       const [label, cls] = TTY_STATE[s.state];
       const acts: HTMLElement[] = [];
       if (s.state !== "closed") acts.push(btn("Focus", () => this.term.focus(s), { class: "link", "data-act": "focus", title: s.place === "drawer" ? "Show this shell in the drawer" : "Show this terminal tab" }));
-      if (s.place === "drawer" && s.state !== "open" && (!s.root || s.root === root)) acts.push(btn("Reopen", () => this.term.reopen(s), { class: "link", "data-act": "reopen", title: `A new ${s.argv ? s.argv.join(" ") : "shell"} in the drawer, in the opened folder` }));
+      // Reopen: drawer shells only (by key: a shell may sit in the editor area, a centre
+      // PTY in the drawer; kit ADR 2026-10-24 amend 2026-11-07).
+      if (s.key.startsWith("drawer:") && s.state !== "open" && (!s.root || s.root === root)) acts.push(btn("Reopen", () => this.term.reopen(s), { class: "link", "data-act": "reopen", title: `A new ${s.argv ? s.argv.join(" ") : "shell"} in the drawer, in the opened folder` }));
       const code = s.exitCode === null ? "" : ` (code ${s.exitCode})`;
       return row(
         [chip(`${label}${s.state === "exited" ? code : ""}`, cls), h("strong", { class: "ellipsis" }, s.label), chip(s.place === "drawer" ? "drawer" : "tab"), h("span", { class: "grow" }), ...acts],

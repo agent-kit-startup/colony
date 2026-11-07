@@ -11,6 +11,8 @@ export type TtyState = "open" | "exited" | "closed";
 export interface TtySession {
   /** `drawer:<n>` (the drawer's shell number) or the centre tab id (`term:<n>`). */
   key: string;
+  /** Where it sits now: a drawer shell may move to the editor area and a centre tab to the
+   *  drawer (kit ADR 2026-10-24 amend 2026-11-07); the key never changes. */
   place: TtyPlace;
   label: string;
   /** The argv it runs; null for the user's login shell. */

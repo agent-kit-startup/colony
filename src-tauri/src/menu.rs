@@ -184,6 +184,17 @@ mod tests {
         }
     }
 
+    /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
+    /// 2026-11-07): the two move actions live in View, after the dock items, so the palette
+    /// lists them (its keyboard path; no accelerator).
+    #[test]
+    fn terminal_move_actions_are_in_view() {
+        let spec = parse().unwrap();
+        let view: Vec<&str> = spec.menus.iter().find(|m| m.label == "View").unwrap().items.iter().map(|i| i.id.as_str()).collect();
+        let at = |id: &str| view.iter().position(|i| *i == id).unwrap_or_else(|| panic!("{id} not in View: {view:?}"));
+        assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{view:?}");
+    }
+
     const MAIN_TS: &str = include_str!("../../src/main.ts");
 
     /// The action ids of Workspace → Config (settings only; never in the menu bar).
