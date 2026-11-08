@@ -1,14 +1,23 @@
 // Explorer: lazy file tree of the opened workspace. Clicking a row selects it (the target
 // folder of New file / New folder); names for a new item or a rename are typed inline.
+// Keyboard, multi-select and the type-ahead filter follow src/treenav.ts while the tree has
+// focus; the keys are a keydown handler on the tree, never menu accelerators.
 // Each row carries its file-type glyph (src/fileicons.ts) and its git mark (src/gitmarks.ts),
 // the mark refreshed in place without a re-render.
 import { api, errText, h, type Entry } from "./api";
 import { GLYPHS } from "./fileglyphs";
 import { classFor, glyphFor } from "./fileicons";
 import { buildMarkIndex, debounce, type MarkIndex } from "./gitmarks";
+import { contextTargets, filterRows, firstMatch, navKey, type NavRow, outermost, selectTo } from "./treenav";
 
-/** Right-click on a row (`path` set) or on the empty Explorer (`path` null: the root). */
-export type TreeContext = { path: string | null; isDir: boolean; x: number; y: number };
+export type TreeItem = { path: string; isDir: boolean };
+
+/** Right-click on a row (`path` set) or on the empty Explorer (`path` null: the root).
+ *  `targets`: what Delete and Copy path act on (the selection when the row is in it). */
+export type TreeContext = { path: string | null; isDir: boolean; x: number; y: number; targets: TreeItem[] };
+
+/** What the tree's own keys hand back to the window (F2 and Delete). */
+export type TreeKeys = { rename: (path: string, isDir: boolean) => void; trash: (items: TreeItem[]) => void };
 
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
 
@@ -16,7 +25,15 @@ export class FileTree {
   private root = "";
   private expanded = new Set<string>();
   private active = "";
-  private selected: { path: string; isDir: boolean } | null = null;
+  /** Selected paths, the Shift anchor and the focused row (the keyboard cursor). */
+  private selected = new Set<string>();
+  private anchor: string | null = null;
+  private focused: string | null = null;
+  /** The type-ahead filter over the visible rows (Esc clears it). */
+  private query = "";
+  private filterEl = h("div", { class: "tree-filter", role: "status", "aria-live": "polite", hidden: "" });
+  /** Expand or collapse a rendered folder row (the same path as a click). */
+  private togglers = new Map<string, (open: boolean) => Promise<void>>();
   /** The rendered children box and depth of each expanded folder (the root included). */
   private dirs = new Map<string, { box: HTMLElement; depth: number }>();
   /** A name is being typed: a refresh (git state moved, a drop) waits until it is done, so
@@ -34,19 +51,29 @@ export class FileTree {
     private onOpen: (path: string) => void,
     private onError: (msg: string) => void,
     private onContext?: (ctx: TreeContext) => void,
+    private keys?: TreeKeys,
   ) {
+    el.tabIndex = 0;
+    el.setAttribute("role", "tree");
+    el.setAttribute("aria-multiselectable", "true");
     el.addEventListener("contextmenu", (ev) => {
       // The inline name field keeps its own copy / paste menu.
       if (!this.onContext || !this.root || ev.defaultPrevented || (ev.target as HTMLElement).closest(".tree-input")) return;
       ev.preventDefault();
-      this.onContext({ path: null, isDir: true, x: ev.clientX, y: ev.clientY });
+      this.onContext({ path: null, isDir: true, x: ev.clientX, y: ev.clientY, targets: [] });
+    });
+    el.addEventListener("keydown", (ev) => void this.onKey(ev));
+    el.addEventListener("focus", () => {
+      if (!this.focused || !this.rowOf(this.focused)) this.setFocus(this.visibleRows()[0]?.dataset.path ?? null);
     });
   }
 
   async setRoot(root: string) {
     this.root = root;
     this.expanded = new Set([root]);
-    this.selected = null;
+    this.selected = new Set();
+    this.anchor = this.focused = null;
+    this.query = "";
     await this.refresh();
   }
 
@@ -57,9 +84,138 @@ export class FileTree {
       return;
     }
     this.dirs.clear();
+    this.togglers.clear();
     const list = await this.renderDir(this.root, 0);
-    this.el.replaceChildren(list);
+    this.el.replaceChildren(this.filterEl, list);
+    this.applyFilter();
     this.refreshMarks();
+  }
+
+  /** View → Collapse all folders: only the root stays open. */
+  async collapseAll() {
+    this.expanded = new Set([this.root]);
+    await this.refresh();
+  }
+
+  /** View → Reveal active file: open its folders, select and focus it, scroll it into view. */
+  async revealActive(): Promise<boolean> {
+    if (!this.active.startsWith(`${this.root}/`)) return false;
+    this.query = "";
+    await this.reveal(this.active, false);
+    this.rowOf(this.active)?.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
+  /** The selected items in tree order (the focused row alone when nothing is selected). */
+  selection(): TreeItem[] {
+    return this.visibleRows()
+      .filter((r) => this.selected.has(r.dataset.path ?? ""))
+      .map((r) => ({ path: r.dataset.path ?? "", isDir: r.classList.contains("dir") }));
+  }
+
+  private rowOf(path: string): HTMLElement | undefined {
+    return [...this.el.querySelectorAll<HTMLElement>(".tree-row[data-path]")].find((r) => r.dataset.path === path);
+  }
+
+  /** Rendered rows in document order, without the ones the filter hides. */
+  private visibleRows(): HTMLElement[] {
+    return [...this.el.querySelectorAll<HTMLElement>(".tree-row[data-path]")].filter((r) => !r.hidden);
+  }
+
+  private navRows(rows: HTMLElement[]): NavRow[] {
+    return rows.map((r) => ({ path: r.dataset.path ?? "", isDir: r.classList.contains("dir"), expanded: this.expanded.has(r.dataset.path ?? ""), depth: Number(r.dataset.depth ?? 0) }));
+  }
+
+  /** Hide the rows the type-ahead filter drops and show the query (1px border field). */
+  private applyFilter() {
+    const all = [...this.el.querySelectorAll<HTMLElement>(".tree-row[data-path]")];
+    const keep = filterRows(this.navRows(all), this.query);
+    all.forEach((r, i) => (r.hidden = !keep[i]));
+    this.filterEl.hidden = !this.query;
+    this.filterEl.textContent = this.query;
+    this.filterEl.title = this.query ? `Filter: ${this.query} (Esc clears)` : "";
+  }
+
+  private paintSelection() {
+    for (const row of this.el.querySelectorAll<HTMLElement>(".tree-row[data-path]")) {
+      const p = row.dataset.path ?? "";
+      row.classList.toggle("selected", this.selected.has(p));
+      row.classList.toggle("focused", p === this.focused);
+      row.setAttribute("aria-selected", String(this.selected.has(p)));
+    }
+  }
+
+  private setFocus(path: string | null) {
+    this.focused = path;
+    this.paintSelection();
+    if (path) this.rowOf(path)?.scrollIntoView({ block: "nearest" });
+  }
+
+  /** A click on a row: modifiers change the selection only; a plain click selects the row
+   *  alone and then opens the file or toggles the folder. Returns true for a plain click. */
+  private clickSelect(path: string, ev: MouseEvent): boolean {
+    const order = this.visibleRows().map((r) => r.dataset.path ?? "");
+    const next = selectTo(order, { selected: this.selected, anchor: this.anchor }, path, { shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey });
+    this.selected = next.selected;
+    this.anchor = next.anchor;
+    this.focused = path;
+    this.paintSelection();
+    if (document.activeElement !== this.el) this.el.focus({ preventScroll: true });
+    return !(ev.shiftKey || ev.ctrlKey || ev.metaKey);
+  }
+
+  private async onKey(ev: KeyboardEvent) {
+    if (ev.defaultPrevented || (ev.target as HTMLElement).closest(".tree-input") || !this.root) return;
+    const rows = this.visibleRows();
+    const nav = this.navRows(rows);
+    const focus = rows.findIndex((r) => r.dataset.path === this.focused);
+    const act = navKey(nav, focus, ev, this.query);
+    if (!act) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    switch (act.kind) {
+      case "focus": {
+        const path = nav[act.index].path;
+        const order = nav.map((r) => r.path);
+        const next = selectTo(order, { selected: this.selected, anchor: this.anchor }, path, { shift: act.extend });
+        this.selected = next.selected;
+        this.anchor = next.anchor;
+        this.setFocus(path);
+        return;
+      }
+      case "expand":
+      case "collapse":
+        await this.togglers.get(nav[act.index].path)?.(act.kind === "expand");
+        return;
+      case "open": {
+        const r = nav[act.index];
+        if (r.isDir) await this.togglers.get(r.path)?.(!r.expanded);
+        else this.onOpen(r.path);
+        return;
+      }
+      case "rename": {
+        const r = nav[act.index];
+        this.keys?.rename(r.path, r.isDir);
+        return;
+      }
+      case "delete": {
+        const items = this.selection();
+        const list = items.length ? items : nav[focus] ? [{ path: nav[focus].path, isDir: nav[focus].isDir }] : [];
+        const keep = new Set(outermost(list.map((i) => i.path)));
+        if (list.length) this.keys?.trash(list.filter((i) => keep.has(i.path)));
+        return;
+      }
+      case "filter": {
+        this.query = act.query;
+        this.applyFilter();
+        const after = this.visibleRows();
+        const hit = firstMatch(this.navRows(after), this.query);
+        const keepFocus = after.some((r) => r.dataset.path === this.focused);
+        if (hit >= 0) this.setFocus(after[hit].dataset.path ?? null);
+        else if (!keepFocus) this.setFocus(after[0]?.dataset.path ?? null);
+        return;
+      }
+    }
   }
 
   /** Read the marks (one git status call for the whole repository) and paint every row. */
@@ -106,25 +262,28 @@ export class FileTree {
     }
   }
 
-  /** The folder New file / New folder create in: the selected folder, the selected file's
-   *  folder, else the workspace root. */
+  /** The folder New file / New folder create in: the focused selected row (else the first
+   *  selected one) when it is a folder, a file's folder, else the workspace root. */
   targetDir(): string {
-    if (!this.selected || !this.selected.path.startsWith(`${this.root}/`)) return this.root;
-    return this.selected.isDir ? this.selected.path : parentOf(this.selected.path);
+    const items = this.selection();
+    const pick = items.find((i) => i.path === this.focused) ?? items[0];
+    if (!pick || !pick.path.startsWith(`${this.root}/`)) return this.root;
+    return pick.isDir ? pick.path : parentOf(pick.path);
   }
 
-  private select(path: string | null, isDir = false) {
-    this.selected = path ? { path, isDir } : null;
-    for (const row of this.el.querySelectorAll<HTMLElement>(".tree-row")) {
-      row.classList.toggle("selected", row.dataset.path === path);
-    }
+  /** Select `path` alone (null: nothing) and focus it. */
+  private select(path: string | null) {
+    this.selected = path ? new Set([path]) : new Set();
+    this.anchor = path;
+    this.focused = path;
+    this.paintSelection();
   }
 
   /** Expand `path`'s folders down from the root, re-render and select it. */
   async reveal(path: string, isDir: boolean) {
     for (let d = isDir ? path : parentOf(path); d.startsWith(this.root) && d !== this.root; d = parentOf(d)) this.expanded.add(d);
     await this.refresh();
-    this.select(path, isDir);
+    this.select(path);
   }
 
   /** Type a new item's name in a row at the top of `dir` (expanded first): the trimmed name on
@@ -183,18 +342,28 @@ export class FileTree {
     for (const entry of entries) {
       const row = h("div", { class: `tree-row ${entry.isDir ? "dir" : "file"}`, title: entry.path });
       row.dataset.path = entry.path;
+      row.dataset.depth = String(depth);
+      row.setAttribute("role", "treeitem");
       row.style.paddingLeft = `${8 + depth * 12}px`;
       const caret = h("span", { class: "caret" }, entry.isDir ? (this.expanded.has(entry.path) ? "▾" : "▸") : "");
       const glyph = fileIcon(entry.name, entry.isDir, entry.isDir && this.expanded.has(entry.path));
       row.append(caret, glyph, h("span", { class: "name" }, entry.name));
       this.paintMark(row);
       if (entry.path === this.active) row.classList.add("active");
-      if (entry.path === this.selected?.path) row.classList.add("selected");
+      if (this.selected.has(entry.path)) row.classList.add("selected");
+      if (entry.path === this.focused) row.classList.add("focused");
+      row.setAttribute("aria-selected", String(this.selected.has(entry.path)));
+      if (entry.isDir) row.setAttribute("aria-expanded", String(this.expanded.has(entry.path)));
       row.addEventListener("contextmenu", (ev) => {
         if (!this.onContext || (ev.target as HTMLElement).closest(".tree-input")) return;
         ev.preventDefault();
-        this.select(entry.path, entry.isDir);
-        this.onContext({ path: entry.path, isDir: entry.isDir, x: ev.clientX, y: ev.clientY });
+        // A row outside the selection becomes the selection; inside, the selection stays.
+        if (!this.selected.has(entry.path)) this.select(entry.path);
+        else this.setFocus(entry.path);
+        const rows = this.visibleRows();
+        const order = rows.map((r) => r.dataset.path ?? "");
+        const targets = contextTargets(order, this.selected, entry.path).map((p) => ({ path: p, isDir: !!this.rowOf(p)?.classList.contains("dir") }));
+        this.onContext({ path: entry.path, isDir: entry.isDir, x: ev.clientX, y: ev.clientY, targets });
       });
       box.append(row);
       if (entry.isDir) {
@@ -202,10 +371,10 @@ export class FileTree {
         box.append(kids);
         const load = async () => kids.replaceChildren(await this.renderDir(entry.path, depth + 1));
         if (this.expanded.has(entry.path)) await load();
-        row.addEventListener("click", async () => {
-          if (row.classList.contains("editing")) return;
-          this.select(entry.path, true);
-          if (this.expanded.has(entry.path)) {
+        const toggle = async (open: boolean) => {
+          if (open === this.expanded.has(entry.path)) return;
+          row.setAttribute("aria-expanded", String(open));
+          if (!open) {
             this.expanded.delete(entry.path);
             this.dirs.delete(entry.path);
             kids.replaceChildren();
@@ -216,13 +385,19 @@ export class FileTree {
             caret.textContent = "▾";
             setGlyph(glyph, "folder-open");
             await load();
+            this.applyFilter();
           }
+        };
+        this.togglers.set(entry.path, toggle);
+        row.addEventListener("click", async (ev) => {
+          if (row.classList.contains("editing")) return;
+          if (!this.clickSelect(entry.path, ev)) return;
+          await toggle(!this.expanded.has(entry.path));
         });
       } else {
-        row.addEventListener("click", () => {
+        row.addEventListener("click", (ev) => {
           if (row.classList.contains("editing")) return;
-          this.select(entry.path, false);
-          this.onOpen(entry.path);
+          if (this.clickSelect(entry.path, ev)) this.onOpen(entry.path);
         });
       }
     }
