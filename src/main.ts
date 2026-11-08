@@ -28,7 +28,8 @@ import { closePlanMenu } from "./planmenu";
 import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
-import { FileTree, type TreeContext } from "./filetree";
+import { FileTree, type TreeContext, type TreeItem } from "./filetree";
+import { outermost } from "./treenav";
 import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
@@ -436,7 +437,10 @@ function navigate(step: "back" | "forward") {
 
 // ---- editor ----------------------------------------------------------------------------
 const editors = new Editors($("monaco-host"), () => renderTabs());
-const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx));
+const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx), {
+  rename: (p, isDir) => void renameItem(p, isDir),
+  trash: (items) => void trashItems(items),
+});
 const isFile = (id: string) => id.startsWith("/");
 
 function relPath(p: string) {
@@ -728,26 +732,36 @@ async function renameItem(path: string, isDir: boolean) {
 /** Explorer → Delete's question (the code-path smoke answers it). */
 let confirmTrash = (message: string) => ask(message, { title: "Colony", kind: "warning" });
 
-/** Explorer → Delete: after a confirmation, move the file or folder to the system trash and
- *  close its tabs (unsaved edits in them are named in the question). */
-async function trashItem(path: string, isDir: boolean) {
-  const open = tabsUnder(path);
+/** Explorer → Delete (the menu row or the Delete key): after one confirmation, move each
+ *  file or folder to the system trash and close its tabs (unsaved edits in them are named in
+ *  the question). Item by item: one that fails is reported and the rest still go. */
+async function trashItems(items: TreeItem[]) {
+  if (!items.length) return;
+  const open = items.flatMap((i) => tabsUnder(i.path));
   const dirty = open.filter((p) => editors.isDirty(p));
-  const what = `${isDir ? "the folder " : ""}${relPath(path)}`;
+  const one = items.length === 1 ? items[0] : null;
+  const what = one ? `${one.isDir ? "the folder " : ""}${relPath(one.path)}` : `${items.length} items`;
   const lost = dirty.length ? `\n\nUnsaved changes in ${dirty.length} open file(s) will be lost.` : "";
-  if (!(await confirmTrash(`Move ${what} to the trash?${lost}`))) return status("Delete: cancelled");
-  try {
-    await api.trashPath(path);
-  } catch (e) {
-    return status(`Delete failed: ${errText(e)}`);
+  const list = one ? "" : `\n\n${items.map((i) => relPath(i.path)).join("\n")}`;
+  if (!(await confirmTrash(`Move ${what} to the trash?${list}${lost}`))) return status("Delete: cancelled");
+  const failed: string[] = [];
+  const gone: TreeItem[] = [];
+  for (const i of items) {
+    try {
+      await api.trashPath(i.path);
+      gone.push(i);
+    } catch (e) {
+      failed.push(`${relPath(i.path)}: ${errText(e)}`);
+    }
   }
-  for (const id of open) {
+  for (const id of gone.flatMap((i) => tabsUnder(i.path))) {
     editors.close(id); // already confirmed: closeTab must not ask again
     await closeTab(id);
   }
   // Select the parent: a selection left on the trashed path would make New file recreate it.
-  await tree.reveal(path.slice(0, path.lastIndexOf("/")), true);
-  status(`Moved ${what} to the trash`);
+  if (gone.length) await tree.reveal(gone[0].path.slice(0, gone[0].path.lastIndexOf("/")), true);
+  if (failed.length) status(`Delete failed: ${failed.join("; ")}${gone.length ? ` (moved ${gone.length} to the trash)` : ""}`);
+  else status(`Moved ${what} to the trash`);
   void gitView.panel.refresh();
 }
 
@@ -801,11 +815,15 @@ function openTreeMenu(ctx: TreeContext) {
   ];
   if (path) {
     const rel = relPath(path);
+    // Delete and Copy path act on the whole selection when the row is in it (point 4).
+    const targets = ctx.targets.length ? ctx.targets : [{ path, isDir: ctx.isDir }];
+    const many = targets.length > 1;
+    const paths = targets.map((t) => t.path).join("\n");
     rows.push(
       row("tree-rename", "Rename", `Rename ${rel}`, () => renameItem(path, ctx.isDir)),
-      row("tree-delete", "Delete", `Move ${rel} to the trash (asks first)`, () => trashItem(path, ctx.isDir)),
+      row("tree-delete", many ? `Delete ${targets.length} items` : "Delete", `Move ${many ? `${targets.length} items` : rel} to the trash (asks first)`, () => trashItems(outermost(targets.map((t) => t.path)).map((p) => targets.find((t) => t.path === p) as TreeItem))),
       h("div", { class: "menu-sep" }),
-      row("tree-copy-path", "Copy path", `Copy ${path}`, () => copyText(path).then((ok) => status(ok ? `Copied ${path}` : `Could not copy ${path}`))),
+      row("tree-copy-path", many ? `Copy ${targets.length} paths` : "Copy path", `Copy ${many ? `${targets.length} paths, one per line` : path}`, () => copyText(paths).then((ok) => status(ok ? `Copied ${many ? `${targets.length} paths` : path}` : `Could not copy ${many ? "the paths" : path}`))),
     );
   }
   rows.push(
@@ -933,6 +951,15 @@ function toggleExplorer(force?: boolean) {
   shell.classList.toggle("no-side", !show);
   relayout();
   layoutChanged();
+}
+
+/** View → Reveal active file in the Explorer: show the Explorer, open the file's folders,
+ *  select it and give the tree the keyboard focus. */
+async function revealInExplorer() {
+  if (!workspace) return status("Reveal: open a folder first");
+  if (shell.classList.contains("no-side")) toggleExplorer(true);
+  if (!(await tree.revealActive())) return status("Reveal: the active tab is not a file in this folder");
+  $("tree").focus({ preventScroll: true });
 }
 
 // The rail (Workspace → Config → Rail): its side of the window and labels or icons only.
@@ -2026,6 +2053,9 @@ const ACTIONS: Record<string, () => unknown> = {
   "term-to-editor": () => moveActiveToEditor(),
   "term-placement-reset": () => resetPlacement(),
   explorer: () => toggleExplorer(),
+  "explorer-reveal": () => revealInExplorer(),
+  "explorer-collapse": () => tree.collapseAll(),
+  "explorer-refresh": () => tree.refresh(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
   refresh: () => snapshot.refresh(),
