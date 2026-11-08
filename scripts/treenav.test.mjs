@@ -68,12 +68,21 @@ test("typing filters; Backspace trims; Esc clears only a filter; a space only in
   assert.deepEqual(navKey(rows, 0, key(" "), "a"), { kind: "filter", query: "a " });
 });
 
-test("keys with Ctrl, Alt or Meta are never taken (window shortcuts keep them)", () => {
-  for (const mods of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }]) {
+test("keys with Alt or Meta are never taken; with Ctrl only the selection keys", () => {
+  for (const mods of [{ altKey: true }, { metaKey: true }]) {
     assert.equal(navKey(rows, 1, key("ArrowDown", mods), ""), null);
     assert.equal(navKey(rows, 1, key("p", mods), ""), null);
   }
+  for (const k of ["p", "Enter", "Delete", "F2", "Home", "ArrowLeft", "a"]) assert.equal(navKey(rows, 1, key(k, { ctrlKey: true }), ""), null, `Ctrl+${k} stays the window's`);
   assert.equal(navKey(rows, 1, key("Tab"), ""), null, "Tab leaves the tree");
+});
+
+test("Ctrl+Up and Down move the focus and keep the selection; Ctrl+Space toggles the focused row", () => {
+  assert.deepEqual(navKey(rows, 1, key("ArrowDown", { ctrlKey: true }), ""), { kind: "focus", index: 2, extend: false, keep: true });
+  assert.deepEqual(navKey(rows, 0, key("ArrowUp", { ctrlKey: true }), ""), { kind: "focus", index: 0, extend: false, keep: true });
+  assert.deepEqual(navKey(rows, 3, key(" ", { ctrlKey: true }), ""), { kind: "toggle", index: 3 });
+  assert.equal(navKey(rows, -1, key(" ", { ctrlKey: true }), ""), null);
+  assert.equal(navKey(rows, 1, key("ArrowDown", { ctrlKey: true, shiftKey: true }), ""), null);
 });
 
 test("the filter keeps matches and the folders above them", () => {

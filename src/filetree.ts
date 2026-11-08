@@ -241,8 +241,20 @@ export class FileTree {
     switch (act.kind) {
       case "focus": {
         const path = nav[act.index].path;
+        if (act.keep) {
+          this.setFocus(path); // Ctrl+Up/Down: the cursor moves, the selection stays
+          return;
+        }
         const order = nav.map((r) => r.path);
         const next = selectTo(order, { selected: this.selected, anchor: this.anchor }, path, { shift: act.extend });
+        this.selected = next.selected;
+        this.anchor = next.anchor;
+        this.setFocus(path);
+        return;
+      }
+      case "toggle": {
+        const path = nav[act.index].path;
+        const next = selectTo(nav.map((r) => r.path), { selected: this.selected, anchor: this.anchor }, path, { ctrl: true });
         this.selected = next.selected;
         this.anchor = next.anchor;
         this.setFocus(path);
