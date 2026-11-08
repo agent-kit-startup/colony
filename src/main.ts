@@ -30,7 +30,8 @@ import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
 import { type Move, outermost } from "./treenav";
-import { CicdView, PullRequestsSection } from "./forge";
+import { CicdView, forgeApi, PullRequestsSection } from "./forge";
+import { resolveArgv } from "./prlist";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
 import { ConflictView } from "./conflicts";
@@ -1716,7 +1717,25 @@ const gitView = new GitView(status, () => void tree.refresh(), host.copy, {
 const requests = new RequestsSection(status, (_r, d) => {
   if (d.outcome !== "denied") gitView.reload();
 });
-gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
+gitView.addSections(
+  requests,
+  new PullRequestsSection({ status, onCard: (id) => requests.reveal(id), onResolve: (n) => void resolvePr(n) }),
+);
+
+/** Resolve on a conflicting PR (operator answer forge-ux-resolve-before-x7): a worktree of the
+ *  PR beside this checkout with the base merged in, then a terminal tab there that lists the
+ *  conflicts and runs agent-kit conflicts propose per file. Nothing is pushed. */
+async function resolvePr(n: number) {
+  status(`#${n}: preparing a worktree with the base merged in…`);
+  try {
+    const w = await forgeApi.prWorktree(n);
+    const tip = `${w.path}\n${w.branch ? `branch ${w.branch}` : "detached (fork PR)"}, origin/${w.base} merged in: ${w.conflicted.length} conflicted file(s)${w.note ? `\n${w.note}` : ""}`;
+    await openTermTab(resolveArgv(w), `Resolve #${n}`, tip, "terminals");
+    status(`#${n}: ${w.conflicted.length} conflicted file(s) in ${w.path}${w.reused ? " (reused)" : ""}`);
+  } catch (e) {
+    status(`Resolve #${n}: ${errText(e)}`);
+  }
+}
 
 // Conflict window (src/conflicts.ts; plan colony-explorer-git-workbench x7): one closable tab,
 // opened from the Working tree's conflict line and from a tree row's ! mark.

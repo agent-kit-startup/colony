@@ -24,6 +24,7 @@ mod menu;
 mod newwindow;
 mod omarchy;
 mod omarchy_shell;
+mod prworktree;
 mod pty;
 mod review;
 mod settings;
@@ -344,6 +345,7 @@ pub fn run() {
             gitops::git_push,
             forge::forge_status,
             forge::forge_prs,
+            prworktree::forge_pr_worktree,
             forge::forge_runs,
             forge::forge_rerun_failed,
             hostreq::host_requests_subscribe,
