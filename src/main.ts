@@ -48,6 +48,7 @@ import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
+import { workbenchSmoke } from "./worksmoke";
 import { snapshot } from "./snapshot";
 import "./styles.css";
 import { retireShell, Terminals } from "./terminal";
@@ -3896,6 +3897,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await smokeLive({ root, fixture, planFile, runId: run.id, log, wait, until, view, shot, host, activeTab: () => activeTab, closeTab, openInEditor, picker: controls.backend });
     await terminals.create(); // a fresh shell tab: earlier steps may have closed the active one
     await chatSmoke({ root, fixture, log, wait, until, view, shot, showTab, term: (line) => terminals.sendToActive(line), activeTab: () => activeTab, tabLabel: (id) => tabs.get(id)?.label ?? "", termCount: () => centerTerms.size, closeTab });
+    // The Explorer git workbench last: its fixture adds commits and a merge to the scratch repo.
+    await terminals.create();
+    await wait(1500);
+    await workbenchSmoke({ ...smokeCtx, tree, statusText: () => $("st-msg").textContent ?? "" });
     confirmAction = realConfirmAction;
     showTab("mission");
     await shot("mission");
