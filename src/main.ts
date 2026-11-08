@@ -3685,7 +3685,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const script = `printf '%s\\n' '${plain}'; printf '\\033]8;;${osc}\\033\\\\OSC 8 label\\033]8;;\\033\\\\\\n'; printf '\\033]8;;file:///etc/hostname\\033\\\\file link\\033]8;;\\033\\\\\\n'; exec sleep 600`;
       await terminals.create(["sh", "-c", script], "web links");
       const key = terminals.activeKey();
-      const v = terminals.view(key);
+      let v = terminals.view(key);
       await until(() => !!v && v.output.includes("file link"), 4000);
       await wait(300);
       // Mouse events on the cell that holds `text`: hover first (xterm resolves the link under
@@ -3739,6 +3739,21 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       r.fileOscClicked = await clickText("file link", { ctrlKey: true });
       await wait(400);
       r.fileOscOpensNothing = (await opened()).length === before;
+      // The same Ctrl+clicks while the program has turned on mouse reporting (Claude Code's
+      // full-screen mode does): xterm sends the click to the program and still opens the link.
+      const mouseScript = `printf '\\033[?1000h\\033[?1002h\\033[?1006h'; ${script}`;
+      await terminals.create(["sh", "-c", mouseScript], "web links, mouse mode");
+      const mouseKey = terminals.activeKey();
+      v = terminals.view(mouseKey);
+      await until(() => !!v && v.output.includes("file link"), 4000);
+      await wait(300);
+      const mouseBefore = (await opened()).length;
+      r.mouseModeOn = !!v && (v.term.modes.mouseTrackingMode === "drag" || v.term.modes.mouseTrackingMode === "vt200");
+      r.mousePlainCtrlClicked = await clickText("example.invalid/colony-smoke/plain", { ctrlKey: true });
+      r.mouseOscCtrlClicked = await clickText("OSC 8 label", { ctrlKey: true });
+      await wait(600);
+      r.mouseModeOpens = (await opened()).slice(mouseBefore).filter((l) => l.endsWith(` ${plain}`) || l.endsWith(` ${osc}`)).length === 2;
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${mouseKey}"] .tab-close`)?.click();
       // The doc preview: a click on a web link (Ctrl held, as the operator does) opens it;
       // a mailto: address is not a link there.
       const md = `${root}/.git/HANDOFF.md`;
