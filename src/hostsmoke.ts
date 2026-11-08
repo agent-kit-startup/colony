@@ -72,8 +72,9 @@ export async function hostSmoke(c: SmokeCtx) {
     proof = await untilFile("gh-proof.txt", (t) => lists(t) > listsBefore, 10000);
     await c.log("pr-list-reload-after-merge", lists(proof) > listsBefore, { before: listsBefore, after: lists(proof) });
 
-    // A production base (release) needs the typed yes: without it nothing runs.
-    await file("merge-pr 8 --method rebase", "hostreq-merge8.out");
+    // A production base (release) needs the typed yes: without it nothing runs. No --method:
+    // the host rule squashes it (only the promote and the staging sync keep a merge commit).
+    await file("merge-pr 8", "hostreq-merge8.out");
     const m8 = await ready("merge-pr", 8);
     click(m8, "approve");
     await c.wait(800);
@@ -87,7 +88,7 @@ export async function hostSmoke(c: SmokeCtx) {
     click(m8, "approve");
     const out8 = await untilFile("hostreq-merge8.out", done, 20000);
     proof = await read("gh-proof.txt");
-    await c.log("host-request-production", m8?.dataset.production === "yes" && /type yes/i.test(refusedText) && /type yes/i.test(direct) && !before && out8.includes("exit=0") && proof.includes("pr merge 8 --rebase"), { refusedText, direct, out: out8 });
+    await c.log("host-request-production", m8?.dataset.production === "yes" && /type yes/i.test(refusedText) && /type yes/i.test(direct) && !before && out8.includes("exit=0") && proof.includes("pr merge 8 --squash"), { refusedText, direct, out: out8 });
 
     // Deny with a reason: the agent gets exit 2 and the reason; gh is never called.
     await file(`rerun-checks 4243 --reason "smoke: flaky lint"`, "hostreq-rerun.out");

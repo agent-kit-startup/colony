@@ -5,10 +5,12 @@
 //! checks or push a branch itself files a request with the same binary in CLI mode:
 //!
 //! ```text
-//! "$COLONY_HOST_CLI" request merge-pr 12 [--method squash|merge|rebase] [--reason "..."]
+//! "$COLONY_HOST_CLI" request merge-pr 12 [--method squash|merge] [--reason "..."]
 //! "$COLONY_HOST_CLI" request rerun-checks <run-id> | --pr 12
 //! "$COLONY_HOST_CLI" request push-branch [<branch>]
 //! "$COLONY_HOST_CLI" request open-pr promote | staging-sync
+//! "$COLONY_HOST_CLI" request update-branch 12
+//! "$COLONY_HOST_CLI" request close-pr 12
 //! ```
 //!
 //! The CLI writes `<id>.request.json` into the spool named by `COLONY_HOST_SPOOL` (a
@@ -20,8 +22,17 @@
 //! click and only then writes the response. The kinds are a closed allowlist: no shell,
 //! no arbitrary command, no hook names.
 //!
-//! Exit codes: 0 approved and succeeded, 2 denied by the operator, 3 approved but the
-//! action failed, 4 timeout (or Colony went away), 64 usage error or no Colony host.
+//! The merge method is a host rule (git-cicd ADR amend 2026-11-08 point 2): staging ->
+//! `main`/`master` and a `chore/sync-staging-*` head into staging merge with a merge commit,
+//! every other PR is squashed. A request without `--method` gets the rule's method; one that
+//! names another method is refused. A card about a PR (merge-pr, update-branch, close-pr) is
+//! checked against the forge again at Approve (point 3): the PR must still be open, on the
+//! head and base the card showed, and (merge-pr) mergeable. Otherwise nothing runs and the
+//! card expires with the reason.
+//!
+//! Exit codes: 0 approved and succeeded, 2 denied by the operator or expired (the PR changed
+//! since the card; nothing ran), 3 approved but the action failed, 4 timeout (or Colony went
+//! away), 64 usage error or no Colony host.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -39,7 +50,7 @@ use crate::{branchrule, gitops, workspace, AppState};
 
 pub const SPOOL_ENV: &str = "COLONY_HOST_SPOOL";
 pub const CLI_ENV: &str = "COLONY_HOST_CLI";
-pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch", "open-pr", "stage-resolved"];
+pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch", "open-pr", "stage-resolved", "update-branch", "close-pr"];
 /// Kinds only Colony's own UI files (`add_local`): a spool request for one is refused, so an
 /// agent can never ask to stage (git-cicd ADR amend 2026-11-07 point 6: the agent proposes,
 /// the operator applies and stages).
@@ -63,7 +74,10 @@ pub const EXIT_USAGE: i32 = 64;
 const USAGE: &str = "usage: colony request <kind> [args] [--reason \"...\"] [--timeout 30m]
 
 kinds (closed allowlist):
-  merge-pr <number> [--method squash|merge|rebase]   merge a pull request (default squash)
+  merge-pr <number> [--method squash|merge]          merge a pull request; the method is a host
+                                                     rule (a merge commit for staging -> main and
+                                                     the staging sync, squash for every other PR):
+                                                     leave --method out, a different one is refused
   rerun-checks <run-id> | --pr <number>              rerun the failed jobs of a workflow run
   push-branch [<branch>]                             push a branch (default: the current one;
                                                      never forced, never a production branch)
@@ -72,9 +86,14 @@ kinds (closed allowlist):
                                                      sync (origin/main pushed to a new chore/ branch,
                                                      PR into staging); branches, title and body are
                                                      fixed by Colony
+  update-branch <number>                             bring the base into the PR head on the forge
+                                                     (gh pr update-branch, a merge, never a rebase)
+  close-pr <number>                                  close a pull request (its branch is kept)
 
+A card about a PR is checked again at Approve: if the PR merged, closed, moved its head or
+base, or (merge-pr) has conflicts, nothing runs and the card expires (exit 2, \"expired: ...\").
 Waits for the operator's click in Colony. --timeout takes seconds or 90s / 30m / 2h
-(default 30m). Exit: 0 approved and succeeded, 2 denied, 3 approved but failed,
+(default 30m). Exit: 0 approved and succeeded, 2 denied or expired, 3 approved but failed,
 4 timeout, 64 usage error or no Colony host (COLONY_HOST_SPOOL unset).";
 
 // ---- the request vocabulary ------------------------------------------------------------
@@ -106,10 +125,12 @@ impl PrShape {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", content = "args", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Action {
+    /// `method: None` lets the host rule decide (`rule_method`); a named method that is not
+    /// the rule's is refused on the card.
     MergePr {
         number: u64,
-        #[serde(default)]
-        method: MergeMethod,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        method: Option<MergeMethod>,
     },
     /// Exactly one of `run` (a workflow run id) and `pr` (rerun the failed runs of that
     /// PR's head commit).
@@ -131,12 +152,22 @@ pub enum Action {
     StageResolved {
         path: String,
     },
+    /// `gh pr update-branch`: the forge merges the base into the PR head.
+    UpdateBranch {
+        number: u64,
+    },
+    /// `gh pr close`: the branch stays, so a reopen undoes it.
+    ClosePr {
+        number: u64,
+    },
 }
 
 impl Action {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Action::MergePr { number, .. } if *number == 0 => Err("merge-pr needs a PR number".into()),
+            Action::MergePr { method: Some(MergeMethod::Rebase), .. } => Err("merge-pr: rebase is not a method Colony uses (a merge commit for staging -> main and the staging sync, squash for the rest)".into()),
+            Action::UpdateBranch { number } | Action::ClosePr { number } if *number == 0 => Err(format!("{} needs a PR number", self.kind())),
             Action::RerunChecks { run, pr } => match (run, pr) {
                 (Some(r), None) if *r > 0 => Ok(()),
                 (None, Some(p)) if *p > 0 => Ok(()),
@@ -155,12 +186,25 @@ impl Action {
             Action::PushBranch { .. } => "push-branch",
             Action::OpenPr { .. } => "open-pr",
             Action::StageResolved { .. } => "stage-resolved",
+            Action::UpdateBranch { .. } => "update-branch",
+            Action::ClosePr { .. } => "close-pr",
+        }
+    }
+
+    /// The pull request a card is about (the kinds re-checked against the forge at Approve).
+    pub fn pr_number(&self) -> Option<u64> {
+        match self {
+            Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } => Some(*number),
+            _ => None,
         }
     }
 
     pub fn summary(&self) -> String {
         match self {
-            Action::MergePr { number, method } => format!("merge PR #{number} ({})", method.as_str()),
+            Action::MergePr { number, method: Some(m) } => format!("merge PR #{number} ({})", m.as_str()),
+            Action::MergePr { number, method: None } => format!("merge PR #{number} (method by the host rule)"),
+            Action::UpdateBranch { number } => format!("update the branch of PR #{number} with its base"),
+            Action::ClosePr { number } => format!("close PR #{number} (branch kept)"),
             Action::RerunChecks { run: Some(r), .. } => format!("rerun the failed jobs of run {r}"),
             Action::RerunChecks { pr, .. } => format!("rerun the failed checks of PR #{}", pr.unwrap_or(0)),
             Action::PushBranch { branch } => format!("push {}", branch.as_deref().unwrap_or("the current branch")),
@@ -225,13 +269,16 @@ pub enum Outcome {
     Succeeded,
     Failed,
     Denied,
+    /// The PR changed since the card (merged, closed, head or base moved, conflicts): nothing
+    /// ran. Same exit code as a denial; the reason says what changed.
+    Expired,
 }
 
 impl Outcome {
     pub fn exit_code(self) -> i32 {
         match self {
             Outcome::Succeeded => EXIT_OK,
-            Outcome::Denied => EXIT_DENIED,
+            Outcome::Denied | Outcome::Expired => EXIT_DENIED,
             Outcome::Failed => EXIT_FAILED,
         }
     }
@@ -394,8 +441,8 @@ pub fn parse_cli(args: &[String]) -> Result<CliRequest, String> {
             no(&pr, "--pr")?;
             let [n] = rest else { return Err("merge-pr takes exactly one PR number".into()) };
             let method = match method.as_deref() {
-                None => MergeMethod::Squash,
-                Some(m) => MergeMethod::parse(m).ok_or_else(|| format!("--method must be squash, merge or rebase, got {m:?}"))?,
+                None => None,
+                Some(m) => Some(MergeMethod::parse(m).filter(|m| *m != MergeMethod::Rebase).ok_or_else(|| format!("--method must be squash or merge (or left out: the host rule decides), got {m:?}"))?),
             };
             Action::MergePr { number: parse_number(n, "The PR number")?, method }
         }
@@ -421,6 +468,17 @@ pub fn parse_cli(args: &[String]) -> Result<CliRequest, String> {
             no(&pr, "--pr")?;
             let [shape] = rest else { return Err("open-pr takes exactly one shape: promote or staging-sync".into()) };
             Action::OpenPr { shape: PrShape::parse(shape).ok_or_else(|| format!("open-pr shape must be promote or staging-sync, got {shape:?}"))? }
+        }
+        "update-branch" | "close-pr" => {
+            no(&method, "--method")?;
+            no(&pr, "--pr")?;
+            let [n] = rest else { return Err(format!("{kind} takes exactly one PR number")) };
+            let number = parse_number(n, "The PR number")?;
+            if kind == "update-branch" {
+                Action::UpdateBranch { number }
+            } else {
+                Action::ClosePr { number }
+            }
         }
         other => return Err(format!("Kind {other:?} is not allowed (allowed: {})", KINDS.join(", "))),
     };
@@ -511,6 +569,7 @@ pub fn cli_run(args: &[String], spool: Option<PathBuf>, cwd: &Path, poll: Durati
                 Outcome::Succeeded => println!("approved: {} succeeded", action.summary()),
                 Outcome::Failed => println!("approved, but {} failed", action.summary()),
                 Outcome::Denied => println!("denied by the operator: {}", r.reason.as_deref().filter(|s| !s.is_empty()).unwrap_or("no reason given")),
+                Outcome::Expired => println!("expired: {}. Nothing ran; file a new request for the PR as it is now", r.reason.as_deref().filter(|s| !s.is_empty()).unwrap_or("the PR changed since the card")),
             }
             if !r.output.trim().is_empty() {
                 println!("{}", r.output.trim_end());
@@ -598,8 +657,9 @@ struct Pending {
 /// The facts a card showed, pinned for Approve.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pin {
-    /// merge-pr: the PR's head commit (merged with `--match-head-commit`) and its base.
-    Merge { head: String, base: String },
+    /// merge-pr, update-branch, close-pr: the PR's head commit and base the card showed
+    /// (merged with `--match-head-commit`; a PR that moved since expires the card).
+    Pr { head: String, base: String },
     /// open-pr: the whole plan (branches, sha, title, body).
     Plan(PrPlan),
     /// stage-resolved: the blob id of the file the card showed; a file edited since is refused.
@@ -645,7 +705,7 @@ pub enum HostEvent {
     Requests { items: Vec<RequestView>, spool: Option<String> },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Decision {
     outcome: Outcome,
@@ -890,23 +950,51 @@ impl HostRequests {
     }
 
     /// Approve: re-derive the production rule from the repository and the forge (never
-    /// from the UI), then run the action and answer the requester.
+    /// from the UI), then run the action and answer the requester. A card about a PR is
+    /// checked against a fresh forge read first: a PR that changed since the card expires it,
+    /// with no typed yes needed, because nothing runs.
     pub fn approve(&self, id: &str, typed_confirm: Option<&str>) -> Result<Decision, String> {
+        self.decide(id, typed_confirm, &|cwd, n| Forge::detect()?.json(cwd, &Op::PrView(n)), &execute)
+    }
+
+    /// `approve` with the forge read and the action injected (unit tests run it without gh).
+    fn decide(&self, id: &str, typed_confirm: Option<&str>, read_pr: &dyn Fn(&Path, u64) -> Result<Value, String>, run: &dyn Fn(&Action, &Path, Option<&Pin>) -> Result<String, String>) -> Result<Decision, String> {
         let p = self.get(id)?;
         let cwd = PathBuf::from(&p.req.cwd);
-        if let Some(why) = production_gate(&p.action, &cwd)? {
+        let gate = match p.action.pr_number() {
+            Some(n) => {
+                let pr = read_pr(&cwd, n)?;
+                match pr_recheck(&p.action, &pr, p.pin.as_ref()) {
+                    Ok(()) => {}
+                    Err(Recheck::Expired(why)) => return self.expire(id, why),
+                    Err(Recheck::Wait(why)) => return Err(why),
+                }
+                pr_gate(&p.action, &pr)?
+            }
+            None => production_gate(&p.action, &cwd)?,
+        };
+        if let Some(why) = gate {
             if typed_confirm.map(str::trim) != Some("yes") {
                 return Err(format!("{why}: type yes on the card to approve"));
             }
         }
         let p = self.claim(id)?;
         self.broadcast();
-        let (outcome, output) = match execute(&p.action, &cwd, p.pin.as_ref()) {
+        let (outcome, output) = match run(&p.action, &cwd, p.pin.as_ref()) {
             Ok(out) => (Outcome::Succeeded, out),
             Err(out) => (Outcome::Failed, out),
         };
         self.finish(&p, outcome, None, output.clone());
         Ok(Decision { outcome, output })
+    }
+
+    /// The card's PR changed since it was raised: answer the requester, drop the card, run
+    /// nothing (git-cicd ADR amend 2026-11-08 point 3).
+    fn expire(&self, id: &str, why: String) -> Result<Decision, String> {
+        let p = self.claim(id)?;
+        let output = format!("Expired: {why}. Nothing ran.");
+        self.finish(&p, Outcome::Expired, Some(why), output.clone());
+        Ok(Decision { outcome: Outcome::Expired, output })
     }
 
     pub fn deny(&self, id: &str, reason: Option<String>) -> Result<(), String> {
@@ -1028,6 +1116,112 @@ pub fn pr_plan(shape: PrShape, cwd: &Path) -> Result<PrPlan, String> {
     }
 }
 
+/// The merge method the host rule fixes for a PR (pure; `src/prgate.ts` `prMethod` shows the
+/// same rule in the UI): a merge commit for staging -> `main`/`master` (so the default branch
+/// stays an ancestor of staging) and for a `chore/sync-staging-*` head into staging (a squash
+/// would leave the default branch outside staging), squash for every other PR.
+pub fn rule_method(head: &str, base: &str) -> MergeMethod {
+    let promote = head == "staging" && matches!(base, "main" | "master");
+    let sync = base == "staging" && head.starts_with("chore/sync-staging-");
+    if promote || sync {
+        MergeMethod::Merge
+    } else {
+        MergeMethod::Squash
+    }
+}
+
+/// The method a merge-pr card runs with (pure): the rule's; a request that named another
+/// method is refused, never silently rewritten.
+pub fn merge_method(number: u64, requested: Option<MergeMethod>, pr: &Value) -> Result<MergeMethod, String> {
+    let head = pr.get("headRefName").and_then(Value::as_str).unwrap_or_default();
+    let base = pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default();
+    let rule = rule_method(head, base);
+    match requested {
+        Some(m) if m != rule => {
+            let why = match rule {
+                MergeMethod::Merge => "a promote or a staging sync keeps a merge commit, so the default branch stays an ancestor of staging",
+                _ => "every PR other than the promote and the staging sync is squashed",
+            };
+            Err(format!("Refused: PR #{number} ({base} <- {head}) merges with {} by the host rule, not {} ({why}). Deny it and file it again without --method", rule.as_str(), m.as_str()))
+        }
+        _ => Ok(rule),
+    }
+}
+
+/// Why Approve does not run a PR card now.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recheck {
+    /// The PR changed since the card: the card expires with this reason, nothing runs.
+    Expired(String),
+    /// Not decidable yet (the card has not read the PR, the forge has no mergeability yet):
+    /// the card stays, approve again later.
+    Wait(String),
+}
+
+impl Recheck {
+    fn text(self) -> String {
+        match self {
+            Recheck::Expired(w) => format!("Expired: {w}"),
+            Recheck::Wait(w) => w,
+        }
+    }
+}
+
+/// Approve's re-check of a PR card against a fresh `gh pr view` (pure, unit-tested): the PR
+/// is still OPEN, on the head and base the card pinned, and (merge-pr) mergeable. Each expiry
+/// reason starts with the word the card shows: already merged, closed, base changed, head
+/// moved, conflicts.
+pub fn pr_recheck(action: &Action, pr: &Value, pin: Option<&Pin>) -> Result<(), Recheck> {
+    let n = action.pr_number().unwrap_or(0);
+    match pr.get("state").and_then(Value::as_str).unwrap_or_default() {
+        "OPEN" => {}
+        "MERGED" => return Err(Recheck::Expired(format!("already merged: PR #{n} merged on the forge after the card was raised"))),
+        "CLOSED" => return Err(Recheck::Expired(format!("closed: PR #{n} was closed after the card was raised"))),
+        other => return Err(Recheck::Wait(format!("PR #{n}: the forge reports state {other:?}, not OPEN: approve again in a moment"))),
+    }
+    let Some(Pin::Pr { head: h0, base: b0 }) = pin else {
+        return Err(Recheck::Wait(format!("PR #{n}: the card has not read the PR yet, wait for its context to load")));
+    };
+    let (head, base) = merge_pin(pr).ok_or_else(|| Recheck::Wait(format!("PR #{n}: gh pr view has no head commit or base")))?;
+    if base != *b0 {
+        return Err(Recheck::Expired(format!("base changed: PR #{n} now targets {base}, the card showed {b0}")));
+    }
+    if head != *h0 {
+        return Err(Recheck::Expired(format!("head moved: PR #{n} is at {} now, the card showed {}", &head[..12], h0.get(..12).unwrap_or(h0))));
+    }
+    if matches!(action, Action::MergePr { .. }) {
+        match pr.get("mergeable").and_then(Value::as_str).unwrap_or_default() {
+            "MERGEABLE" => {}
+            "CONFLICTING" => return Err(Recheck::Expired(format!("conflicts: PR #{n} no longer merges cleanly into {base}"))),
+            _ => return Err(Recheck::Wait(format!("PR #{n}: the forge has not worked out whether it merges cleanly yet, approve again in a moment"))),
+        }
+    }
+    Ok(())
+}
+
+/// The production rule of a PR card on one `gh pr view` answer (pure): `Ok(Some(why))` needs
+/// the typed yes, `Err` is never allowed.
+pub fn pr_gate(action: &Action, pr: &Value) -> Result<Option<String>, String> {
+    match action {
+        Action::MergePr { number, method } => {
+            let gate = merge_gate(*number, pr)?;
+            merge_method(*number, *method, pr)?;
+            Ok(gate)
+        }
+        // The forge writes a merge commit onto the PR head: never onto one of this
+        // repository's production branches (a fork's own `main` is the fork's; a missing
+        // field counts as this repository: fail closed).
+        Action::UpdateBranch { number } => {
+            let head = pr.get("headRefName").and_then(Value::as_str).unwrap_or_default();
+            match branchrule::request_production_reason(head) {
+                Some(why) if pr.get("isCrossRepository").and_then(Value::as_bool) != Some(true) => Err(format!("Refused: PR #{number}'s head is {head} ({why}); update-branch would write a merge commit onto it")),
+                _ => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The merge gate on one `gh pr view` answer (pure, unit-tested): `Err` when a fork PR
 /// targets a production base (its head branch name, e.g. `staging`, is the fork's own and
 /// proves nothing: security review 2026-10-24, finding 1), `Ok(Some(why))` when the typed
@@ -1047,9 +1241,9 @@ pub fn merge_gate(number: u64, pr: &Value) -> Result<Option<String>, String> {
 /// `Ok(Some(why))`: the action needs a typed yes. `Err`: never allowed on request.
 fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String> {
     match action {
-        Action::MergePr { number, .. } => {
+        Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } => {
             let pr = Forge::detect()?.json(cwd, &Op::PrView(*number))?;
-            merge_gate(*number, &pr)
+            pr_gate(action, &pr)
         }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
@@ -1108,15 +1302,20 @@ fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, Str
         Action::MergePr { number, method } => {
             let forge = Forge::detect()?;
             let pr = forge.json(cwd, &Op::PrView(*number))?;
-            let (head, base) = merge_pin(&pr).ok_or_else(|| format!("PR #{number}: gh pr view has no head commit or base"))?;
-            if let Some(Pin::Merge { head: h0, base: b0 }) = pin {
-                if *b0 != base {
-                    return Err(format!("Refused: PR #{number} now targets {base}, not {b0} as on the card. Deny it and file it again"));
-                }
-                // The head may have moved since the card: merge only what the card showed.
-                return forge.run(cwd, &Op::Merge(*number, *method, Some(h0.clone())));
-            }
-            forge.run(cwd, &Op::Merge(*number, *method, Some(head)))
+            // Approve checked this a moment ago; the forge may have moved in between.
+            pr_recheck(action, &pr, pin).map_err(Recheck::text)?;
+            let Some(Pin::Pr { head, .. }) = pin else { return Err(format!("PR #{number}: no pinned head")) };
+            let m = merge_method(*number, *method, &pr)?;
+            // --match-head-commit: the forge refuses if the head moves after this read too.
+            forge.run(cwd, &Op::Merge(*number, m, Some(head.clone())))
+        }
+        Action::UpdateBranch { number } | Action::ClosePr { number } => {
+            let forge = Forge::detect()?;
+            let pr = forge.json(cwd, &Op::PrView(*number))?;
+            pr_recheck(action, &pr, pin).map_err(Recheck::text)?;
+            pr_gate(action, &pr)?;
+            let op = if matches!(action, Action::UpdateBranch { .. }) { Op::PrUpdateBranch(*number) } else { Op::PrClose(*number) };
+            forge.run(cwd, &op)
         }
         Action::RerunChecks { run: Some(id), .. } => Forge::detect()?.run(cwd, &Op::RerunFailed(*id)),
         Action::RerunChecks { pr, .. } => {
@@ -1211,7 +1410,10 @@ fn merge_pin(pr: &Value) -> Option<(String, String)> {
     Some((head.to_string(), base.to_string()))
 }
 
-fn context(action: &Action, cwd: &Path) -> (Value, Option<Pin>) {
+/// The card's context. `pinned` is the pin an earlier load kept (Approve acts on that one):
+/// a PR that no longer matches it, or that merged, closed or now conflicts, is reported as
+/// `stale` (Approve will expire the card).
+fn context(action: &Action, cwd: &Path, pinned: Option<&Pin>) -> (Value, Option<Pin>) {
     let gate = production_gate(action, cwd);
     let (production, refused) = match &gate {
         Ok(p) => (p.clone(), None),
@@ -1227,9 +1429,17 @@ fn context(action: &Action, cwd: &Path) -> (Value, Option<Pin>) {
     };
     let mut pin = None;
     let extra = match action {
-        Action::MergePr { number, .. } => {
-            let info = pr_info(*number);
-            pin = info.get("pr").and_then(merge_pin).map(|(head, base)| Pin::Merge { head, base });
+        Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } => {
+            let mut info = pr_info(*number);
+            pin = info.get("pr").and_then(merge_pin).map(|(head, base)| Pin::Pr { head, base });
+            if let Some(pr) = info.get("pr").filter(|p| p.get("error").is_none()).cloned() {
+                if let Err(Recheck::Expired(why)) = pr_recheck(action, &pr, pinned.or(pin.as_ref())) {
+                    info["stale"] = json!(why);
+                }
+                if let Action::MergePr { method, .. } = action {
+                    info["method"] = json!(merge_method(*number, *method, &pr).unwrap_or_else(|_| rule_method(pr.get("headRefName").and_then(Value::as_str).unwrap_or_default(), pr.get("baseRefName").and_then(Value::as_str).unwrap_or_default())).as_str());
+                }
+            }
             info
         }
         Action::RerunChecks { pr: Some(n), .. } => pr_info(*n),
@@ -1281,7 +1491,7 @@ pub fn host_requests_subscribe(hr: State<'_, Shared>, on_event: Channel<HostEven
 #[tauri::command(async)]
 pub fn host_request_context(hr: State<'_, Shared>, id: String) -> Result<Value, String> {
     let p = hr.get(&id)?;
-    let (ctx, pin) = context(&p.action, Path::new(&p.req.cwd));
+    let (ctx, pin) = context(&p.action, Path::new(&p.req.cwd), p.pin.as_ref());
     hr.pin_once(&id, pin);
     Ok(ctx)
 }
@@ -1292,7 +1502,7 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
     let p = hr.get(&id)?;
     let cwd = PathBuf::from(&p.req.cwd);
     match &p.action {
-        Action::MergePr { number, .. } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(&cwd, &Op::PrDiff(*number)),
+        Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(&cwd, &Op::PrDiff(*number)),
         Action::PushBranch { branch: Some(b) } => {
             let upstream = gitops::git(&cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).map(|s| s.trim().to_string()).unwrap_or_else(|_| format!("origin/{b}"));
             gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
@@ -1315,7 +1525,7 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
 pub fn host_request_open(hr: State<'_, Shared>, id: String) -> Result<(), String> {
     let p = hr.get(&id)?;
     match &p.action {
-        Action::MergePr { number, .. } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(Path::new(&p.req.cwd), &Op::PrWeb(*number)).map(|_| ()),
+        Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } | Action::RerunChecks { pr: Some(number), .. } => Forge::detect()?.run(Path::new(&p.req.cwd), &Op::PrWeb(*number)).map(|_| ()),
         _ => Err("This request has no pull request to open".into()),
     }
 }
@@ -1365,9 +1575,12 @@ mod tests {
     #[test]
     fn allowlist_parsing() {
         let r = parse(&["merge-pr", "12", "--reason", "CI green"]).unwrap();
-        assert_eq!(r.action, Action::MergePr { number: 12, method: MergeMethod::Squash });
+        assert_eq!(r.action, Action::MergePr { number: 12, method: None }, "no --method: the host rule decides");
         assert_eq!((r.reason.as_str(), r.timeout), ("CI green", DEFAULT_TIMEOUT));
-        assert_eq!(parse(&["merge-pr", "#7", "--method=rebase"]).unwrap().action, Action::MergePr { number: 7, method: MergeMethod::Rebase });
+        assert_eq!(parse(&["merge-pr", "#7", "--method=merge"]).unwrap().action, Action::MergePr { number: 7, method: Some(MergeMethod::Merge) });
+        assert_eq!(parse(&["merge-pr", "7", "--method", "squash"]).unwrap().action, Action::MergePr { number: 7, method: Some(MergeMethod::Squash) });
+        assert_eq!(parse(&["update-branch", "#21"]).unwrap().action, Action::UpdateBranch { number: 21 });
+        assert_eq!(parse(&["close-pr", "21", "--reason", "superseded by #22"]).unwrap().action, Action::ClosePr { number: 21 });
         assert_eq!(parse(&["rerun-checks", "123456"]).unwrap().action, Action::RerunChecks { run: Some(123456), pr: None });
         assert_eq!(parse(&["rerun-checks", "--pr", "9"]).unwrap().action, Action::RerunChecks { run: None, pr: Some(9) });
         assert_eq!(parse(&["push-branch"]).unwrap().action, Action::PushBranch { branch: None });
@@ -1409,6 +1622,19 @@ mod tests {
             &["open-pr", "promote", "--pr", "3"],
             &["open-pr", "--base", "main", "--head", "feat/x"],
             &["open-pr", "Promote"],
+            &["merge-pr", "12", "--method", "rebase"],
+            &["update-branch"],
+            &["update-branch", "0"],
+            &["update-branch", "1", "2"],
+            &["update-branch", "1", "--rebase"],
+            &["update-branch", "1", "--method", "merge"],
+            &["update-branch", "--pr", "1"],
+            &["update-branch", "feat/x"],
+            &["close-pr"],
+            &["close-pr", "1", "--delete-branch"],
+            &["close-pr", "1", "-d"],
+            &["close-pr", "1", "--comment", "x"],
+            &["close-pr", "1", "2"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
@@ -1416,7 +1642,7 @@ mod tests {
 
     #[test]
     fn request_files_revalidate_the_allowlist() {
-        let a = Action::MergePr { number: 4, method: MergeMethod::Merge };
+        let a = Action::MergePr { number: 4, method: Some(MergeMethod::Merge) };
         let (kind, args) = a.to_parts();
         assert_eq!((kind.as_str(), &args), ("merge-pr", &json!({ "number": 4, "method": "merge" })));
         assert_eq!(Action::from_parts(&kind, &args).unwrap(), a);
@@ -1424,6 +1650,16 @@ mod tests {
         assert!(Action::from_parts("merge-pr", &json!({ "number": 4, "admin": true })).is_err());
         assert!(Action::from_parts("push-branch", &json!({ "branch": "--force" })).is_err());
         assert!(Action::from_parts("rerun-checks", &json!({ "run": 1, "pr": 2 })).is_err());
+        // No method: the rule decides, and none is written back.
+        assert_eq!(Action::from_parts("merge-pr", &json!({ "number": 4 })).unwrap(), Action::MergePr { number: 4, method: None });
+        assert_eq!(Action::MergePr { number: 4, method: None }.to_parts().1, json!({ "number": 4 }));
+        assert!(Action::from_parts("merge-pr", &json!({ "number": 4, "method": "rebase" })).is_err(), "rebase is not a Colony method");
+        assert_eq!(Action::from_parts("update-branch", &json!({ "number": 3 })).unwrap(), Action::UpdateBranch { number: 3 });
+        assert_eq!(Action::from_parts("close-pr", &json!({ "number": 3 })).unwrap(), Action::ClosePr { number: 3 });
+        for bad in [json!({ "number": 3, "rebase": true }), json!({ "number": 0 }), json!({})] {
+            assert!(Action::from_parts("update-branch", &bad).is_err(), "{bad}");
+        }
+        assert!(Action::from_parts("close-pr", &json!({ "number": 3, "deleteBranch": true })).is_err());
         let o = Action::OpenPr { shape: PrShape::StagingSync };
         assert_eq!(o.to_parts(), ("open-pr".to_string(), json!({ "shape": "staging-sync" })));
         assert_eq!(Action::from_parts("open-pr", &json!({ "shape": "promote" })).unwrap(), Action::OpenPr { shape: PrShape::Promote });
@@ -1699,7 +1935,7 @@ mod tests {
         assert!(e.contains("conflict markers"), "{e}");
         assert!(execute(&a, &cwd, None).is_err());
         std::fs::write(cwd.join("a.txt"), "main\nside\n").unwrap();
-        let (ctx, pin) = context(&a, &cwd);
+        let (ctx, pin) = context(&a, &cwd, None);
         assert_eq!(ctx["refused"], Value::Null);
         let Some(Pin::Blob(b0)) = pin.clone() else { panic!("blob pin") };
         // Edited after the card: refused, nothing staged.
@@ -1727,5 +1963,158 @@ mod tests {
         for t in ["<<<<<<<< longer", "a <<<<<<< b", "=======x", "<<<<<<<HEAD", "== heading"] {
             assert!(!marker_line(t), "{t:?}");
         }
+    }
+
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    const OID2: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+    /// A `gh pr view` answer.
+    fn view(state: &str, head: &str, base: &str, oid: &str, mergeable: &str) -> Value {
+        json!({ "number": 5, "state": state, "headRefName": head, "headRefOid": oid, "baseRefName": base, "mergeable": mergeable, "isCrossRepository": false, "headRepositoryOwner": { "login": "smoke" } })
+    }
+
+    fn pin(base: &str) -> Pin {
+        Pin::Pr { head: OID.into(), base: base.into() }
+    }
+
+    #[test]
+    fn rule_method_matches_prgate_ts() {
+        // The same table as scripts/prgate.test.mjs (prMethod).
+        for (head, base, m) in [
+            ("staging", "main", MergeMethod::Merge),
+            ("staging", "master", MergeMethod::Merge),
+            ("chore/sync-staging-main-578dc26", "staging", MergeMethod::Merge),
+            ("chore/close-release-6.9.1", "staging", MergeMethod::Squash),
+            ("feat/x", "staging", MergeMethod::Squash),
+            ("staging", "release", MergeMethod::Squash),
+            ("chore/sync-staging-main-578dc26", "main", MergeMethod::Squash),
+            ("feat/x", "main", MergeMethod::Squash),
+        ] {
+            assert_eq!(rule_method(head, base), m, "{head} -> {base}");
+        }
+    }
+
+    #[test]
+    fn merge_method_refuses_a_method_that_is_not_the_rule() {
+        let promote = view("OPEN", "staging", "main", OID, "MERGEABLE");
+        let sync = view("OPEN", "chore/sync-staging-main-abc1234", "staging", OID, "MERGEABLE");
+        let feat = view("OPEN", "feat/x", "staging", OID, "MERGEABLE");
+        // The CLI default (no --method) takes the rule: a merge commit for the promote and the sync.
+        assert_eq!(merge_method(9, None, &promote), Ok(MergeMethod::Merge));
+        assert_eq!(merge_method(12, None, &sync), Ok(MergeMethod::Merge));
+        assert_eq!(merge_method(7, None, &feat), Ok(MergeMethod::Squash));
+        assert_eq!(merge_method(9, Some(MergeMethod::Merge), &promote), Ok(MergeMethod::Merge));
+        for (n, pr) in [(9, &promote), (12, &sync)] {
+            let e = merge_method(n, Some(MergeMethod::Squash), pr).unwrap_err();
+            assert!(e.starts_with("Refused") && e.contains("merge by the host rule, not squash") && e.contains("ancestor of staging"), "{e}");
+            assert!(merge_method(n, Some(MergeMethod::Rebase), pr).is_err());
+        }
+        let e = merge_method(7, Some(MergeMethod::Merge), &feat).unwrap_err();
+        assert!(e.contains("squash by the host rule, not merge"), "{e}");
+        // And the gate carries it: the card is refused (Approve disabled), the typed yes alone is not enough.
+        let squash_promote = Action::MergePr { number: 9, method: Some(MergeMethod::Squash) };
+        assert!(pr_gate(&squash_promote, &promote).unwrap_err().contains("not squash"));
+        assert!(pr_gate(&Action::MergePr { number: 9, method: None }, &promote).unwrap().unwrap().contains("targets main"), "main still needs the typed yes");
+    }
+
+    #[test]
+    fn pr_recheck_expires_a_card_whose_pr_changed() {
+        let merge = Action::MergePr { number: 5, method: None };
+        let ok = view("OPEN", "feat/x", "staging", OID, "MERGEABLE");
+        assert_eq!(pr_recheck(&merge, &ok, Some(&pin("staging"))), Ok(()));
+        let expired = |a: &Action, pr: &Value, p: Option<&Pin>| match pr_recheck(a, pr, p) {
+            Err(Recheck::Expired(w)) => w,
+            other => panic!("not expired: {other:?}"),
+        };
+        // The 2026-11-07 cases: a card for a PR that had already merged, one that conflicts.
+        assert!(expired(&merge, &view("MERGED", "staging", "main", OID, "UNKNOWN"), Some(&pin("main"))).starts_with("already merged"));
+        assert!(expired(&merge, &view("OPEN", "feat/x", "staging", OID, "CONFLICTING"), Some(&pin("staging"))).starts_with("conflicts"));
+        assert!(expired(&merge, &view("CLOSED", "feat/x", "staging", OID, "MERGEABLE"), Some(&pin("staging"))).starts_with("closed"));
+        assert!(expired(&merge, &view("OPEN", "feat/x", "main", OID, "MERGEABLE"), Some(&pin("staging"))).starts_with("base changed"));
+        let moved = expired(&merge, &view("OPEN", "feat/x", "staging", OID2, "MERGEABLE"), Some(&pin("staging")));
+        assert!(moved.starts_with("head moved") && moved.contains(&OID2[..12]) && moved.contains(&OID[..12]), "{moved}");
+        // Not decidable yet: the card stays.
+        assert!(matches!(pr_recheck(&merge, &view("OPEN", "feat/x", "staging", OID, "UNKNOWN"), Some(&pin("staging"))), Err(Recheck::Wait(_))));
+        assert!(matches!(pr_recheck(&merge, &ok, None), Err(Recheck::Wait(_))), "no pin: fail closed, never merge whatever head is current");
+        // update-branch and close-pr: state, head and base, but a conflicting PR is still theirs to act on.
+        for a in [Action::UpdateBranch { number: 5 }, Action::ClosePr { number: 5 }] {
+            assert_eq!(pr_recheck(&a, &view("OPEN", "feat/x", "staging", OID, "CONFLICTING"), Some(&pin("staging"))), Ok(()));
+            assert!(expired(&a, &view("MERGED", "feat/x", "staging", OID, "UNKNOWN"), Some(&pin("staging"))).starts_with("already merged"));
+            assert!(expired(&a, &view("OPEN", "feat/x", "staging", OID2, "MERGEABLE"), Some(&pin("staging"))).starts_with("head moved"));
+        }
+    }
+
+    #[test]
+    fn update_branch_never_writes_onto_a_production_head() {
+        let ub = Action::UpdateBranch { number: 5 };
+        assert_eq!(pr_gate(&ub, &view("OPEN", "feat/x", "staging", OID, "MERGEABLE")), Ok(None));
+        assert_eq!(pr_gate(&ub, &view("OPEN", "staging", "main", OID, "MERGEABLE")), Ok(None), "staging is not production for a host request");
+        let e = pr_gate(&ub, &view("OPEN", "main", "staging", OID, "MERGEABLE")).unwrap_err();
+        assert!(e.starts_with("Refused") && e.contains("head is main"), "{e}");
+        assert!(pr_gate(&ub, &json!({ "headRefName": "release" })).is_err(), "unknown origin counts as this repository");
+        let mut fork = view("OPEN", "main", "staging", OID, "MERGEABLE");
+        fork["isCrossRepository"] = json!(true);
+        assert_eq!(pr_gate(&ub, &fork), Ok(None), "a fork's own main is the fork's: the forge decides");
+        assert_eq!(pr_gate(&Action::ClosePr { number: 5 }, &view("OPEN", "staging", "main", OID, "MERGEABLE")), Ok(None), "closing a promote needs no typed yes");
+    }
+
+    /// File a request through the CLI, load its card with this pin, approve it with `pr` as
+    /// the fresh forge read and a recorder as the action.
+    fn approve_with(args: &[&str], pinned: Option<Pin>, pr: Value, yes: Option<&str>) -> (Result<Decision, String>, Option<i32>, Vec<String>, HostRequests) {
+        let (sp, cwd) = (spool(), repo());
+        let hr = HostRequests::with_spool(sp.clone());
+        let (cli, id) = file(&hr, &sp, &cwd, args);
+        hr.pin_once(&id, pinned);
+        let ran = Mutex::new(Vec::new());
+        let d = hr.decide(&id, yes, &|_, _| Ok(pr.clone()), &|a, _, _| {
+            ran.lock().unwrap().push(a.summary());
+            Ok("done".into())
+        });
+        let code = if hr.views().is_empty() {
+            Some(cli.join().unwrap())
+        } else {
+            hr.deny(&id, None).unwrap();
+            let _ = cli.join();
+            None
+        };
+        (d, code, ran.into_inner().unwrap(), hr)
+    }
+
+    #[test]
+    fn approve_expires_a_stale_card_and_runs_nothing() {
+        // A promote card for a PR that merged already: no typed yes needed to expire it.
+        let (d, code, ran, hr) = approve_with(&["merge-pr", "9"], Some(pin("main")), view("MERGED", "staging", "main", OID, "UNKNOWN"), None);
+        let d = d.unwrap();
+        assert_eq!(d.outcome, Outcome::Expired);
+        assert!(d.output.starts_with("Expired: already merged") && d.output.ends_with("Nothing ran."), "{}", d.output);
+        assert_eq!(code, Some(EXIT_DENIED), "the requester gets its answer and exits");
+        assert!(ran.is_empty() && hr.views().is_empty(), "nothing ran and the card left");
+
+        let (d, code, ran, _) = approve_with(&["merge-pr", "5"], Some(pin("staging")), view("OPEN", "feat/x", "staging", OID, "CONFLICTING"), None);
+        assert_eq!((d.unwrap().outcome, code, ran.len()), (Outcome::Expired, Some(EXIT_DENIED), 0));
+        let (d, _, ran, _) = approve_with(&["close-pr", "5"], Some(pin("staging")), view("OPEN", "feat/x", "staging", OID2, "MERGEABLE"), None);
+        assert!(d.unwrap().output.contains("head moved") && ran.is_empty());
+    }
+
+    #[test]
+    fn approve_waits_refuses_or_runs() {
+        // Mergeability unknown: refused for now, the card stays (approve_with denies it after).
+        let (d, code, ran, _) = approve_with(&["merge-pr", "5"], Some(pin("staging")), view("OPEN", "feat/x", "staging", OID, "UNKNOWN"), None);
+        assert!(d.unwrap_err().contains("approve again"));
+        assert_eq!((code, ran.len()), (None, 0));
+        // No pin (the card never loaded the PR): refused, never merged at the current head.
+        let (d, _, ran, _) = approve_with(&["merge-pr", "5"], None, view("OPEN", "feat/x", "staging", OID, "MERGEABLE"), None);
+        assert!(d.unwrap_err().contains("has not read the PR") && ran.is_empty());
+        // A squash asked for a promote: refused even with the typed yes.
+        let (d, _, ran, _) = approve_with(&["merge-pr", "9", "--method", "squash"], Some(pin("main")), view("OPEN", "staging", "main", OID, "MERGEABLE"), Some("yes"));
+        assert!(d.unwrap_err().contains("merge by the host rule, not squash") && ran.is_empty());
+        // The promote with the rule's method: the typed yes is still required.
+        let (d, _, ran, _) = approve_with(&["merge-pr", "9"], Some(pin("main")), view("OPEN", "staging", "main", OID, "MERGEABLE"), None);
+        assert!(d.unwrap_err().contains("type yes") && ran.is_empty());
+        let (d, code, ran, _) = approve_with(&["merge-pr", "9"], Some(pin("main")), view("OPEN", "staging", "main", OID, "MERGEABLE"), Some("yes"));
+        assert_eq!((d.unwrap().outcome, code, ran), (Outcome::Succeeded, Some(EXIT_OK), vec!["merge PR #9 (method by the host rule)".to_string()]));
+        // update-branch on an ordinary PR runs without a typed yes.
+        let (d, code, ran, _) = approve_with(&["update-branch", "5"], Some(pin("staging")), view("OPEN", "feat/x", "staging", OID, "MERGEABLE"), None);
+        assert_eq!((d.unwrap().outcome, code, ran.len()), (Outcome::Succeeded, Some(EXIT_OK), 1));
     }
 }

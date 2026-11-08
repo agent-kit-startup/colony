@@ -100,14 +100,14 @@ export class PullRequestsSection {
       // read on the mergeable chip.
       if (block !== "conflicts") acts.push(chip(block, "chip-gate"));
     } else {
-      const method = h("select", { title: preferred === "merge" ? `Merge commit preselected: ${isStagingSync(head, base) ? "a squash would leave main outside staging and the sync row would never clear" : "main stays an ancestor of staging"}` : "Merge method" }, ...["squash", "merge", "rebase"].map((m) => h("option", { value: m }, m)));
-      method.value = preferred;
+      // The method is a host rule (src-tauri/src/hostreq.rs rule_method): shown, not chosen.
+      const why = preferred === "merge" ? (isStagingSync(head, base) ? "a squash would leave main outside staging and the sync row would never clear" : "main stays an ancestor of staging") : "every PR other than the promote and the staging sync is squashed";
       acts.push(
-        method,
+        Object.assign(chip(preferred === "merge" ? "merge commit" : "squash"), { title: `Method fixed by the host rule: ${why}` }),
         btn(
           "Merge…",
           () => {
-            void hostApi.local("merge-pr", { number: n, method: method.value }).then(
+            void hostApi.local("merge-pr", { number: n, method: preferred }).then(
               (id) => {
                 this.status(`Merge #${n}: approve it on its card under Requests`);
                 this.onCard(id);

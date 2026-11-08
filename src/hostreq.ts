@@ -1,8 +1,10 @@
 // Host requests (src-tauri/src/hostreq.rs): an agent inside Colony files
-// `"$COLONY_HOST_CLI" request merge-pr|rerun-checks|push-branch|open-pr ...`; each request is an
-// approval card here (Git tab, Requests). Colony runs the action with the operator's own
-// git / gh login only after Approve is clicked; a production base or branch needs a typed
-// yes. Deny takes an optional reason that goes back to the agent.
+// `"$COLONY_HOST_CLI" request merge-pr|rerun-checks|push-branch|open-pr|update-branch|close-pr ...`;
+// each request is an approval card here (Git tab, Requests). Colony runs the action with the
+// operator's own git / gh login only after Approve is clicked; a production base or branch
+// needs a typed yes. A card about a PR is checked against the forge again at Approve: if the PR
+// merged, closed, moved or now conflicts, nothing runs and the card expires with the reason.
+// Deny takes an optional reason that goes back to the agent.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { errText, h } from "./api";
 import "./hostreq.css";
@@ -10,7 +12,7 @@ import { ago, btn, busy, card, chip, empty } from "./ui";
 
 export interface HostRequest {
   id: string;
-  kind: "merge-pr" | "rerun-checks" | "push-branch" | "open-pr" | "stage-resolved";
+  kind: "merge-pr" | "rerun-checks" | "push-branch" | "open-pr" | "stage-resolved" | "update-branch" | "close-pr";
   args: Record<string, unknown>;
   summary: string;
   reason: string;
@@ -22,7 +24,8 @@ export interface HostRequest {
   running: boolean;
 }
 type HostEvent = { kind: "requests"; items: HostRequest[]; spool: string | null };
-export interface Decision { outcome: "succeeded" | "failed" | "denied"; output: string }
+/** `expired`: the PR changed since the card (merged, closed, moved, conflicts); nothing ran. */
+export interface Decision { outcome: "succeeded" | "failed" | "denied" | "expired"; output: string }
 type J = Record<string, unknown>;
 interface RequestContext {
   /** Why a typed yes is needed (production base or branch), else null. */
@@ -30,6 +33,10 @@ interface RequestContext {
   /** Why Colony will not run it at all, else null. */
   refused: string | null;
   error?: string;
+  /** PR cards: why Approve will expire the card instead of running it (the PR changed). */
+  stale?: string;
+  /** merge-pr: the method the host rule fixed (`merge` or `squash`). */
+  method?: string;
   pr?: J;
   checks?: string;
   run?: J;
@@ -117,7 +124,7 @@ class RequestCard {
       .map(([k, v]) => `${k}=${s(v)}`)
       .join(" ");
     const extra: HTMLElement[] = [];
-    if (r.kind === "merge-pr" || (r.kind === "rerun-checks" && r.args.pr)) {
+    if (r.kind === "merge-pr" || r.kind === "update-branch" || r.kind === "close-pr" || (r.kind === "rerun-checks" && r.args.pr)) {
       extra.push(btn("View diff", () => void this.diff(), { class: "link", "data-act": "diff" }));
       extra.push(btn("Open PR", () => void hostApi.open(r.id).catch((e) => this.status(errText(e))), { class: "link", "data-act": "open", title: "gh pr view --web" }));
     } else if (r.kind === "push-branch" || r.kind === "open-pr" || r.kind === "stage-resolved") {
@@ -154,7 +161,8 @@ class RequestCard {
   }
 
   private sync() {
-    const refused = !!this.ctx?.refused;
+    // A stale card can always be expired (nothing runs), even when it would be refused.
+    const refused = !!this.ctx?.refused && !this.ctx?.stale;
     this.approveBtn.disabled = this.busy || this.r.running || !this.ctx || refused;
     this.denyBtn.disabled = this.busy || this.r.running;
   }
@@ -186,6 +194,7 @@ class RequestCard {
         ),
       );
     } else if (pr?.error) rows.push(h("div", { class: "hint warn" }, s(pr.error)));
+    if (c.method) rows.push(h("div", { class: "row small" }, h("span", {}, "Method: "), chip(c.method === "merge" ? "merge commit" : c.method), h("span", { class: "dim" }, "fixed by the host rule")));
     if (c.checks) rows.push(h("pre", { class: "hostreq-checks" }, c.checks));
     const run = c.run;
     if (run && !run.error) rows.push(h("div", { class: "row" }, chip(s(run.conclusion || run.status), run.conclusion === "failure" ? "chip-failed" : ""), h("span", { class: "grow ellipsis" }, `${s(run.workflowName)} · ${s(run.displayTitle)} · ${s(run.headBranch)}`)));
@@ -207,13 +216,16 @@ class RequestCard {
         h("pre", { class: "hostreq-checks" }, plan.log || "(no commits)"),
       );
     }
-    if (c.refused) rows.push(h("div", { class: "hint warn" }, c.refused));
+    if (c.stale) rows.push(h("div", { class: "hint warn" }, `Expired: ${c.stale}. Approve runs nothing and closes this card; the agent is told why.`));
+    else if (c.refused) rows.push(h("div", { class: "hint warn" }, c.refused));
     else if (c.production) rows.push(h("div", { class: "hint warn" }, `${c.production}: type yes to approve.`));
     this.ctxEl.replaceChildren(...rows);
     this.ctxEl.classList.remove("dim");
     this.el.dataset.ctx = "ready";
-    this.el.dataset.production = c.production ? "yes" : "no";
-    this.yesRow.hidden = !c.production || !!c.refused;
+    this.el.dataset.production = c.production && !c.stale ? "yes" : "no";
+    if (c.stale) this.el.dataset.stale = "yes";
+    this.approveBtn.textContent = c.stale ? "Expire" : "Approve";
+    this.yesRow.hidden = !c.production || !!c.refused || !!c.stale;
     this.sync();
   }
 
@@ -229,7 +241,7 @@ class RequestCard {
   }
 
   private async approve() {
-    if (this.ctx?.production && this.yes.value.trim() !== "yes") {
+    if (this.ctx?.production && !this.ctx.stale && this.yes.value.trim() !== "yes") {
       this.out.hidden = false;
       this.out.textContent = `${this.ctx.production}. Type yes in the box to approve.`;
       this.yes.focus();
@@ -240,7 +252,7 @@ class RequestCard {
     this.out.hidden = false;
     this.out.textContent = `Running: ${this.r.summary}…`;
     try {
-      const yes = this.ctx?.production ? this.yes.value.trim() : undefined;
+      const yes = this.ctx?.production && !this.ctx.stale ? this.yes.value.trim() : undefined;
       const d = await busy(this.approveBtn, "Running…", () => hostApi.approve(this.r.id, yes));
       this.out.textContent = d.output || d.outcome;
       this.done(this.r, d);
@@ -305,7 +317,7 @@ export class RequestsSection {
     const els = items.map((r) => this.cards.get(r.id)!.el);
     if (!els.length) {
       const hint = hostRequests.spool
-        ? "Nothing waits for you. An agent in a Colony terminal or run files git and forge actions here with \"$COLONY_HOST_CLI\" request merge-pr|rerun-checks|push-branch|open-pr."
+        ? "Nothing waits for you. An agent in a Colony terminal or run files git and forge actions here with \"$COLONY_HOST_CLI\" request merge-pr|rerun-checks|push-branch|open-pr|update-branch|close-pr."
         : "Host requests are off: Colony could not create its request spool.";
       this.list.replaceChildren(empty(hint));
     } else {
@@ -328,7 +340,7 @@ export class RequestsSection {
         const failed = x.d.outcome === "failed";
         const at = new Date(x.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const cells = [
-          chip(x.d.outcome, x.d.outcome === "succeeded" ? "chip-done" : failed ? "chip-failed" : ""),
+          chip(x.d.outcome, x.d.outcome === "succeeded" ? "chip-done" : failed ? "chip-failed" : x.d.outcome === "expired" ? "chip-gate" : ""),
           h("span", { class: "grow ellipsis", title: x.r.summary }, x.r.summary),
           h("span", { class: "dim", title: x.at }, at),
         ];
