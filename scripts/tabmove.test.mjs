@@ -3,7 +3,7 @@
 // later; src/tabmove.ts keeps to erasable syntax). Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DRAG_THRESHOLD, dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, otherPlace } from "../src/tabmove.ts";
+import { DEFAULT_PLACE, DRAG_THRESHOLD, dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, placementPatch, readPlacement, recordMove, tabKind } from "../src/tabmove.ts";
 
 /** A fake element whose ancestors (itself first) match the selectors in `chain`. */
 const at = (...chain) => ({ closest: (sel) => (sel.split(",").map((s) => s.trim()).some((s) => chain.includes(s)) ? { sel } : null) });
@@ -42,4 +42,49 @@ test("menu labels and the other place", () => {
   assert.equal(moveLabel("panel"), "Move to editor area");
   assert.equal(otherPlace("editor"), "panel");
   assert.equal(otherPlace("panel"), "editor");
+});
+
+// Remembered placement per kind (amend 2026-11-07 tab placement memory).
+test("defaults are today's placement", () => {
+  assert.deepEqual(DEFAULT_PLACE, { shell: "panel", interactive: "editor", queue: "editor" });
+  for (const k of ["shell", "interactive", "queue"]) assert.equal(openPlace(k, {}), DEFAULT_PLACE[k], k);
+});
+
+test("a new tab opens where its kind was last moved, other kinds unaffected", () => {
+  const m = { shell: "editor", queue: "panel" };
+  assert.equal(openPlace("shell", m), "editor");
+  assert.equal(openPlace("queue", m), "panel");
+  assert.equal(openPlace("interactive", m), "editor", "interactive keeps its default");
+});
+
+test("reading settings.json drops unknown kinds and bad values", () => {
+  assert.deepEqual(readPlacement({ shell: "editor", interactive: "panel", queue: "editor" }), { shell: "editor", interactive: "panel", queue: "editor" });
+  assert.deepEqual(readPlacement({ shell: "drawer", interactive: 1, queue: null, browser: "editor" }), {});
+  assert.deepEqual(readPlacement({ shell: "Editor", queue: "panel" }), { queue: "panel" });
+  for (const v of [undefined, null, "editor", 3, ["shell"], true]) assert.deepEqual(readPlacement(v), {}, String(v));
+});
+
+test("a move records the kind's new place; moving back to the default clears it", () => {
+  assert.deepEqual(placementPatch("shell", "editor"), { terminalPlacement: { shell: "editor" } });
+  assert.deepEqual(placementPatch("shell", "panel"), { terminalPlacement: { shell: null } });
+  assert.deepEqual(placementPatch("interactive", "panel"), { terminalPlacement: { interactive: "panel" } });
+  assert.deepEqual(placementPatch("queue", "editor"), { terminalPlacement: { queue: null } });
+  let m = recordMove({}, "interactive", "panel");
+  assert.deepEqual(m, { interactive: "panel" });
+  m = recordMove(m, "shell", "editor");
+  assert.deepEqual(m, { interactive: "panel", shell: "editor" });
+  const before = m;
+  m = recordMove(m, "interactive", "editor");
+  assert.deepEqual(m, { shell: "editor" });
+  assert.deepEqual(before, { interactive: "panel", shell: "editor" }, "the previous memory is not mutated");
+});
+
+test("only drawer shells and agent centre PTYs have a kind", () => {
+  assert.equal(tabKind("drawer:3"), "shell");
+  assert.equal(tabKind("drawer:3", "queue"), "shell", "a drawer id is a shell whatever it runs");
+  assert.equal(tabKind("term:1", "interactive"), "interactive");
+  assert.equal(tabKind("term:7", "queue"), "queue");
+  assert.equal(tabKind("term:1"), null, "a centre PTY without an agent kind remembers nothing");
+  assert.equal(tabKind("term:1", "review"), null);
+  for (const id of ["run:3", "mission", "/home/u/a.md", "term:", "drawer:x", ""]) assert.equal(tabKind(id, "interactive"), null, id);
 });

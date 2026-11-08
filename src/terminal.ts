@@ -62,6 +62,11 @@ export class Terminals {
     return this.tabs.length;
   }
 
+  /** The key of the shell `create` made last (it exists as soon as `create` is called). */
+  get newestKey(): string {
+    return `drawer:${this.counter}`;
+  }
+
   /** New tab running the user's shell, or `command` (argv) labelled `label`; in `cwd` (a
    *  folder of the workspace) when given, else the workspace root. */
   async create(command?: string[], label?: string, cwd?: string) {
