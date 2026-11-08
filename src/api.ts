@@ -120,6 +120,8 @@ export interface ChatSession { id: string; title: string; titleSource: "custom" 
 export interface ChatList { vendor: string; status: "ok" | "unsupported"; note: string; dir: string | null; total: number; sessions: ChatSession[] }
 export interface GitFile { xy: string; path: string }
 export interface GitStatus { isRepo: boolean; branch: string; header: string; prodBranch: boolean; files: GitFile[] }
+/** The Explorer's git marks (`git_marks`): absolute paths; a path ending in `/` is a collapsed folder. */
+export interface GitMarks { isRepo: boolean; marks: { path: string; mark: "M" | "A" | "U" | "D" | "R" | "!" | "I" }[] }
 
 export const api = {
   appInfo: () => invoke<StartupInfo>("app_info"),
@@ -211,6 +213,7 @@ export const api = {
     invoke<FileVersions>("review_file", { runId, tick, path, oldPath: oldPath ?? null }),
   reviewPatch: (runId: number, tick: number) => invoke<string>("review_patch", { runId, tick }),
   gitStatus: () => invoke<GitStatus>("git_status"),
+  gitMarks: () => invoke<GitMarks>("git_marks"),
   gitDiff: (path?: string) => invoke<string>("git_diff", { path: path ?? null }),
   gitCommit: (message: string, stageAll: boolean) => invoke<string>("git_commit", { message, stageAll }),
   gitPush: (typedConfirm?: string) => invoke<string>("git_push", { typedConfirm: typedConfirm ?? null }),
