@@ -1,5 +1,6 @@
 // Git panel: status, per-file diff, commit, push. A production branch push needs a typed yes.
 import { api, errText, h, type GitStatus } from "./api";
+import { UNMERGED_XY } from "./conflictmerge";
 import { obj, snapshot, str } from "./snapshot";
 import { CommitGraph, diffLines } from "./gitgraph";
 import { type ShipHost, ShipLaneTile } from "./shiplane";
@@ -27,6 +28,10 @@ export class GitPanel {
   private out = h("pre", { class: "git-out" });
   private result = h("div", { class: "git-result", hidden: "", role: "status" }, this.resultTitle, this.out);
   private last: GitStatus | null = null;
+  /** Unmerged paths: a line with the count and the conflict window's button. */
+  private conflictBox = h("div", { class: "git-conflicts hint warn", hidden: "" });
+  /** Opens the conflict window (src/conflicts.ts), set by main.ts. */
+  onResolve: (() => void) | null = null;
   private shown = "";
   private selected = "";
   private loading: Promise<void> | null = null;
@@ -37,6 +42,7 @@ export class GitPanel {
     this.prodBox.append(h("span", {}, "Production push: "), this.yes);
     root.append(
       h("div", { class: "panel-row" }, this.branch, this.header, h("span", { class: "spacer" }), this.checked, this.refreshBtn),
+      this.conflictBox,
       this.files,
       this.diffBox,
       this.msg,
@@ -82,6 +88,12 @@ export class GitPanel {
       this.prodBox.hidden = !s.prodBranch;
       // A push in flight owns its button label (spinner); the next reload sets it.
       if (!this.pushBtn.classList.contains("is-busy")) this.pushBtn.textContent = s.prodBranch ? `Push ${s.branch} (production)` : "Push";
+      const unmerged = s.files.filter((f) => UNMERGED_XY.has(f.xy)).length;
+      this.conflictBox.hidden = !unmerged;
+      if (unmerged) {
+        const open = btn("Resolve conflicts…", () => this.onResolve?.(), { "data-act": "resolve-conflicts" });
+        this.conflictBox.replaceChildren(h("span", { class: "grow" }, `${unmerged} conflicted file(s): resolve them hunk by hunk, then commit here.`), open);
+      }
       // Same list as on screen: keep the rows (hover, selection, scroll) instead of rebuilding them.
       const key = JSON.stringify(s.files);
       if (key === this.shown) return;

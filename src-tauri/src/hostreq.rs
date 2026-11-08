@@ -39,7 +39,11 @@ use crate::{branchrule, gitops, workspace, AppState};
 
 pub const SPOOL_ENV: &str = "COLONY_HOST_SPOOL";
 pub const CLI_ENV: &str = "COLONY_HOST_CLI";
-pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch", "open-pr"];
+pub const KINDS: &[&str] = &["merge-pr", "rerun-checks", "push-branch", "open-pr", "stage-resolved"];
+/// Kinds only Colony's own UI files (`add_local`): a spool request for one is refused, so an
+/// agent can never ask to stage (git-cicd ADR amend 2026-11-07 point 6: the agent proposes,
+/// the operator applies and stages).
+pub const LOCAL_ONLY: &[&str] = &["stage-resolved"];
 const PROTOCOL: u32 = 1;
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 const MAX_REASON_CHARS: usize = 2000;
@@ -122,6 +126,11 @@ pub enum Action {
     OpenPr {
         shape: PrShape,
     },
+    /// `git add` of one conflicted file the operator resolved in the conflict window
+    /// (repository-relative path). Colony-only (LOCAL_ONLY).
+    StageResolved {
+        path: String,
+    },
 }
 
 impl Action {
@@ -134,6 +143,7 @@ impl Action {
                 _ => Err("rerun-checks needs exactly one of <run-id> or --pr <number>".into()),
             },
             Action::PushBranch { branch: Some(b) } if !valid_branch(b) => Err(format!("Not a branch name: {b}")),
+            Action::StageResolved { path } if !crate::conflicts::valid_repo_path(path) => Err(format!("Not a repository path: {path}")),
             _ => Ok(()),
         }
     }
@@ -144,6 +154,7 @@ impl Action {
             Action::RerunChecks { .. } => "rerun-checks",
             Action::PushBranch { .. } => "push-branch",
             Action::OpenPr { .. } => "open-pr",
+            Action::StageResolved { .. } => "stage-resolved",
         }
     }
 
@@ -155,6 +166,7 @@ impl Action {
             Action::PushBranch { branch } => format!("push {}", branch.as_deref().unwrap_or("the current branch")),
             Action::OpenPr { shape: PrShape::Promote } => "open the staging -> main pull request".into(),
             Action::OpenPr { shape: PrShape::StagingSync } => "open the staging fast-forward sync pull request".into(),
+            Action::StageResolved { path } => format!("stage the resolved file {path}"),
         }
     }
 
@@ -590,6 +602,8 @@ pub enum Pin {
     Merge { head: String, base: String },
     /// open-pr: the whole plan (branches, sha, title, body).
     Plan(PrPlan),
+    /// stage-resolved: the blob id of the file the card showed; a file edited since is refused.
+    Blob(String),
 }
 
 /// One approval card, as the UI sees it.
@@ -760,6 +774,9 @@ impl HostRequests {
         let mut req: Request = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| format!("unreadable request: {e}"))?;
         if req.v != PROTOCOL || req.id != id {
             return Err("request id or protocol version mismatch".into());
+        }
+        if LOCAL_ONLY.contains(&req.kind.as_str()) {
+            return Err(format!("{} is filed by Colony's conflict window only, never by an agent", req.kind));
         }
         let action = Action::from_parts(&req.kind, &req.args)?;
         let cwd = PathBuf::from(&req.cwd).canonicalize().map_err(|e| format!("cwd {}: {e}", req.cwd))?;
@@ -1046,7 +1063,43 @@ fn production_gate(action: &Action, cwd: &Path) -> Result<Option<String>, String
         // with the typed yes. A plan Colony refuses (no staging flow, nothing to promote or
         // sync) is refused here, so the card cannot be approved.
         Action::OpenPr { shape } => pr_plan(*shape, cwd).map(|_| None),
+        // Staging needs no typed yes; a file that is not ready is refused on the card.
+        Action::StageResolved { path } => stage_check(cwd, path).map(|_| None),
     }
+}
+
+/// True when a line is a conflict marker git writes (size 7, as the kit's parser reads it).
+fn marker_line(l: &str) -> bool {
+    let l = l.strip_suffix('\r').unwrap_or(l);
+    ["<<<<<<<", "|||||||", ">>>>>>>"].iter().any(|m| l.strip_prefix(m).is_some_and(|r| r.is_empty() || r.starts_with(' '))) || l.strip_prefix("=======").is_some_and(|r| r.trim().is_empty())
+}
+
+/// A conflicted file ready to stage: the path resolves inside the repository (no symlink
+/// out of it), the index still has it unmerged, and no conflict-marker line is left in it.
+/// Returns its blob id (`git hash-object`), pinned on the card.
+pub fn stage_check(cwd: &Path, path: &str) -> Result<String, String> {
+    if !crate::conflicts::valid_repo_path(path) {
+        return Err(format!("Not a repository path: {path}"));
+    }
+    let top = PathBuf::from(gitops::git(cwd, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = top.canonicalize().map_err(|e| e.to_string())?;
+    let file = top.join(path);
+    let meta = std::fs::symlink_metadata(&file).map_err(|e| format!("{path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("Refused: {path} is not a regular file (resolve a deletion, a symlink or a binary in the terminal)"));
+    }
+    if !file.canonicalize().map_err(|e| e.to_string())?.starts_with(&top) {
+        return Err(format!("Refused: {path} resolves outside the repository"));
+    }
+    let unmerged = gitops::git(cwd, &["-C", &top.display().to_string(), "--literal-pathspecs", "ls-files", "-u", "--", path])?;
+    if unmerged.trim().is_empty() {
+        return Err(format!("Refused: {path} is not an unmerged path (already staged, or never conflicted)"));
+    }
+    let text = std::fs::read(&file).map_err(|e| format!("{path}: {e}"))?;
+    if String::from_utf8_lossy(&text).lines().any(marker_line) {
+        return Err(format!("Refused: {path} still has conflict markers. Resolve every hunk and save first"));
+    }
+    Ok(gitops::git(cwd, &["-C", &top.display().to_string(), "--literal-pathspecs", "hash-object", "--", path])?.trim().to_string())
 }
 
 /// Run an approved action. `Err` carries the failure output.
@@ -1120,6 +1173,17 @@ fn execute(action: &Action, cwd: &Path, pin: Option<&Pin>) -> Result<String, Str
             log.push_str(&out);
             Ok(log)
         }
+        Action::StageResolved { path } => {
+            let blob = stage_check(cwd, path)?;
+            if let Some(Pin::Blob(b0)) = pin {
+                if *b0 != blob {
+                    return Err(format!("Refused: {path} changed since the card opened. Deny it and stage it again"));
+                }
+            }
+            let top = gitops::git(cwd, &["rev-parse", "--show-toplevel"])?.trim().to_string();
+            // One literal path, never -A or a pathspec pattern.
+            gitops::git(cwd, &["-C", &top, "--literal-pathspecs", "add", "--", path]).map(|o| if o.trim().is_empty() { format!("Staged {path}") } else { o })
+        }
         Action::PushBranch { branch } => {
             let b = branch.as_deref().ok_or("push-branch without a branch")?;
             if !valid_branch(b) {
@@ -1181,6 +1245,13 @@ fn context(action: &Action, cwd: &Path) -> (Value, Option<Pin>) {
             }
             Err(_) => json!({}),
         },
+        Action::StageResolved { path } => match stage_check(cwd, path) {
+            Ok(blob) => {
+                pin = Some(Pin::Blob(blob.clone()));
+                json!({ "path": path, "blob": blob })
+            }
+            Err(_) => json!({ "path": path }),
+        },
         Action::PushBranch { branch } => {
             let b = branch.clone().unwrap_or_default();
             let upstream = gitops::git(cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).ok().map(|s| s.trim().to_string());
@@ -1225,6 +1296,10 @@ pub fn host_request_diff(hr: State<'_, Shared>, id: String) -> Result<String, St
         Action::PushBranch { branch: Some(b) } => {
             let upstream = gitops::git(&cwd, &["rev-parse", "--abbrev-ref", &format!("{b}@{{u}}")]).map(|s| s.trim().to_string()).unwrap_or_else(|_| format!("origin/{b}"));
             gitops::git(&cwd, &["diff", "--no-ext-diff", "--no-textconv", "--stat", "--patch", &format!("{upstream}...{b}"), "--"])
+        }
+        Action::StageResolved { path } => {
+            let top = gitops::git(&cwd, &["rev-parse", "--show-toplevel"])?.trim().to_string();
+            gitops::git(&cwd, &["-C", &top, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--", path])
         }
         Action::OpenPr { shape } => {
             let plan = pr_plan(*shape, &cwd)?;
@@ -1584,5 +1659,73 @@ mod tests {
         assert_eq!(cli.join().unwrap(), EXIT_OK, "the forged answer only fools the requester");
         hr.scan();
         assert!(hr.views().is_empty(), "and the card leaves without anything being executed");
+    }
+
+    #[test]
+    fn stage_resolved_is_colony_only_and_checks_the_file() {
+        // Parsing: a repository path, never an option or an escape; no CLI form.
+        assert_eq!(Action::from_parts("stage-resolved", &json!({ "path": "src/a.rs" })).unwrap(), Action::StageResolved { path: "src/a.rs".into() });
+        for bad in ["-A", "../x", "/etc/passwd", "", "a/../b"] {
+            assert!(Action::from_parts("stage-resolved", &json!({ "path": bad })).is_err(), "{bad}");
+        }
+        assert!(Action::from_parts("stage-resolved", &json!({ "path": "a", "all": true })).is_err());
+        assert!(parse(&["stage-resolved", "a.txt"]).is_err(), "agents cannot file it with colony request");
+
+        // A spool file for it is refused before any card.
+        let (sp, cwd) = (spool(), repo());
+        let hr = HostRequests::with_spool(sp.clone());
+        let id = nonce().unwrap();
+        let forged = json!({ "v": 1, "id": id, "kind": "stage-resolved", "args": { "path": "a.txt" }, "cwd": cwd, "pid": std::process::id(), "createdAt": now() });
+        std::fs::write(request_path(&sp, &id), forged.to_string()).unwrap();
+        hr.scan();
+        assert!(hr.views().is_empty());
+        let r = take_response(&sp, &id).expect("refusal");
+        assert!(r.reason.unwrap().contains("conflict window only"));
+
+        // A real conflict: refused while markers remain, staged once resolved, refused after.
+        let g = |args: &[&str]| gitops::git(&cwd, &[&["-c", "user.name=t", "-c", "user.email=t@example.com"], args].concat());
+        std::fs::write(cwd.join("a.txt"), "base\n").unwrap();
+        g(&["add", "-A"]).unwrap();
+        g(&["commit", "-q", "-m", "base"]).unwrap();
+        g(&["checkout", "-q", "-b", "side"]).unwrap();
+        std::fs::write(cwd.join("a.txt"), "side\n").unwrap();
+        g(&["commit", "-q", "-am", "side"]).unwrap();
+        g(&["checkout", "-q", "main"]).unwrap();
+        std::fs::write(cwd.join("a.txt"), "main\n").unwrap();
+        g(&["commit", "-q", "-am", "main"]).unwrap();
+        assert!(g(&["merge", "-q", "side"]).is_err());
+        let a = Action::StageResolved { path: "a.txt".into() };
+        let e = production_gate(&a, &cwd).unwrap_err();
+        assert!(e.contains("conflict markers"), "{e}");
+        assert!(execute(&a, &cwd, None).is_err());
+        std::fs::write(cwd.join("a.txt"), "main\nside\n").unwrap();
+        let (ctx, pin) = context(&a, &cwd);
+        assert_eq!(ctx["refused"], Value::Null);
+        let Some(Pin::Blob(b0)) = pin.clone() else { panic!("blob pin") };
+        // Edited after the card: refused, nothing staged.
+        std::fs::write(cwd.join("a.txt"), "main\nside\nmore\n").unwrap();
+        assert!(execute(&a, &cwd, pin.as_ref()).unwrap_err().contains("changed since the card"));
+        assert!(!gitops::git(&cwd, &["ls-files", "-u", "--", "a.txt"]).unwrap().trim().is_empty(), "still unmerged");
+        std::fs::write(cwd.join("a.txt"), "main\nside\n").unwrap();
+        assert_eq!(stage_check(&cwd, "a.txt").unwrap(), b0);
+        execute(&a, &cwd, pin.as_ref()).unwrap();
+        assert!(gitops::git(&cwd, &["ls-files", "-u", "--", "a.txt"]).unwrap().trim().is_empty(), "staged");
+        assert!(gitops::git(&cwd, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok(), "the merge is not committed or continued");
+        assert!(production_gate(&a, &cwd).unwrap_err().contains("not an unmerged path"));
+        // A symlink out of the repository is refused.
+        let out = test_dir("outside");
+        std::fs::write(out.join("x"), "x\n").unwrap();
+        std::os::unix::fs::symlink(out.join("x"), cwd.join("link")).unwrap();
+        assert!(stage_check(&cwd, "link").unwrap_err().contains("not a regular file"));
+    }
+
+    #[test]
+    fn marker_lines_match_the_kit_parser() {
+        for m in ["<<<<<<< HEAD", "<<<<<<<", "=======", "======= ", "||||||| base", ">>>>>>> side", ">>>>>>> side\r"] {
+            assert!(marker_line(m), "{m:?}");
+        }
+        for t in ["<<<<<<<< longer", "a <<<<<<< b", "=======x", "<<<<<<<HEAD", "== heading"] {
+            assert!(!marker_line(t), "{t:?}");
+        }
     }
 }

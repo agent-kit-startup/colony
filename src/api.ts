@@ -1,5 +1,6 @@
 // Typed wrappers over the Colony Rust commands (src-tauri/src/*.rs).
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { ConflictsListing, ProposeResult } from "./conflictmerge";
 
 export interface StartupInfo {
   version: string;
@@ -225,6 +226,11 @@ export const api = {
   gitGraph: (skip: number, limit: number) => invoke<GraphPage>("git_graph", { skip, limit }),
   gitCommitDetail: (hash: string) => invoke<CommitDetail>("git_commit_detail", { hash }),
   gitCommitDiff: (hash: string, path: string) => invoke<string>("git_commit_diff", { hash, path }),
+  /** `agent-kit conflicts --json` in the folder (kit packages/cli/src/conflicts): read-only. */
+  conflictsList: () => invoke<ConflictsListing>("conflicts_list"),
+  /** `agent-kit conflicts propose <path> --json`: a zero-tool session; writes nothing. */
+  conflictsPropose: (path: string, backend: string, verify: boolean) => invoke<ProposeResult>("conflicts_propose", { path, backend, verify }),
+  gitMergeAbort: () => invoke<string>("git_merge_abort"),
   gitCommit: (message: string, stageAll: boolean) => invoke<string>("git_commit", { message, stageAll }),
   gitPush: (typedConfirm?: string) => invoke<string>("git_push", { typedConfirm: typedConfirm ?? null }),
 };

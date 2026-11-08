@@ -33,6 +33,7 @@ import { type Move, outermost } from "./treenav";
 import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
+import { ConflictView } from "./conflicts";
 import { GitView } from "./git";
 import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq";
 import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
@@ -1634,6 +1635,42 @@ const requests = new RequestsSection(status, (_r, d) => {
   if (d.outcome !== "denied") gitView.reload();
 });
 gitView.addSections(requests, new PullRequestsSection(status, (id) => requests.reveal(id)));
+
+// Conflict window (src/conflicts.ts; plan colony-explorer-git-workbench x7): one closable tab,
+// opened from the Working tree's conflict line and from a tree row's ! mark.
+let conflictView: ConflictView | null = null;
+function openConflicts(path?: string) {
+  conflictView ??= new ConflictView({
+    status,
+    confirm: (m) => ask(m, { title: "Colony", kind: "warning" }),
+    stage: (p) => hostApi.local("stage-resolved", { path: p }),
+    revealRequest: (id) => {
+      showTab("git");
+      requests.reveal(id);
+    },
+    changed: () => {
+      tree.refreshMarks();
+      void gitView.panel.refresh();
+    },
+  });
+  const view = conflictView;
+  addTab({ id: "conflicts", label: "Conflicts", icon: "git", tip: "Merge conflicts: resolve hunk by hunk, stage after your Approve", pinned: false, el: view.el, close: () => ((conflictView = null), true) });
+  void view.load(path);
+}
+gitView.panel.onResolve = () => openConflicts();
+// A conflicted row's ! mark opens the window on that file (the row click still opens the editor).
+$("tree").addEventListener(
+  "click",
+  (e) => {
+    const mark = (e.target as HTMLElement).closest<HTMLElement>('.git-mark[data-mark="!"]');
+    const path = mark?.closest<HTMLElement>(".tree-row[data-path]")?.dataset.path;
+    if (!path) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openConflicts(path);
+  },
+  true,
+);
 const cicd = new CicdView(status);
 inbox.addSection(() => inboxRequests(() => showTab("git")));
 hostRequests.on((fresh) => {
