@@ -61,6 +61,11 @@ pub enum Op {
     /// Open a pull request. Colony builds every field (hostreq `pr_plan`); never `--web`,
     /// `--fill` or a draft toggle from the requester.
     PrCreate { base: String, head: String, title: String, body: String },
+    /// Bring the base into the PR head on the forge (a merge, never `--rebase`); nothing is
+    /// pushed from the operator's clone.
+    PrUpdateBranch(u64),
+    /// Close the PR, keeping its branch (never `--delete-branch`), so a reopen undoes it.
+    PrClose(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +118,8 @@ impl Provider {
                 Op::RunView(id) => v(&["run", "view", &id.to_string(), "--json", RUN_FIELDS]),
                 Op::RerunFailed(id) => v(&["run", "rerun", &id.to_string(), "--failed"]),
                 Op::PrCreate { base, head, title, body } => v(&["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body]),
+                Op::PrUpdateBranch(n) => v(&["pr", "update-branch", &n.to_string()]),
+                Op::PrClose(n) => v(&["pr", "close", &n.to_string()]),
             },
         }
     }
@@ -282,6 +289,16 @@ mod tests {
         let a = Provider::GitHub.argv(&Op::PrCreate { base: "main".into(), head: "staging".into(), title: "T; rm -rf /".into(), body: "$(x)".into() });
         assert_eq!(a, ["pr", "create", "--base", "main", "--head", "staging", "--title", "T; rm -rf /", "--body", "$(x)"]);
         assert!(!a.iter().any(|x| x == "--web" || x == "--fill" || x == "--draft"));
+    }
+
+    #[test]
+    fn update_branch_and_close_argv_are_fixed() {
+        let u = Provider::GitHub.argv(&Op::PrUpdateBranch(5));
+        assert_eq!(u, ["pr", "update-branch", "5"]);
+        assert!(!u.iter().any(|x| x == "--rebase"));
+        let c = Provider::GitHub.argv(&Op::PrClose(5));
+        assert_eq!(c, ["pr", "close", "5"]);
+        assert!(!c.iter().any(|x| x == "--delete-branch" || x == "-d"));
     }
 
     #[test]
