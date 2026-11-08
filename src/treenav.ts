@@ -10,7 +10,8 @@ export type NavKey = { key: string; shiftKey?: boolean; ctrlKey?: boolean; metaK
 
 /** What a key does. `index` is a row of the list the key was asked about. */
 export type NavAction =
-  | { kind: "focus"; index: number; extend: boolean }
+  | { kind: "focus"; index: number; extend: boolean; keep?: boolean }
+  | { kind: "toggle"; index: number }
   | { kind: "expand"; index: number }
   | { kind: "collapse"; index: number }
   | { kind: "open"; index: number }
@@ -21,10 +22,20 @@ export type NavAction =
 const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
 /** The keys of a focused tree. `focus` is the focused row (-1: none), `query` the filter. Keys
- *  with Ctrl, Alt or Meta are never taken (they belong to the window's shortcuts). */
+ *  with Alt or Meta are never taken, and with Ctrl only the selection keys: Ctrl+Up and Down
+ *  move the focus and keep the selection (`keep`), Ctrl+Space toggles the focused row. Every
+ *  other Ctrl key belongs to the window's shortcuts. */
 export function navKey(rows: NavRow[], focus: number, ev: NavKey, query: string): NavAction | null {
-  if (ev.ctrlKey || ev.metaKey || ev.altKey) return null;
+  if (ev.metaKey || ev.altKey) return null;
   const n = rows.length;
+  if (ev.ctrlKey) {
+    const at = focus >= 0 && focus < n ? focus : -1;
+    if (!n || ev.shiftKey) return null;
+    if (ev.key === "ArrowDown") return { kind: "focus", index: at < 0 ? 0 : Math.min(at + 1, n - 1), extend: false, keep: true };
+    if (ev.key === "ArrowUp") return { kind: "focus", index: at < 0 ? 0 : Math.max(at - 1, 0), extend: false, keep: true };
+    if (ev.key === " " && at >= 0) return { kind: "toggle", index: at };
+    return null;
+  }
   const extend = !!ev.shiftKey;
   const at = focus >= 0 && focus < n ? focus : -1;
   const row = at >= 0 ? rows[at] : null;
