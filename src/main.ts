@@ -48,12 +48,13 @@ import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SK
 import { smokeLive } from "./smoke-live";
 import { snapshot } from "./snapshot";
 import "./styles.css";
-import { Terminals } from "./terminal";
+import { retireShell, Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
 import { sectionInfo, workspaceSection } from "./workspace";
 import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
+import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, otherPlace, type Place } from "./tabmove";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
 import menuSpec from "./menu.json";
@@ -180,6 +181,10 @@ interface Tab {
 type DocMode = "preview" | "editor";
 const tabs = new Map<string, Tab>();
 const order: string[] = [];
+/** Set once the drawer exists (./terminal.ts): its tabs' gate surfaces, and whether it holds
+ *  a terminal tab id. */
+let refreshDrawer = () => {};
+let drawerHas = (_id: string) => false;
 let activeTab = "mission";
 /** Back / Forward through the views and documents shown in the main pane (ADR 2026-10-24
  *  point 4): the strip holds documents only, so this is the way back to a view. */
@@ -318,6 +323,7 @@ $("rail").addEventListener("keydown", (ev) => {
 function renderTabs() {
   renderRail();
   renderTopActions();
+  refreshDrawer();
   const bar = $("tabs");
   const rest = $("tabs-rest");
   // No folder: no strip. With one, the strip stays (Back / Forward head it).
@@ -370,6 +376,9 @@ function renderTabs() {
 
 function showTab(id: string) {
   const t = tabs.get(id);
+  // A terminal tab moved to the drawer keeps its id: a focus by id (Inbox, Agent runs, a
+  // resumed chat) shows it there (kit ADR 2026-10-24 amend 2026-11-07).
+  if (!t && workspace && drawerHas(id)) return void focusPty(id);
   if (!t || !workspace) return;
   const prev = tabs.get(activeTab);
   if (prev && prev !== t) {
@@ -392,9 +401,14 @@ async function closeTab(id: string) {
   const t = tabs.get(id);
   if (!t || t.pinned) return;
   if (t.close && !(await t.close())) return;
+  if (t.el !== $("view-editor")) t.el.remove();
+  detachTab(id);
+}
+
+/** Take a tab out of the strip without closing it (closed, or moved to the drawer). */
+function detachTab(id: string) {
   tabs.delete(id);
   order.splice(order.indexOf(id), 1);
-  if (t.el !== $("view-editor")) t.el.remove();
   nav.forget(id);
   if (activeTab === id) {
     // Back to what was shown before it; else the last document, else Mission.
@@ -813,11 +827,15 @@ async function openSettings() {
 $("btn-settings").addEventListener("click", () => void openSettings());
 
 // ---- terminals (the drawer) -----------------------------------------------------------
-// The drawer holds the user's shells only; the interactive vendor CLIs and the queue runners
-// stay centre tabs (context strip, gate badge, Agent runs) and are not repeated here. Its bar
+// The drawer holds the user's shells, plus any centre terminal tab moved there (kit ADR
+// 2026-10-24 amend 2026-11-07); the interactive vendor CLIs and the queue runners open as
+// centre tabs (context strip, gate badge, Agent runs) and are not repeated here. Its bar
 // (shell tabs, +, dock, show / hide) stays on screen while the drawer is closed: a shell tab
 // or the toggle opens it again.
 const terminals = new Terminals($("term-tabs"), $("terms"), status, () => workspace?.root ?? "");
+terminals.onExit = () => renderTabs();
+refreshDrawer = () => terminals.refresh();
+drawerHas = (id) => terminals.has(id);
 $("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => runAction("new-terminal"));
 // A shell tab clicked while the drawer is closed opens it (capture: before the tab shows its
 // shell, so that shell gets the focus). Its close button only closes it.
@@ -1094,6 +1112,231 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
   return { id, view };
 }
 
+// ---- terminal tabs move between the editor area and the panel ------------------------------
+// Kit ADR 2026-10-24 amend 2026-11-07: a drawer shell or a centre PTY moves to the other bar
+// by drag, by its context-menu row, or by View → Move terminal to … (also in the palette).
+// The session is reparented, never restarted: same process, scrollback and tab id. A centre
+// PTY keeps its element (context strip included), its gate badge and border, and its own
+// close; a drawer shell keeps its last-folder close. The placement lasts until the tab closes.
+/** Centre tabs held by the drawer, put back as they were when they move back. */
+const parkedTabs = new Map<string, Tab>();
+/** A drawer shell's own tooltip (its argv) while it sits in the editor area. */
+const shellTips = new Map<string, string>();
+
+function ptyPlace(id: string): Place | null {
+  if (!isPtyTab(id)) return null;
+  if (tabs.has(id)) return "editor";
+  return terminals.has(id) ? "panel" : null;
+}
+
+/** A terminal tab's view, in whichever bar holds it. */
+function ptyView(id: string): TermView | undefined {
+  return centerTerms.get(id) ?? terminals.view(id);
+}
+
+/** Show a terminal tab in whichever bar holds it (the drawer opens for one there). */
+function focusPty(id: string): boolean {
+  if (tabs.has(id)) {
+    showTab(id);
+    return true;
+  }
+  if (!terminals.has(id)) return false;
+  terminals.focusKey(id);
+  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  return true;
+}
+
+function movePty(id: string, to: Place): boolean {
+  const from = ptyPlace(id);
+  if (!workspace || !from || from === to) return false;
+  if (to === "panel") {
+    const t = tabs.get(id)!;
+    const view = centerTerms.get(id)!;
+    detachTab(id);
+    centerTerms.delete(id);
+    if (id.startsWith("drawer:")) {
+      // A shell going home: its pane back into the drawer, the editor-area wrapper dropped.
+      terminals.adopt({ key: id, label: t.label, tip: shellTips.get(id), view, el: view.pane });
+      shellTips.delete(id);
+      t.el.remove();
+    } else {
+      parkedTabs.set(id, t);
+      terminals.adopt({
+        key: id,
+        label: t.label,
+        view,
+        el: t.el,
+        hooks: {
+          tip: t.tip,
+          cls: () => t.cls?.() ?? "",
+          badge: () => {
+            const b = t.badge?.();
+            return b ? { text: b.text, cls: b.cls } : null;
+          },
+          icon: t.icon ? () => icon(t.icon as IconKind, "tab-svg") : undefined,
+          close: () => {
+            parkedTabs.delete(id);
+            void t.close?.();
+          },
+        },
+      });
+    }
+    toggleTerminal(true);
+  } else {
+    const r = terminals.release(id)!;
+    centerTerms.set(id, r.view);
+    if (!r.hooks && r.tip) shellTips.set(id, r.tip);
+    const parked = parkedTabs.get(id);
+    parkedTabs.delete(id);
+    if (parked) addTab(parked);
+    else {
+      const view = r.view;
+      const el = h("div", { class: "term-center" }, h("div", { class: "term-wrap" }, view.pane));
+      addTab({
+        id,
+        label: r.label,
+        icon: "terminals",
+        tip: `${r.label} (a drawer shell; View → Move terminal to the panel puts it back)`,
+        pinned: false,
+        el,
+        cls: () => (view.exited ? "exited" : ""),
+        show: () =>
+          requestAnimationFrame(() => {
+            view.fit();
+            view.focus();
+          }),
+        close: () => {
+          centerTerms.delete(id);
+          retireShell(id, view);
+          return true;
+        },
+      });
+    }
+  }
+  ttys.update(id, { place: to === "panel" ? "drawer" : "tab" });
+  relayout();
+  status(`${tabLabelOf(id)} moved to the ${to === "panel" ? "panel" : "editor area"}`);
+  return true;
+}
+
+function tabLabelOf(id: string): string {
+  return tabs.get(id)?.label ?? ttys.get(id)?.label ?? id;
+}
+
+/** The tab id under a pointer or a right-click in either bar, when it is a terminal tab. */
+function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
+  const b = el?.closest<HTMLElement>("#tabs .tab, #term-tabs > .tab");
+  const id = b?.dataset.tab ?? b?.dataset.key ?? "";
+  const from = ptyPlace(id);
+  return from ? { id, from } : null;
+}
+
+// Drag: pointer events tracked by tab id on the two bars, like the splitters (the centre
+// strip is rebuilt on every snapshot, and the window keeps its OS file-drop handler). A press
+// that travels less than the threshold stays a click; Escape cancels. The bar under the
+// pointer marks itself as the drop target with its border colour only.
+for (const bar of [$("tabs"), $("term-tabs")]) {
+  bar.addEventListener("pointerdown", (down) => {
+    if (down.button !== 0 || (down.target as HTMLElement).closest(".tab-close")) return;
+    const src = ptyTabAt(down.target as Element);
+    if (!src) return;
+    let dragging = false;
+    let over: Place | null = null;
+    const mark = (p: Place | null) => {
+      over = p;
+      $("tabs").classList.toggle("drop-target", p === "editor" && src.from !== "editor");
+      $("term-tabs").classList.toggle("drop-target", p === "panel" && src.from !== "panel");
+    };
+    const move = (ev: PointerEvent) => {
+      if (!dragging && !dragStarted(ev.clientX - down.clientX, ev.clientY - down.clientY)) return;
+      if (!dragging) {
+        dragging = true;
+        shell.classList.add("tab-dragging");
+      }
+      ev.preventDefault();
+      mark(dropPlace(document.elementFromPoint(ev.clientX, ev.clientY)));
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key, true);
+      shell.classList.remove("tab-dragging");
+      const to = drop ? moveTarget(src.from, over) : null;
+      mark(null);
+      if (!dragging) return;
+      // The release after a drag is not a click on whatever is under it (the click, when the
+      // engine sends one, comes in the same task as the release).
+      const eat = (ev: MouseEvent) => ev.stopPropagation();
+      window.addEventListener("click", eat, true);
+      window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
+      if (to) movePty(src.id, to);
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key, true);
+  });
+}
+
+// Right-click on a terminal tab, in either bar: Colony's menu with its move row (one popover
+// at a time, like the Explorer and terminal menus).
+let tabMenu: HTMLElement | null = null;
+const closeTabMenu = () => tabMenu && (tabMenu.hidden = true);
+function openTabMenu(id: string, from: Place, x: number, y: number) {
+  if (!tabMenu) {
+    const m = h("div", { id: "tab-menu", class: "menu", role: "menu", "aria-label": "Terminal tab", hidden: "" });
+    for (const ev of ["click", "resize", "blur"]) window.addEventListener(ev, closeTabMenu);
+    window.addEventListener("colony:popover", (ev) => (ev as CustomEvent).detail !== "tab" && closeTabMenu());
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || m.hidden) return;
+      ev.preventDefault();
+      closeTabMenu();
+    });
+    document.body.append(m);
+    tabMenu = m;
+  }
+  window.dispatchEvent(new CustomEvent("colony:popover", { detail: "tab" }));
+  const to = otherPlace(from);
+  const label = moveLabel(from);
+  const b = h("button", { role: "menuitem", "data-act": to === "panel" ? "tab-to-panel" : "tab-to-editor", title: `${label}: ${tabLabelOf(id)}` }, label);
+  b.addEventListener("click", () => {
+    closeTabMenu();
+    movePty(id, to);
+  });
+  tabMenu.replaceChildren(b);
+  tabMenu.hidden = false;
+  const r = tabMenu.getBoundingClientRect();
+  tabMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 4))}px`;
+  tabMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 4))}px`;
+}
+for (const bar of [$("tabs"), $("term-tabs")]) {
+  bar.addEventListener("contextmenu", (ev) => {
+    const src = ptyTabAt(ev.target as Element);
+    if (!src) return;
+    ev.preventDefault();
+    openTabMenu(src.id, src.from, ev.clientX, ev.clientY);
+  });
+}
+
+/** View → Move terminal to the panel: the active centre tab, when it is a terminal. */
+function moveActiveToPanel() {
+  if (!movePty(activeTab, "panel")) status("Move terminal to the panel: the active tab is not a terminal in the editor area");
+}
+/** View → Move terminal to the editor area: the drawer's active terminal. */
+function moveActiveToEditor() {
+  const key = terminals.activeKey();
+  if (!key || !movePty(key, "editor")) status("Move terminal to the editor area: the panel has no terminal");
+}
+
 /** Saved chat (session id) -> the terminal tab that resumed it. */
 const chatTabs = new Map<string, string>();
 /** Saved chats whose resume tab is still opening: a second click must not open another. */
@@ -1200,11 +1443,9 @@ const host: DriverChatHost = {
   resumeChat: async (id, title) => {
     if (!workspace) return status("Open a folder first");
     const open = chatTabs.get(id);
-    const openView = open ? centerTerms.get(open) : undefined;
-    if (open && openView && tabs.has(open) && !openView.exited) {
-      showTab(open);
-      return { id: open, view: openView };
-    }
+    // In the editor area or moved to the panel: the open tab is focused, not resumed twice.
+    const openView = open ? ptyView(open) : undefined;
+    if (open && openView && !openView.exited && focusPty(open)) return { id: open, view: openView };
     if (resuming.has(id)) return;
     resuming.add(id);
     try {
@@ -1263,10 +1504,9 @@ const kitHost: KitViewsHost = { ...host, showEngine: () => showEngine() };
 const processesView = new ProcessesView(kitHost);
 const terminalsView = new TerminalsView(kitHost, {
   workspaceRoot: () => workspace?.root ?? "",
+  // A terminal tab in whichever bar holds it (a shell or a centre PTY may have moved).
   focus: (s) => {
-    if (s.place === "tab") return showTab(s.key);
-    toggleTerminal(true);
-    if (!terminals.focusShell(Number(s.key.slice("drawer:".length)))) status(`${s.label} is no longer in the drawer`);
+    if (!focusPty(s.key)) status(`${s.label} is no longer open`);
   },
   reopen: (s) => {
     toggleTerminal(true);
@@ -1701,6 +1941,8 @@ const ACTIONS: Record<string, () => unknown> = {
   "dock:bottom": () => setDock("bottom"),
   "dock:top": () => setDock("top"),
   "dock:side": () => setDock("side"),
+  "term-to-panel": () => moveActiveToPanel(),
+  "term-to-editor": () => moveActiveToEditor(),
   explorer: () => toggleExplorer(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
@@ -3105,6 +3347,82 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const focusShows = !shell.classList.contains("no-bottom");
     const tabRows = ttys.list().filter((s) => s.place === "tab").length;
     await log("native-terminals", drawerStaysClosed && closedListed && reopened && focusShows, { drawerStaysClosed, closed: lastOpen?.key ?? null, closedListed, reopened, focusShows, rows: ttys.list().length, tabRows });
+    // Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
+    // 2026-11-07), in each dock position: a drawer shell to the editor area (View menu id)
+    // and back (its tab menu), a centre agent PTY with its context strip to the panel and back
+    // the same two ways. After each move the session still echoes, fitted to its new pane, and
+    // a focus by its id finds it in the drawer.
+    {
+      const dockBefore = dock();
+      const shownBefore = !shell.classList.contains("no-bottom");
+      toggleTerminal(true);
+      await terminals.create();
+      await wait(400);
+      const sKey = terminals.activeKey();
+      const pty = await openTermTab(["sh"], "smoke pty", "COLONY_SMOKE tab move", "terminals", { kind: "interactive", plan: "", backend: "smoke", engine: "claude" });
+      await wait(400);
+      let n = 0;
+      const echoes = async (id: string) => {
+        const v = ptyView(id);
+        const tag = `tabmove-${++n}`;
+        if (!v || v.exited) return false;
+        await v.send(`echo ${tag}-$((6*7))\r`).catch(() => {});
+        return until(() => v.output.includes(`${tag}-42`), 4000);
+      };
+      const fitted = (id: string) => {
+        const s = ptyView(id)?.size();
+        return !!s?.fits && s.fits.cols === s.cols && s.fits.rows === s.rows;
+      };
+      const menuMove = async (sel: string, act: string) => {
+        const b = document.querySelector<HTMLElement>(sel);
+        const r = b?.getBoundingClientRect();
+        b?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: (r?.left ?? 0) + 8, clientY: (r?.top ?? 0) + 8 }));
+        document.querySelector<HTMLButtonElement>(`#tab-menu:not([hidden]) button[data-act="${act}"]`)?.click();
+        await wait(300);
+      };
+      const docks: Record<string, Record<string, boolean>> = {};
+      for (const d of ["bottom", "top", "side"] as const) {
+        setDock(d);
+        await wait(200);
+        const r: Record<string, boolean> = {};
+        terminals.focusKey(sKey);
+        runAction("term-to-editor");
+        await wait(300);
+        r.shellInEditor = tabs.has(sKey) && !terminals.has(sKey) && activeTab === sKey && !!$("tabs").querySelector(`.tab[data-tab="${sKey}"]`) && ttys.get(sKey)?.place === "tab";
+        r.shellEchoes = await echoes(sKey);
+        r.shellFitted = fitted(sKey);
+        if (pty) {
+          showTab(pty.id);
+          runAction("term-to-panel");
+          await wait(300);
+          const el = launches.list().find((l) => l.tabId === pty.id);
+          r.ptyInPanel = terminals.has(pty.id) && !tabs.has(pty.id) && !!$("term-tabs").querySelector(`.tab[data-key="${pty.id}"]`) && !!$("terms").querySelector(".term-center .ctx-strip") && !!el && ttys.get(pty.id)?.place === "drawer";
+          r.ptyEchoes = await echoes(pty.id);
+          r.ptyFitted = fitted(pty.id);
+          showTab("mission");
+          showTab(pty.id);
+          await wait(200);
+          r.focusById = terminals.activeKey() === pty.id && !shell.classList.contains("no-bottom");
+        }
+        await shot(`tab-move-${d}`);
+        await menuMove(`#tabs .tab[data-tab="${sKey}"]`, "tab-to-panel");
+        r.shellBack = terminals.has(sKey) && !tabs.has(sKey) && $("terms").contains(ptyView(sKey)?.pane ?? null) && ttys.get(sKey)?.place === "drawer";
+        r.shellBackEchoes = await echoes(sKey);
+        if (pty) {
+          await menuMove(`#term-tabs > .tab[data-key="${pty.id}"]`, "tab-to-editor");
+          r.ptyBack = tabs.has(pty.id) && !terminals.has(pty.id) && activeTab === pty.id && !!$("views").querySelector(".term-center .ctx-strip") && ttys.get(pty.id)?.place === "tab";
+          r.ptyBackEchoes = await echoes(pty.id);
+        }
+        docks[d] = r;
+      }
+      const ok = !!pty && Object.values(docks).every((r) => Object.values(r).length === 11 && Object.values(r).every(Boolean));
+      if (pty) await closeTab(pty.id);
+      terminals.focusKey(sKey);
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${sKey}"] .tab-close`)?.click();
+      setDock(dockBefore);
+      toggleTerminal(shownBefore);
+      await log("tab-move", ok, { shell: sKey, pty: pty?.id ?? null, docks });
+    }
     showTab("mission");
     // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
     // settings.json and applied to the chrome and the native views; then back to Bare Metal.

@@ -41,6 +41,8 @@
         { "id": "dock:bottom", "label": "Terminal at the bottom" },
         { "id": "dock:top", "label": "Terminal at the top" },
         { "id": "dock:side", "label": "Terminal at the side" },
+        { "id": "term-to-panel", "label": "Move terminal to the panel" },
+        { "id": "term-to-editor", "label": "Move terminal to the editor area" },
         { "id": "explorer", "label": "Show or hide the Explorer" },
         { "id": "quick-open", "label": "Go to file…" },
         { "id": "commands", "label": "Commands…" },
