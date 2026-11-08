@@ -167,7 +167,12 @@ export async function gitCicdSmoke(c: SmokeCtx) {
   };
   const click = (el: Element | null | undefined, act: string) => el?.querySelector<HTMLButtonElement>(`button[data-act="${act}"]`)?.click();
   const tile = () => git.querySelector<HTMLElement>(".bento-ship");
-  const row = (id: string) => tile()?.querySelector<HTMLElement>(`.ship-row[data-row="${id}"]`) ?? null;
+  // The tile is a status line; its rows show while one is pending or red, or after the toggle.
+  const row = (id: string) => {
+    const t = tile();
+    if (t?.dataset.open === "false") t.querySelector<HTMLButtonElement>('button[data-act="ship-toggle"]')?.click();
+    return tile()?.querySelector<HTMLElement>(`.ship-row[data-row="${id}"]`) ?? null;
+  };
   const proof = () => read("gh-proof.txt");
   try {
     c.showTab("git");

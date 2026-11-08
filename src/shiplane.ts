@@ -7,10 +7,13 @@
 // base needs the typed yes there (re-derived from the forge in Rust, never from this file).
 // /git-prod and /kit-prod stay copy-only. Every snapshot string is forge or repo text:
 // rendered as text nodes through h(), never as markup. The open PR list itself is the Pull
-// requests tile (src/forge.ts, live gh): one list, one Merge per PR, same rules (src/prgate.ts).
+// requests tile (src/forge.ts, live gh): one list, one action per PR (src/prlist.ts).
+// The tile is one status line (src/shipline.ts, plan colony-git-tab-forge-ux r5): it opens
+// to the rows while a row is pending or red, or on click.
 import { h } from "./api";
 import { isPromote, isStagingSync, mergeBlock, prMethod } from "./prgate";
 import "./shiplane.css";
+import { mainInStaging, shipLine, stagingAhead } from "./shipline";
 import { snapshot, type J } from "./snapshot";
 import { btn, emptyCta } from "./ui";
 
@@ -62,7 +65,6 @@ export function shipLaneGate(data: J | null): string | null {
  */
 export function rowAction(row: J, lane: J): { label: string; action: ShipAction; tip: string } | null {
   const remote = o(lane.remote);
-  const local = o(lane.local);
   const prs: J[] = remote.available === true && Array.isArray(remote.prs) ? remote.prs.map(o) : [];
   const merge = (pr: J, tip: string) => {
     const a = prAction(pr);
@@ -76,7 +78,7 @@ export function rowAction(row: J, lane: J): { label: string; action: ShipAction;
     case "staging-main": {
       const pr = prs.find((p) => isPromote(s(p.head), s(p.base)));
       if (pr) return merge(pr, "Merge staging into the default branch with a merge commit: the card needs your typed yes");
-      if (s(row.state) === "pending" && (posInt(local.stagingAheadOfMain) ?? 0) > 0) return { label: "Open PR…", action: { kind: "open-pr", args: { shape: "promote" } }, tip: "Open the staging → main pull request (approval card)" };
+      if (s(row.state) === "pending" && (stagingAhead(lane) ?? 0) > 0) return { label: "Open PR…", action: { kind: "open-pr", args: { shape: "promote" } }, tip: "Open the staging → main pull request (approval card)" };
       return null;
     }
     case "tag-ci": {
@@ -84,7 +86,8 @@ export function rowAction(row: J, lane: J): { label: string; action: ShipAction;
       return s(row.state) === "red" && run ? { label: "Rerun failed…", action: { kind: "rerun-checks", args: { run } }, tip: `Rerun the failed jobs of run ${run} (approval card)` } : null;
     }
     case "staging-sync": {
-      if (local.mainInStaging !== false) return null;
+      // The forge's compare (data 1.11.0) when there is one, else the local refs.
+      if (mainInStaging(lane) !== false) return null;
       const pr = prs.find((p) => isStagingSync(s(p.head), s(p.base)));
       if (pr) return merge(pr, "Merge the sync PR into staging with a merge commit, so main is an ancestor of staging again (approval card)");
       return { label: "Open sync PR…", action: { kind: "open-pr", args: { shape: "staging-sync" } }, tip: "Push origin/main to a new chore/ branch and open its PR into staging (approval card)" };
@@ -107,6 +110,8 @@ export function prAction(pr: J): Extract<ShipAction, { kind: "merge-pr" }> | nul
 export class ShipLaneTile {
   readonly el = h("section", { class: "card bento-tile bento-ship ship-tile" });
   private body = h("div", { class: "ship-body" });
+  /** The operator's click: null follows the rows (open while one is pending or red). */
+  private userOpen: boolean | null = null;
 
   constructor(private host: ShipHost) {
     this.el.append(h("div", { class: "card-header" }, h("span", { class: "card-title" }, "Ship lane")), this.body);
@@ -126,14 +131,19 @@ export class ShipLaneTile {
     }
     const lane = o(data?.shipLane);
     const rows: J[] = Array.isArray(lane.rows) ? lane.rows.map(o) : [];
-    const remote = o(lane.remote);
-    const counts: Record<string, number> = { green: 0, red: 0, pending: 0, unknown: 0 };
-    for (const r of rows) if (s(r.state) in counts) counts[s(r.state)]++;
-    const summary = [counts.green && `${counts.green} done`, counts.red && `${counts.red} blocked`, counts.pending && `${counts.pending} pending`, counts.unknown && `${counts.unknown} unknown`].filter(Boolean).join(" · ");
-    const kids: Node[] = [h("div", { class: "ship-summary dim small" }, `${summary || "no rows"}${remote.fetchedAt ? ` · forge read ${s(remote.fetchedAt).replace("T", " ").slice(0, 16)}` : ""}`)];
-    if (lane.note) kids.push(h("div", { class: "hint" }, s(lane.note)));
-    kids.push(rows.length ? h("ol", { class: "ship-rows", "aria-label": "Ship lane rows" }, ...rows.map((r) => this.row(r, lane))) : h("div", { class: "empty dim" }, "No ship lane rows for this repository."));
-    kids.push(h("div", { class: "hint" }, "Buttons open an approval card under Requests; nothing runs before Approve. A merge into main needs your typed yes there. /git-prod and /kit-prod are copy-only: paste them in your own agent session."));
+    const line = shipLine(lane);
+    const open = this.userOpen ?? line.open;
+    const toggle = btn(open ? "Hide rows" : "Show rows", () => {
+      this.userOpen = !open;
+      this.render();
+    }, { class: "link", "data-act": "ship-toggle", "aria-expanded": String(open) });
+    const kids: Node[] = [h("div", { class: `ship-line is-${line.tone}` }, h("span", { class: "ship-line-text grow", title: line.text }, line.text), toggle)];
+    if (open) {
+      if (lane.note) kids.push(h("div", { class: "hint" }, s(lane.note)));
+      kids.push(rows.length ? h("ol", { class: "ship-rows", "aria-label": "Ship lane rows" }, ...rows.map((r) => this.row(r, lane))) : h("div", { class: "empty dim" }, "No ship lane rows for this repository."));
+      kids.push(h("div", { class: "hint" }, "Buttons open an approval card; nothing runs before Approve. A merge into main needs your typed yes there. /git-prod and /kit-prod are copy-only: paste them in your own agent session."));
+    }
+    this.el.dataset.open = String(open);
     this.body.replaceChildren(...kids);
   }
 
