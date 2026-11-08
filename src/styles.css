@@ -207,6 +207,17 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 #drop-mark { position: fixed; z-index: 70; pointer-events: none; border: 1px solid var(--blue); border-radius: var(--mc-radius-sm); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
 .tree-row.dir .name { color: var(--text-primary); }
+/* Git marks (shell ADR amend 2026-11-07, Explorer git workbench, points 2 and 3): a letter
+   at the row's end in its skin token; ignored rows dimmed. Content, not selection styling:
+   the selected and active rows still change only their 1px border colour. */
+.tree-row .git-mark { margin-left: auto; padding-left: 6px; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); color: var(--text-muted); }
+.tree-row .git-mark[data-mark="M"] { color: var(--yellow); }
+.tree-row .git-mark[data-mark="A"] { color: var(--green); }
+.tree-row .git-mark[data-mark="U"] { color: var(--cyan); }
+.tree-row .git-mark[data-mark="D"] { color: var(--orange); }
+.tree-row .git-mark[data-mark="R"] { color: var(--blue); }
+.tree-row .git-mark[data-mark="!"] { color: var(--red); font-weight: 600; }
+.tree-row.git-ignored .name { color: var(--text-muted); }
 
 #center { grid-area: center; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .tabbar { display: flex; align-items: stretch; gap: 1px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); overflow-x: auto; min-height: 32px; flex: none; }
