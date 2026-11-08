@@ -108,3 +108,33 @@ test("Resolve terminal script runs in sh: lists conflicts, proposes per file, en
   assert.match(out, /kit: conflicts\n/);
   assert.match(out, /kit: conflicts propose a b\.txt/);
 });
+
+test("Checks tab rows: name, state, duration, link; failing first", async () => {
+  const { checkRows } = await import("../src/prlist.ts");
+  const rows = checkRows([
+    { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-11-08T10:00:00Z", completedAt: "2026-11-08T10:01:02Z", detailsUrl: "https://github.com/x/y/runs/1" },
+    { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-11-08T10:00:00Z", completedAt: "2026-11-08T10:00:12Z", detailsUrl: "javascript:alert(1)" },
+    { __typename: "CheckRun", name: "e2e", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-11-08T10:00:00Z" },
+    { __typename: "StatusContext", context: "ci/legacy", state: "SUCCESS", targetUrl: "https://ci.example/1" },
+  ]);
+  assert.deepEqual(rows.map((r) => [r.name, r.state, r.tone, r.duration, r.url]), [
+    ["lint", "failure", "failed", "12s", ""],
+    ["e2e", "in progress", "gate", "", ""],
+    ["build", "success", "done", "1m 02s", "https://github.com/x/y/runs/1"],
+    ["ci/legacy", "success", "done", "", "https://ci.example/1"],
+  ]);
+});
+
+test("merge box blockers in words", async () => {
+  const { mergeBlockers } = await import("../src/prlist.ts");
+  const base = pr({ state: "OPEN", baseRefName: "staging", isCrossRepository: false });
+  assert.deepEqual(mergeBlockers(base), []);
+  assert.deepEqual(mergeBlockers({ ...base, state: "MERGED" }), ["Merged already."]);
+  assert.match(mergeBlockers({ ...base, mergeable: "CONFLICTING" })[0], /^Conflicts with staging/);
+  assert.match(mergeBlockers({ ...base, mergeStateStatus: "BEHIND" })[0], /^Behind staging/);
+  assert.deepEqual(mergeBlockers({ ...base, statusCheckRollup: [run("lint", "FAILURE"), run("e2e", null, "QUEUED")] }), ["1 check(s) still running.", "Failing: lint."]);
+  assert.deepEqual(mergeBlockers({ ...base, mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" }), ["A review is required."]);
+  assert.deepEqual(mergeBlockers({ ...base, mergeStateStatus: "BLOCKED" }), ["Blocked by the rules of staging."]);
+  assert.match(mergeBlockers({ ...base, baseRefName: "main", isCrossRepository: true })[0], /fork PR into main/);
+  assert.deepEqual(mergeBlockers({ ...base, baseRefName: "main", isCrossRepository: false }), [], "a same-repo promote is mergeable (typed yes on the card)");
+});

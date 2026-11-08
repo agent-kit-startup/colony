@@ -281,7 +281,15 @@ class RequestCard {
   }
 }
 
-/** Git tab: the Requests card (pending approvals, then the last decisions). */
+/** The PR a card is about (merge-pr, update-branch, close-pr, rerun-checks --pr), else null:
+ *  those cards live in that PR's merge box (git-cicd ADR amend 2026-11-08 point 4). */
+export function requestPr(r: HostRequest): number | null {
+  const n = r.kind === "rerun-checks" ? r.args.pr : r.kind === "merge-pr" || r.kind === "update-branch" || r.kind === "close-pr" ? r.args.number : null;
+  return typeof n === "number" && n > 0 ? n : null;
+}
+
+/** Git tab: the Requests card (pending approvals, then the last decisions). A card about a PR
+ *  lives in that PR's merge box (its detail tab); the list keeps a row that opens it. */
 export class RequestsSection {
   readonly el: HTMLElement;
   private list = h("div", { class: "inbox-list hostreq-list" });
@@ -289,6 +297,10 @@ export class RequestsSection {
   private cards = new Map<string, RequestCard>();
   private title = h("span", {}, "Requests");
   private decided: { r: HostRequest; d: Decision; at: string }[] = [];
+  /** Open PR detail tabs: their merge box's card container, per PR number. */
+  private boxes = new Map<number, HTMLElement>();
+  /** Opens (or shows) a PR's detail tab; set by main.ts. */
+  openPr: ((n: number) => void) | null = null;
 
   constructor(
     private status: (msg: string) => void,
@@ -298,6 +310,35 @@ export class RequestsSection {
     this.el.classList.add("hostreq-section");
     hostRequests.on(() => this.render());
     this.render();
+  }
+
+  /** A PR detail tab opened: its cards move into `box`. */
+  attachBox(n: number, box: HTMLElement) {
+    this.boxes.set(n, box);
+    this.render();
+  }
+
+  /** Its tab closed: the cards go back behind the list's rows. */
+  detachBox(n: number) {
+    const box = this.boxes.get(n);
+    this.boxes.delete(n);
+    if (box) for (const c of this.cards.values()) if (c.el.parentElement === box) c.el.remove();
+    this.render();
+  }
+
+  /** A row in the list for a card that lives in a merge box. */
+  private pointer(r: HostRequest, n: number): HTMLElement {
+    const open = this.boxes.has(n);
+    const row = h(
+      "div",
+      { class: "row hostreq-pointer" },
+      chip(r.kind, "chip-gate"),
+      h("span", { class: "grow ellipsis", title: r.reason || r.summary }, r.summary),
+      h("span", { class: "dim small", title: r.createdAt }, ago(r.createdAt)),
+      btn(open ? `Show PR #${n}` : `Open PR #${n}`, () => this.openPr?.(n), { class: "link", "data-act": "open-pr-tab", title: "The card waits in the PR's merge box" }),
+    );
+    row.dataset.id = r.id;
+    return row;
   }
 
   private render() {
@@ -314,7 +355,21 @@ export class RequestsSection {
       else this.cards.set(r.id, new RequestCard(r, (req, d) => this.decide(req, d), this.status));
     }
     this.title.replaceChildren("Requests ", ...(items.length ? [chip(String(items.length), "chip-gate")] : []));
-    const els = items.map((r) => this.cards.get(r.id)!.el);
+    // PR cards into their merge box (in arrival order); a pointer row stays in the list.
+    for (const r of items) {
+      const n = requestPr(r);
+      const box = n === null ? undefined : this.boxes.get(n);
+      const el = this.cards.get(r.id)!.el;
+      if (box && el.parentElement !== box) box.append(el);
+      else if (n !== null && !box && el.parentElement) el.remove();
+    }
+    const pointers = new Map([...this.list.querySelectorAll<HTMLElement>(".hostreq-pointer")].map((e) => [e.dataset.id ?? "", e]));
+    const els = items.map((r) => {
+      const n = requestPr(r);
+      if (n === null) return this.cards.get(r.id)!.el;
+      const old = pointers.get(r.id);
+      return old && old.querySelector("button")?.textContent === (this.boxes.has(n) ? `Show PR #${n}` : `Open PR #${n}`) ? old : this.pointer(r, n);
+    });
     if (!els.length) {
       const hint = hostRequests.spool
         ? "Nothing waits for you. An agent in a Colony terminal or run files git and forge actions here with \"$COLONY_HOST_CLI\" request merge-pr|rerun-checks|push-branch|open-pr|update-branch|close-pr."
@@ -362,6 +417,16 @@ export class RequestsSection {
       return;
     }
     this.pendingReveal = "";
+    // A PR card: open (or show) the PR's tab, whose merge box holds it.
+    const r = hostRequests.items.find((i) => i.id === id);
+    const n = r ? requestPr(r) : null;
+    if (n !== null) {
+      this.openPr?.(n);
+      if (!el.isConnected) {
+        this.pendingReveal = id;
+        return;
+      }
+    }
     el.scrollIntoView({ block: "nearest" });
     el.classList.remove("flash");
     void el.offsetWidth;

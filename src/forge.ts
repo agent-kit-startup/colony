@@ -19,6 +19,12 @@ export const forgeApi = {
   rerunFailed: (runId: number) => invoke<string>("forge_rerun_failed", { runId }),
   /** Resolve: the PR's worktree with the base merged in (src-tauri/src/prworktree.rs). */
   prWorktree: (number: number) => invoke<PrWorktree>("forge_pr_worktree", { number }),
+  /** The PR detail tab (src/prdetail.ts). */
+  prDetail: (number: number) => invoke<J>("forge_pr_detail", { number }),
+  prDiff: (number: number) => invoke<string>("forge_pr_diff", { number }),
+  /** agent-kit promote rules / wait (read-only kit helpers, kit #1417 and #1418). */
+  promoteRules: (base: string) => invoke<J>("kit_promote_rules", { base }),
+  promoteWait: (number: number) => invoke<J>("kit_promote_wait", { number }),
 };
 
 const s = (v: unknown) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
