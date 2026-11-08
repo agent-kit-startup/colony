@@ -14,3 +14,9 @@
 .ship-row-detail { color: var(--text-secondary); flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .ship-row-cmd { font-family: var(--mc-font-mono); font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .ship-row-acts { display: inline-flex; gap: 6px; margin-left: auto; }
+/* The status line (plan colony-git-tab-forge-ux r5): one line, the state is the 1px border
+   colour only. */
+.ship-line { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--mc-radius); min-width: 0; }
+.ship-line.is-red { border-color: var(--red); }
+.ship-line.is-yellow { border-color: var(--yellow); }
+.ship-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
