@@ -2995,6 +2995,64 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
+    // Remembered placement across a restart (kit ADR 2026-10-24 amend 2026-11-07, tab
+    // placement memory): the previous launch on this settings.json ended with
+    // tab-placement-seed (a shell moved to the editor area, an interactive tab to the panel).
+    // This fresh process opens new tabs there, Explorer → Open terminal here included, before
+    // any step here moves a tab; then the reset drops the field from settings.json and new
+    // tabs take the defaults again. A first launch (nothing remembered) only notes it.
+    const bootPlaced = readPlacement(bootLayout.terminalPlacement);
+    const placementSeed = { shell: "editor", interactive: "panel" } as const;
+    const rawPlacement = async () => ((await api.settingsGet()).settings as { ui?: { layout?: Record<string, unknown> } } | null)?.ui?.layout ?? {};
+    const termIn = {
+      panel: (id: string) => terminals.has(id) && !tabs.has(id) && ttys.get(id)?.place === "drawer",
+      editor: (id: string) => tabs.has(id) && !terminals.has(id) && ttys.get(id)?.place === "tab",
+    };
+    const smokeAgent = { kind: "interactive", plan: "", backend: "smoke", engine: "claude" } as const;
+    const statusLine = () => $("st-msg").textContent ?? "";
+    if (!Object.keys(bootPlaced).length) await log("tab-placement-restart", true, { skipped: "first launch on this settings.json: nothing remembered yet (tab-placement-seed records it for the next launch)" });
+    else {
+      const shownBefore = !shell.classList.contains("no-bottom");
+      const keyBefore = terminals.activeKey();
+      const settle = async () => {
+        await wait(100);
+        await placementSaved;
+      };
+      const r: Record<string, unknown> = {};
+      r.bootIsSeed = JSON.stringify(bootPlaced) === JSON.stringify(placementSeed);
+      r.diskIsSeed = JSON.stringify((await rawPlacement()).terminalPlacement) === JSON.stringify(placementSeed);
+      runAction("new-terminal");
+      await wait(600);
+      const s1 = terminals.newestKey;
+      r.newShellInEditor = s1 !== keyBefore && termIn.editor(s1) && activeTab === s1;
+      r.statusNamesMemory = statusLine().includes("where this kind of terminal was last moved");
+      await terminalHere(`${root}/.cursor`);
+      await wait(600);
+      const s2 = terminals.newestKey;
+      r.openHereInEditor = s2 !== s1 && termIn.editor(s2);
+      const a = await openTermTab(["sh"], "smoke restart a", "COLONY_SMOKE tab placement restart", "terminals", smokeAgent);
+      await wait(400);
+      r.newInteractiveInPanel = !!a && termIn.panel(a.id);
+      runAction("term-placement-reset");
+      await settle();
+      const rawAfter = await rawPlacement();
+      r.resetDropsField = !("terminalPlacement" in rawAfter);
+      r.openTabsStay = !!a && termIn.editor(s1) && termIn.editor(s2) && termIn.panel(a.id);
+      runAction("new-terminal");
+      await wait(600);
+      const s3 = terminals.newestKey;
+      r.afterResetShellInPanel = s3 !== s2 && termIn.panel(s3);
+      const b = await openTermTab(["sh"], "smoke restart b", "COLONY_SMOKE tab placement restart", "terminals", smokeAgent);
+      await wait(300);
+      r.afterResetInteractiveInEditor = !!b && termIn.editor(b.id);
+      for (const t of [a, b]) if (t) await closeTab(t.id);
+      for (const k of [s1, s2]) if (tabs.has(k)) await closeTab(k);
+      terminals.focusKey(s3);
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${s3}"] .tab-close`)?.click();
+      if (keyBefore) terminals.focusKey(keyBefore);
+      toggleTerminal(shownBefore);
+      await log("tab-placement-restart", Object.values(r).every((v) => v === true), { saved: bootLayout.terminalPlacement, a: a?.id ?? null, b: b?.id ?? null, shells: [s1, s2, s3], layoutAfterReset: rawAfter, ...r });
+    }
     // Files dropped from the desktop: the smoke's stand-in emits Tauri's drag-drop event
     // with the real payload (lib.rs smoke_drag_drop), at the centre of a terminal, an
     // Explorer file row (its folder: the root) and the editor. No OS drag, no input.
@@ -3660,7 +3718,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // memory): a move records the kind in settings.json, a new tab of that kind opens there
     // (and still echoes), Colony's own open-there move records nothing, the drawer's + stays in
     // the drawer, and the reset sends new tabs back to the defaults without moving open ones.
-    // Surviving a restart is the operator's dogfood (one process here).
+    // Surviving a restart: tab-placement-seed (last step) and tab-placement-restart (next launch).
     {
       const shownBefore = !shell.classList.contains("no-bottom");
       const onDisk = readPlacementOnDisk;
@@ -4108,6 +4166,40 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(1500);
     await workbenchSmoke({ ...smokeCtx, tree, statusText: () => $("st-msg").textContent ?? "" });
     confirmAction = realConfirmAction;
+    // Seed for tab-placement-restart (last, so no later step opens tabs in the remembered
+    // bars): a first launch moves a shell to the editor area and an interactive tab to the
+    // panel, as the operator would; the next launch on this settings.json checks them. A
+    // launch that found a placement at boot reset it and leaves settings.json without one.
+    if (!Object.keys(bootPlaced).length) {
+      const shownBefore = !shell.classList.contains("no-bottom");
+      const keyBefore = terminals.activeKey();
+      const r: Record<string, unknown> = {};
+      toggleTerminal(true);
+      await terminals.create();
+      await wait(300);
+      const s1 = terminals.activeKey();
+      runAction("term-to-editor");
+      await wait(100);
+      await placementSaved;
+      r.shellMoved = !!s1 && termIn.editor(s1);
+      r.statusSaysNewOnesThere = statusLine().includes("new ones of this kind open there");
+      const a = await openTermTab(["sh"], "smoke seed a", "COLONY_SMOKE tab placement seed", "terminals", smokeAgent);
+      await wait(300);
+      if (a) {
+        showTab(a.id);
+        runAction("term-to-panel");
+      }
+      await wait(100);
+      await placementSaved;
+      r.interactiveMoved = !!a && termIn.panel(a.id);
+      const raw = (await rawPlacement()).terminalPlacement;
+      r.diskIsSeed = JSON.stringify(raw) === JSON.stringify(placementSeed);
+      if (a) await closeTab(a.id);
+      if (s1 && tabs.has(s1)) await closeTab(s1);
+      if (keyBefore && terminals.has(keyBefore)) terminals.focusKey(keyBefore);
+      toggleTerminal(shownBefore);
+      await log("tab-placement-seed", Object.values(r).every((v) => v === true), { shell: s1, a: a?.id ?? null, terminalPlacement: raw, ...r });
+    }
     showTab("mission");
     await shot("mission");
     // Negative probe: the policy is really enforced (an inline script must not run).
