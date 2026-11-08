@@ -2844,9 +2844,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       r.rename = (await menuAt(rowOf(note), "tree-rename")) && (await typeName("renamed.md", "explorer-rename")) && (await until(() => activeTab === renamed, 4000)) && !(await exists(note)) && (await exists(renamed));
       const panes = () => [...$("terms").querySelectorAll<HTMLElement>(".term-pane")];
       const before = panes().length;
-      r.terminalHere = (await menuAt(rowOf(dir), "tree-terminal")) && (await until(() => panes().length === before + 1 && TermView.at(panes()[before])?.id !== undefined, 4000));
+      r.terminalHere = (await menuAt(rowOf(dir), "tree-terminal")) && (await until(() => panes().length === before + 1 && (TermView.at(panes()[before])?.id ?? -1) >= 0, 4000));
       const here = TermView.at(panes()[before] ?? null);
-      r.terminalCwd = here?.id !== undefined ? await api.ptyCwd(here.id) : null;
+      r.terminalCwd = here && here.id >= 0 ? await api.ptyCwd(here.id) : null;
       const realConfirmTrash = confirmTrash;
       let asked = "";
       confirmTrash = async (m) => ((asked = m), true);
