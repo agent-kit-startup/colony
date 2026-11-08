@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { contextTargets, filterRows, firstMatch, navKey, outermost, selectTo } from "../src/treenav.ts";
+import { contextTargets, dropDir, filterRows, firstMatch, movePlan, navKey, outermost, selectTo } from "../src/treenav.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f) => readFileSync(join(ROOT, f), "utf8");
@@ -135,4 +135,35 @@ test("focus and selection change only the 1px border colour", () => {
   const rules = css.split("\n").filter((l) => /tree-row\.(focused|selected)|tree-filter|#tree:focus/.test(l));
   assert.ok(rules.length >= 3);
   for (const r of rules) assert.ok(!/border-left|inset|background|box-shadow|outline: [^n]/.test(r), r);
+});
+
+test("drag to move: one rename per outermost row into the folder", () => {
+  assert.deepEqual(movePlan(["/w/a.md", "/w/src/b.ts"], "/w/docs"), [
+    { from: "/w/a.md", to: "/w/docs/a.md" },
+    { from: "/w/src/b.ts", to: "/w/docs/b.ts" },
+  ]);
+  assert.deepEqual(movePlan(["/w/src", "/w/src/b.ts"], "/w/docs"), [{ from: "/w/src", to: "/w/docs/src" }], "a folder carries its contents");
+  assert.deepEqual(movePlan(["/w/docs/a.md", "/w/b.md"], "/w/docs"), [{ from: "/w/b.md", to: "/w/docs/b.md" }], "rows already there stay out");
+  assert.deepEqual(movePlan(["/w/docs/a.md"], "/w/docs"), [], "nothing to do");
+  assert.deepEqual(movePlan(["/w/src"], "/w/src"), [], "onto itself");
+  assert.deepEqual(movePlan(["/w/src"], "/w/src/lib"), [], "into its own child");
+  assert.deepEqual(movePlan(["/w/src/a.ts"], "/w"), [{ from: "/w/src/a.ts", to: "/w/a.ts" }], "up to the root");
+});
+
+test("a drop lands in a folder row, a file row's folder, or the root from the empty tree", () => {
+  assert.equal(dropDir({ path: "/w/src", isDir: true }, true, "/w"), "/w/src");
+  assert.equal(dropDir({ path: "/w/src/a.ts", isDir: false }, true, "/w"), "/w/src");
+  assert.equal(dropDir({ path: "/w/a.ts", isDir: false }, true, "/w"), "/w");
+  assert.equal(dropDir(null, true, "/w"), "/w");
+  assert.equal(dropDir(null, false, "/w"), null, "outside the tree: no drop");
+});
+
+test("drag uses pointer events on the tree and moves through rename_path, no new command", () => {
+  const tree = read("src/filetree.ts");
+  assert.match(tree, /el\.addEventListener\("pointerdown"/);
+  assert.ok(!/draggable|dragstart/.test(tree), "no HTML5 drag: the window keeps its OS file drop");
+  const main = read("src/main.ts");
+  assert.match(main, /async function moveItems[\s\S]*?api\.renamePath\(m\.from, m\.to\)/);
+  assert.ok(!read("src/api.ts").includes("move_path"), "no move_path command");
+  assert.ok(main.includes("getCurrentWebview().onDragDropEvent"), "the OS file drop is still wired");
 });

@@ -123,3 +123,25 @@ export function contextTargets(order: string[], selected: Set<string>, path: str
 export function outermost(paths: string[]): string[] {
   return paths.filter((p) => !paths.some((q) => q !== p && p.startsWith(`${q}/`)));
 }
+
+/** Pixels a press must travel before it is a drag (less is a click), as for tabs. */
+export const DRAG_THRESHOLD = 5;
+
+export type Move = { from: string; to: string };
+
+/** Dropping `sources` on the folder `dest`: one rename per outermost source into `dest`, the
+ *  ones already in `dest` left out. Empty (nothing to drop) when `dest` is a source or lies
+ *  inside one, or when every source is already there. */
+export function movePlan(sources: string[], dest: string): Move[] {
+  if (sources.some((s) => dest === s || dest.startsWith(`${s}/`))) return [];
+  return outermost(sources)
+    .filter((s) => s.slice(0, s.lastIndexOf("/")) !== dest)
+    .map((s) => ({ from: s, to: `${dest}/${baseName(s)}` }));
+}
+
+/** The folder a drop lands in: a folder row itself, a file row's folder, the tree's empty
+ *  space the root. Null outside the tree. */
+export function dropDir(row: { path: string; isDir: boolean } | null, inTree: boolean, root: string): string | null {
+  if (row) return row.isDir ? row.path : row.path.slice(0, row.path.lastIndexOf("/")) || root;
+  return inTree ? root : null;
+}
