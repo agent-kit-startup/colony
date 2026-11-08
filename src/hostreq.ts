@@ -10,7 +10,7 @@ import { ago, btn, busy, card, chip, empty } from "./ui";
 
 export interface HostRequest {
   id: string;
-  kind: "merge-pr" | "rerun-checks" | "push-branch" | "open-pr";
+  kind: "merge-pr" | "rerun-checks" | "push-branch" | "open-pr" | "stage-resolved";
   args: Record<string, unknown>;
   summary: string;
   reason: string;
@@ -36,6 +36,9 @@ interface RequestContext {
   branch?: string;
   upstream?: string | null;
   log?: string;
+  /** stage-resolved: the repository path and the blob id the card pins. */
+  path?: string;
+  blob?: string;
   /** open-pr: what Colony will open (branches, title and body are Colony's own). */
   prPlan?: { shape: string; base: string; head: string; pushSha: string | null; title: string; body: string; log: string };
 }
@@ -117,7 +120,7 @@ class RequestCard {
     if (r.kind === "merge-pr" || (r.kind === "rerun-checks" && r.args.pr)) {
       extra.push(btn("View diff", () => void this.diff(), { class: "link", "data-act": "diff" }));
       extra.push(btn("Open PR", () => void hostApi.open(r.id).catch((e) => this.status(errText(e))), { class: "link", "data-act": "open", title: "gh pr view --web" }));
-    } else if (r.kind === "push-branch" || r.kind === "open-pr") {
+    } else if (r.kind === "push-branch" || r.kind === "open-pr" || r.kind === "stage-resolved") {
       extra.push(btn("View diff", () => void this.diff(), { class: "link", "data-act": "diff" }));
     }
     this.el.dataset.id = r.id;
@@ -190,6 +193,10 @@ class RequestCard {
     if (this.r.kind === "push-branch") {
       rows.push(h("div", { class: "row mono" }, `${s(c.branch)} → ${c.upstream ?? "origin (new upstream)"}`));
       if (c.log) rows.push(h("pre", { class: "hostreq-checks" }, c.log.trim() || "(nothing to push)"));
+    }
+    if (this.r.kind === "stage-resolved") {
+      rows.push(h("div", { class: "row mono" }, `git add -- ${s(c.path)}`));
+      if (c.blob) rows.push(h("div", { class: "row mono small dim" }, `blob ${c.blob.slice(0, 12)}: a file edited after this card is refused`));
     }
     const plan = c.prPlan;
     if (this.r.kind === "open-pr" && plan) {

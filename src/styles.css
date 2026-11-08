@@ -911,3 +911,38 @@ button.kv-filter.on { background: transparent; border-color: var(--border-active
    colour, drawn as an outline so nothing shifts. No fill, no accent bar, no inset shadow. */
 #shell.tab-dragging, #shell.tab-dragging * { cursor: grabbing; user-select: none; }
 .tabbar.drop-target { outline: 1px solid var(--blue); outline-offset: -1px; }
+
+/* Conflict window (src/conflicts.ts): file list | hunks, each hunk ours | theirs | result.
+   Selected and resolved items change their 1px border colour only (no bar, no tint). */
+.git-conflicts { display: flex; align-items: center; gap: 8px; }
+.git-conflicts[hidden] { display: none; }
+.cf { display: flex; flex-direction: column; gap: 10px; }
+.cf-head { display: flex; flex-direction: column; gap: 6px; }
+.cf-sides { color: var(--text-secondary); }
+.cf-main { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.cf-files { border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); background: var(--bg-primary); padding: 2px; display: flex; flex-direction: column; gap: 2px; }
+.cf-file { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-sm); cursor: pointer; font-size: var(--mc-chrome-label-size); min-width: 0; }
+.cf-file:hover { border-color: var(--border); }
+.cf-file:focus { outline: none; }
+.cf-file:focus-visible { border-color: var(--text-secondary); }
+.cf-file.is-selected { border-color: var(--blue); }
+.cf-file .xy { color: var(--red); font-family: var(--mc-font-mono); }
+.cf-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cf-body select { max-width: 140px; }
+.cf-hunk { border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cf-hunk.is-resolved { border-color: var(--green); }
+.cf-hunk button.is-on { border-color: var(--blue); color: var(--blue); }
+.cf-panes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cf-pane { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cf-pane-title { color: var(--text-secondary); }
+.cf-ours .cf-pane-title { color: var(--green); }
+.cf-theirs .cf-pane-title { color: var(--blue); }
+.cf-text, .cf-context { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-sm); padding: 4px 6px; max-height: 320px; overflow: auto; }
+.cf-context { color: var(--text-muted); border-style: dashed; }
+.cf-result { width: 100%; box-sizing: border-box; font-size: 12px; resize: vertical; min-height: 60px; }
+.cf-proposal { border: 1px solid var(--purple); border-radius: var(--mc-radius-sm); padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.cf-proposal.is-refused { border-color: var(--red); }
+.cf-proposal-summary { display: flex; flex-direction: column; gap: 3px; }
+.cf-actions { border-top: 1px solid var(--border); padding-top: 8px; }
+.tree-row .git-mark[data-mark="!"] { cursor: pointer; }
+@media (max-width: 1100px) { .cf-main { grid-template-columns: minmax(0, 1fr); } .cf-panes { grid-template-columns: minmax(0, 1fr); } }

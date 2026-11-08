@@ -5,6 +5,7 @@ mod appupdate;
 mod branchrule;
 mod catalog;
 mod chats;
+mod conflicts;
 mod context;
 mod dashboard;
 mod deeplink;
@@ -332,6 +333,9 @@ pub fn run() {
             agent::agent_kill,
             gitops::git_status,
             gitops::git_marks,
+            conflicts::conflicts_list,
+            conflicts::conflicts_propose,
+            conflicts::git_merge_abort,
             gitops::git_diff,
             gitops::git_commit,
             gitops::git_push,
