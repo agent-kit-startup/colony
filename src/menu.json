@@ -43,6 +43,7 @@
         { "id": "dock:side", "label": "Terminal at the side" },
         { "id": "term-to-panel", "label": "Move terminal to the panel" },
         { "id": "term-to-editor", "label": "Move terminal to the editor area" },
+        { "id": "term-placement-reset", "label": "Reset terminal placements" },
         { "id": "explorer", "label": "Show or hide the Explorer" },
         { "id": "explorer-reveal", "label": "Reveal active file in the Explorer" },
         { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },
