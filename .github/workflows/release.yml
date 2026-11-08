@@ -79,13 +79,15 @@ jobs:
 
       # Direct channel. createUpdaterArtifacts signs the AppImage for the updater with the
       # release key (Colony_<v>_amd64.AppImage.sig); kept out of tauri.conf.json so local
-      # builds need no signing key.
+      # builds need no signing key. --verbose: without it tauri-cli runs the bundler at log
+      # level Error and discards the linuxdeploy output, so an AppImage failure only prints
+      # "failed to run linuxdeploy" (v0.4.0 run 42475965256).
       - name: Build (direct channel)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          pnpm tauri build --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          pnpm tauri build --verbose --bundles deb,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
           v="${{ steps.version.outputs.version }}"
           test -s "src-tauri/target/release/bundle/appimage/Colony_${v}_amd64.AppImage.sig"
           mkdir -p "$RUNNER_TEMP/bin"
