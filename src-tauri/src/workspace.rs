@@ -344,6 +344,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Explorer drag to move (kit ADR 2026-10-15 amend 2026-11-07): each dropped row is one
+    /// rename into the target folder, with the absolute paths the tree sends. A row whose name
+    /// already exists there is refused and nothing is overwritten; the rows before it stay moved.
+    #[test]
+    fn drag_move_is_one_rename_per_row() {
+        let (tmp, root) = scratch("dragmove");
+        std::fs::create_dir_all(root.join("dest")).unwrap();
+        std::fs::create_dir_all(root.join("pkg/inner")).unwrap();
+        std::fs::write(root.join("a.md"), "a").unwrap();
+        std::fs::write(root.join("b.md"), "b-new").unwrap();
+        std::fs::write(root.join("dest/b.md"), "b-old").unwrap();
+        std::fs::write(root.join("pkg/inner/x.rs"), "x").unwrap();
+        let into = |name: &str| root.join("dest").join(name);
+        assert_eq!(rename_in(&root, &root.join("a.md"), &into("a.md")).unwrap(), into("a.md"));
+        assert!(rename_in(&root, &root.join("b.md"), &into("b.md")).is_err(), "existing name in the target");
+        assert_eq!(std::fs::read_to_string(into("b.md")).unwrap(), "b-old", "never overwritten");
+        assert_eq!(std::fs::read_to_string(root.join("b.md")).unwrap(), "b-new", "the refused row stays");
+        assert!(into("a.md").is_file() && !root.join("a.md").exists(), "the row before it stays moved");
+        // A folder moves with its contents; into its own child it is refused.
+        assert!(rename_in(&root, &root.join("pkg"), &root.join("pkg/inner/pkg")).is_err());
+        assert_eq!(rename_in(&root, &root.join("pkg"), &into("pkg")).unwrap(), into("pkg"));
+        assert!(into("pkg/inner/x.rs").is_file());
+        // A target folder that is a symlink out of the root is refused.
+        std::fs::create_dir_all(tmp.join("outside")).unwrap();
+        symlink(tmp.join("outside"), root.join("away")).unwrap();
+        assert!(rename_in(&root, &into("a.md"), &root.join("away/a.md")).is_err());
+        assert!(!tmp.join("outside/a.md").exists() && into("a.md").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn new_file_stays_in_the_workspace() {
         let tmp = std::env::temp_dir().join(format!("colony-jail-{}", std::process::id()));

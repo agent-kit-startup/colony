@@ -2,6 +2,7 @@
 import { api, errText, h, type GitStatus } from "./api";
 import { UNMERGED_XY } from "./conflictmerge";
 import { obj, snapshot, str } from "./snapshot";
+import { CommitGraph, diffLines } from "./gitgraph";
 import { type ShipHost, ShipLaneTile } from "./shiplane";
 import { btn, busy, card, empty, iconBtn } from "./ui";
 
@@ -141,12 +142,7 @@ export class GitPanel {
   }
 
   private renderDiff(text: string) {
-    this.diffOut.replaceChildren(
-      ...text.split("\n").map((line) => {
-        const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
-        return h("div", { class: cls }, line);
-      }),
-    );
+    this.diffOut.replaceChildren(...diffLines(text));
   }
 
   /** The last action's outcome under the buttons, in view: a title line, then git's own output. */
@@ -209,7 +205,7 @@ export class GitPanel {
 /**
  * Git e CI/CD center tab, one bento grid like the kit web page's section of the same name: the
  * Ship lane tile leads (snapshot `shipLane`, with the host-allowlist actions), then Requests,
- * Pull requests, the snapshot's branch flow and graph, the working tree and the production
+ * Pull requests, the snapshot's branch flow with the commit graph (read live from git, src/gitgraph.ts), the working tree and the production
  * promotion card. Colony never runs /git-prod or any prod promotion: the card only copies the
  * command, for the operator's own agent session.
  */
@@ -217,7 +213,9 @@ export class GitView {
   readonly el: HTMLElement;
   readonly panel: GitPanel;
   readonly ship: ShipLaneTile;
-  private repo = h("div", { class: "git-repo bento-tile bento-flow" });
+  private repo = h("div", { class: "git-repo bento-tile bento-flow bento-wide" });
+  private repoInfo = h("div", { class: "git-repo-info" });
+  private graph = new CommitGraph();
   private grid: HTMLElement;
   private extras: { el: HTMLElement; refresh?: () => void }[] = [];
   private dirty = true;
@@ -229,6 +227,7 @@ export class GitView {
     this.ship = new ShipLaneTile(ship);
     this.grid = h("div", { class: "cv-body git-bento", "aria-label": "Git e CI/CD" }, this.ship.el, this.repo, work, this.prodCard());
     this.el = h("div", { class: "cv cv-git" }, this.grid);
+    this.repo.append(card("Repository", this.repoInfo, this.graph.el));
     snapshot.on((why) => {
       if (why !== "data") return;
       this.dirty = true;
@@ -238,6 +237,7 @@ export class GitView {
       const sig = this.gitSig();
       if (sig === this.lastSig) return;
       this.lastSig = sig;
+      this.graph.invalidate();
       if (this.visible) void this.panel.refresh();
     });
     // Back from another window (an outside terminal or editor): what changed there shows on
@@ -245,6 +245,7 @@ export class GitView {
     // signature above, which Mission Control recomputes on its periodic refresh (<=15 s).
     window.addEventListener("focus", () => {
       if (this.visible) void this.panel.refresh();
+      this.graph.invalidate();
     });
   }
 
@@ -265,12 +266,14 @@ export class GitView {
   show() {
     this.visible = true;
     if (this.dirty) this.renderRepo();
+    this.graph.show();
     void this.panel.refresh();
     for (const x of this.extras) x.refresh?.();
   }
 
   hide() {
     this.visible = false;
+    this.graph.hide();
   }
 
   /** Reload after a git / forge action ran from here (a merged PR leaves the list); a hidden tab reloads on show. */
@@ -283,7 +286,7 @@ export class GitView {
     this.ship.render();
     const g = snapshot.git;
     if (!snapshot.data) {
-      this.repo.replaceChildren(card("Repository", empty("Waiting for Mission Control data…")));
+      this.repoInfo.replaceChildren(empty("Waiting for Mission Control data…"));
       return;
     }
     const flow = obj(g.flow);
@@ -291,24 +294,19 @@ export class GitView {
       const o = obj(x);
       return o.ahead === undefined && o.behind === undefined ? null : h("div", { class: "row" }, h("span", { class: "dim grow" }, label), h("span", { class: "mono" }, `↑${o.ahead ?? 0} ↓${o.behind ?? 0}`));
     };
-    const graph: string[] = Array.isArray(g.graph) ? g.graph.map(String) : [];
     const sameCount = (a: unknown, b: unknown) => {
       const x = obj(a);
       const y = obj(b);
       return x.ahead !== undefined && x.ahead === y.ahead && x.behind === y.behind;
     };
-    this.repo.replaceChildren(
-      card(
-        "Repository",
-        // Branch, upstream and changed files live once, in the Working tree (read live from
-        // git status); this card is the history: last commit, branch flow, graph.
-        ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
-        // On staging, "vs main" and "staging vs main" are the same count: show it once.
-        ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), sameCount(flow.vsMain, flow.stagingVsMain) ? null : ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
-        // One line per graph row, cut by width with the full line in its title (no inner
-        // horizontal scroll, no fixed height).
-        ...(graph.length ? [h("div", { class: "git-graph" }, ...graph.slice(0, 40).map((l) => h("div", { class: "git-graph-line", title: l }, l)))] : []),
-      ),
+    // The graph's HEAD line shows the branch at once (snapshot), then git's own reading.
+    this.graph.setBranch(str(g.branch));
+    this.repoInfo.replaceChildren(
+      // Changed files live once, in the Working tree (read live from git status); this card
+      // is the history: last commit, branch flow, then the commit graph (src/gitgraph.ts).
+      ...(g.lastCommit ? [h("div", { class: "mono small ellipsis", title: str(g.lastCommit) }, str(g.lastCommit))] : []),
+      // On staging, "vs main" and "staging vs main" are the same count: show it once.
+      ...[ab("vs staging", flow.vsStaging), ab("vs main", flow.vsMain), sameCount(flow.vsMain, flow.stagingVsMain) ? null : ab("staging vs main", flow.stagingVsMain)].filter((x): x is HTMLDivElement => !!x),
     );
   }
 
