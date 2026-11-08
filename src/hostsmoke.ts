@@ -32,12 +32,19 @@ export async function hostSmoke(c: SmokeCtx) {
     return read(rel);
   };
   const git = c.view("git");
+  // A card about a PR lives in the PR's merge box (its detail tab): the Requests list's row
+  // opens that tab, the same click as the operator's.
+  const req = (kind: string, n: number, origin: string) => hostRequests.items.find((i) => i.kind === kind && i.origin === origin && Object.values(i.args).includes(n));
   const find = (kind: string, n: number, origin = "agent") => {
-    const r = hostRequests.items.find((i) => i.kind === kind && i.origin === origin && Object.values(i.args).includes(n));
-    return r ? git.querySelector<HTMLElement>(`.hostreq-card[data-id="${r.id}"]`) : null;
+    const r = req(kind, n, origin);
+    return r ? document.querySelector<HTMLElement>(`.hostreq-card[data-id="${r.id}"]`) : null;
   };
   const ready = async (kind: string, n: number, origin = "agent") => {
-    await c.until(() => !!find(kind, n, origin)?.dataset.ctx, 20000);
+    await c.until(() => {
+      const r = req(kind, n, origin);
+      if (r && !find(kind, n, origin)) git.querySelector<HTMLButtonElement>(`.hostreq-pointer[data-id="${r.id}"] button[data-act="open-pr-tab"]`)?.click();
+      return !!find(kind, n, origin)?.dataset.ctx;
+    }, 20000);
     return find(kind, n, origin);
   };
   const click = (el: Element | null | undefined, act: string) => el?.querySelector<HTMLButtonElement>(`button[data-act="${act}"]`)?.click();
@@ -148,10 +155,14 @@ export async function gitCicdSmoke(c: SmokeCtx) {
   const git = c.view("git");
   const card = (kind: string, arg: unknown, origin = "colony") => {
     const r = hostRequests.items.find((i) => i.kind === kind && i.origin === origin && Object.values(i.args).includes(arg));
-    return { r, el: r ? git.querySelector<HTMLElement>(`.hostreq-card[data-id="${r.id}"]`) : null };
+    return { r, el: r ? document.querySelector<HTMLElement>(`.hostreq-card[data-id="${r.id}"]`) : null };
   };
   const ready = async (kind: string, arg: unknown, origin = "colony") => {
-    await c.until(() => !!card(kind, arg, origin).el?.dataset.ctx, 20000);
+    await c.until(() => {
+      const x = card(kind, arg, origin);
+      if (x.r && !x.el) git.querySelector<HTMLButtonElement>(`.hostreq-pointer[data-id="${x.r.id}"] button[data-act="open-pr-tab"]`)?.click();
+      return !!card(kind, arg, origin).el?.dataset.ctx;
+    }, 20000);
     return card(kind, arg, origin);
   };
   const click = (el: Element | null | undefined, act: string) => el?.querySelector<HTMLButtonElement>(`button[data-act="${act}"]`)?.click();

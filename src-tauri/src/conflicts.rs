@@ -29,7 +29,7 @@ pub fn valid_repo_path(p: &str) -> bool {
         && p.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-fn kit(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+pub(crate) fn kit(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let kit = crate::engine::kit_command()?;
     let mut cmd = Command::new(&kit.program);
     tools::die_with_parent(&mut cmd);

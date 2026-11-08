@@ -158,3 +158,66 @@ export const RESOLVE_SCRIPT = [
 export function resolveArgv(w: PrWorktree): string[] {
   return ["sh", "-c", RESOLVE_SCRIPT, "colony-resolve", w.path, ...w.kit];
 }
+
+/** One check of the PR detail's Checks tab. */
+export interface CheckRow {
+  name: string;
+  state: string;
+  tone: "done" | "failed" | "gate" | "";
+  /** "1m 02s", or "" while it runs or when the forge gave no times. */
+  duration: string;
+  url: string;
+}
+
+function span(start: unknown, end: unknown): string {
+  const a = Date.parse(s(start));
+  const b = Date.parse(s(end));
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return "";
+  const secs = Math.round((b - a) / 1000);
+  return secs >= 60 ? `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s` : `${secs}s`;
+}
+
+/** statusCheckRollup as structured rows (CheckRun and StatusContext), failing first. */
+export function checkRows(rollup: unknown): CheckRow[] {
+  const rows = (Array.isArray(rollup) ? (rollup as J[]) : []).map((c): CheckRow => {
+    const running = !!c.status && s(c.status).toUpperCase() !== "COMPLETED";
+    const word = (running ? s(c.status) : s(c.conclusion || c.state)).toUpperCase();
+    const tone = running ? "gate" : OK.has(word) ? "done" : BAD.has(word) ? "failed" : "gate";
+    const url = s(c.detailsUrl || c.targetUrl);
+    return {
+      name: s(c.name || c.context).slice(0, 160) || "?",
+      state: word.toLowerCase().replace(/_/g, " ") || "pending",
+      tone,
+      duration: running ? "" : span(c.startedAt ?? c.createdAt, c.completedAt),
+      url: /^https?:\/\//.test(url) ? url : "",
+    };
+  });
+  const rank = { failed: 0, gate: 1, "": 2, done: 3 } as const;
+  return rows.sort((a, b) => rank[a.tone] - rank[b.tone]);
+}
+
+const PRODUCTION_BASES = new Set(["main", "master", "production", "prod", "release"]);
+
+/** Why the merge box offers no Merge, in words (empty: ready). From the detail tab's
+ *  `gh pr view` answer. */
+export function mergeBlockers(p: J): string[] {
+  const state = s(p.state).toUpperCase();
+  if (state === "MERGED") return ["Merged already."];
+  if (state === "CLOSED") return ["Closed. Reopen it on the forge to merge it."];
+  const base = s(p.baseRefName);
+  const out: string[] = [];
+  if (p.isCrossRepository !== false && PRODUCTION_BASES.has(base)) out.push(`A fork PR into ${base}: Colony never merges it.`);
+  const st = prState(p);
+  const c = checkBadge(p.statusCheckRollup);
+  if (st === "conflicts") out.push(`Conflicts with ${base}: Resolve them first.`);
+  if (st === "behind") out.push(`Behind ${base}: update the branch first.`);
+  if (p.isDraft === true) out.push("Draft: mark it ready for review on the forge.");
+  if (c.pending) out.push(`${c.pending} check(s) still running.`);
+  if (c.failing.length) out.push(`Failing: ${c.failing.join(", ")}.`);
+  const review = s(p.reviewDecision).toUpperCase();
+  if (review === "CHANGES_REQUESTED") out.push("Changes requested in review.");
+  else if (review === "REVIEW_REQUIRED") out.push("A review is required.");
+  if (st === "blocked" && !c.failing.length && review !== "CHANGES_REQUESTED" && review !== "REVIEW_REQUIRED") out.push(`Blocked by the rules of ${base}.`);
+  if (st === "checking") out.push("The forge is still working out whether it merges cleanly.");
+  return out;
+}

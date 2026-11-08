@@ -41,3 +41,23 @@ button.pr-filter.on { border-color: var(--blue); color: var(--text-primary); }
 .cicd-run { border-top: 1px solid var(--border); padding: 4px 0; }
 .cicd-run:first-child { border-top: 0; }
 .cv-cicd .filters { display: flex; gap: 4px; }
+/* PR detail tab (plan colony-git-tab-forge-ux r4): Conversation | Checks | Files, merge box at the
+   bottom. The current section changes only its 1px border colour. */
+.cv-pr .prd { display: flex; flex-direction: column; gap: 8px; }
+.prd-head { display: flex; flex-direction: column; gap: 4px; }
+.prd-title { min-width: 0; overflow-wrap: anywhere; }
+.prd-tabs { display: flex; gap: 4px; }
+button.prd-tab { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); background: transparent; }
+button.prd-tab.on { border-color: var(--blue); color: var(--text-primary); }
+.prd-body { display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
+.prd-checks { display: flex; flex-direction: column; gap: 2px; }
+.prd-check { border: 1px solid transparent; border-radius: var(--mc-radius-chrome); padding: 2px 6px; }
+.prd-check:hover { border-color: var(--border); }
+.prd-diff { max-height: 60vh; overflow: auto; }
+.prd-merge { display: flex; flex-direction: column; gap: 6px; }
+.prd-blockers { margin: 0; padding-left: 18px; }
+.prd-cards { display: flex; flex-direction: column; gap: 6px; }
+.prd-cards:empty { display: none; }
+.prd-wait[hidden] { display: none; }
+.hostreq-pointer { border-top: 1px solid var(--border); padding: 4px 0; }
+.hostreq-pointer:first-child { border-top: 0; }

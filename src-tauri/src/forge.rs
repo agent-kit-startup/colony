@@ -50,6 +50,8 @@ pub enum Op {
     AuthStatus,
     ListPrs,
     PrView(u64),
+    /// The PR detail tab: `PrView` plus body, labels, checks and size.
+    PrDetail(u64),
     PrChecks(u64),
     PrDiff(u64),
     PrWeb(u64),
@@ -75,6 +77,7 @@ pub enum Provider {
 
 const PR_LIST_FIELDS: &str = "number,title,headRefName,baseRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url,author,createdAt,isCrossRepository";
 const PR_VIEW_FIELDS: &str = "number,title,state,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,url,author,isCrossRepository,headRepositoryOwner";
+const PR_DETAIL_FIELDS: &str = "number,title,body,state,headRefName,headRefOid,baseRefName,isDraft,mergeable,mergeStateStatus,reviewDecision,url,author,labels,createdAt,isCrossRepository,headRepositoryOwner,statusCheckRollup,additions,deletions,changedFiles";
 const RUN_FIELDS: &str = "databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,createdAt,url";
 
 impl Provider {
@@ -98,6 +101,7 @@ impl Provider {
                 Op::AuthStatus => v(&["auth", "status"]),
                 Op::ListPrs => v(&["pr", "list", "--state", "open", "--limit", "50", "--json", PR_LIST_FIELDS]),
                 Op::PrView(n) => v(&["pr", "view", &n.to_string(), "--json", PR_VIEW_FIELDS]),
+                Op::PrDetail(n) => v(&["pr", "view", &n.to_string(), "--json", PR_DETAIL_FIELDS]),
                 Op::PrChecks(n) => v(&["pr", "checks", &n.to_string()]),
                 Op::PrDiff(n) => v(&["pr", "diff", &n.to_string()]),
                 Op::PrWeb(n) => v(&["pr", "view", &n.to_string(), "--web"]),
@@ -239,6 +243,43 @@ pub fn forge_prs(state: State<'_, AppState>) -> Result<Value, String> {
     Forge::detect()?.json(&root(&state)?, &Op::ListPrs)
 }
 
+/// The PR detail tab's data (Conversation, Checks, merge box).
+#[tauri::command(async)]
+pub fn forge_pr_detail(state: State<'_, AppState>, number: u64) -> Result<Value, String> {
+    Forge::detect()?.json(&root(&state)?, &Op::PrDetail(number))
+}
+
+/// The PR detail tab's Files: `gh pr diff`.
+#[tauri::command(async)]
+pub fn forge_pr_diff(state: State<'_, AppState>, number: u64) -> Result<String, String> {
+    Forge::detect()?.run(&root(&state)?, &Op::PrDiff(number))
+}
+
+/// The merge box's promote preflight: `agent-kit promote rules --base <base> --json` (kit #1418;
+/// advisory, read-only: the base branch rules the kit does not model).
+#[tauri::command(async)]
+pub fn kit_promote_rules(state: State<'_, AppState>, base: String) -> Result<Value, String> {
+    if !crate::hostreq::valid_branch(&base) {
+        return Err(format!("Not a branch name: {base}"));
+    }
+    promote_json(crate::conflicts::kit(&root(&state)?, &["promote", "rules", "--base", &base, "--json"])?)
+}
+
+/// After a promote merged from its card: `agent-kit promote wait --pr <n> --json` (kit #1417;
+/// read-only, bounded) until the forge reports it merged or closed.
+#[tauri::command(async)]
+pub fn kit_promote_wait(state: State<'_, AppState>, number: u64) -> Result<Value, String> {
+    if number == 0 {
+        return Err("No PR number".into());
+    }
+    promote_json(crate::conflicts::kit(&root(&state)?, &["promote", "wait", "--pr", &number.to_string(), "--cap-minutes", "10", "--json"])?)
+}
+
+/// The kit's JSON, or a clear note when the engine predates `agent-kit promote`.
+fn promote_json(out: std::process::Output) -> Result<Value, String> {
+    crate::conflicts::kit_json(&out).map_err(|e| if e.contains("agent-kit conflicts") { "This engine has no `agent-kit promote` (kit #1417/#1418): update it in Run → Engine…, or check the base branch rules on the forge".into() } else { e })
+}
+
 /// Recent workflow runs, optionally only those of `branch`.
 #[tauri::command(async)]
 pub fn forge_runs(state: State<'_, AppState>, branch: Option<String>) -> Result<Value, String> {
@@ -289,6 +330,15 @@ mod tests {
         let a = Provider::GitHub.argv(&Op::PrCreate { base: "main".into(), head: "staging".into(), title: "T; rm -rf /".into(), body: "$(x)".into() });
         assert_eq!(a, ["pr", "create", "--base", "main", "--head", "staging", "--title", "T; rm -rf /", "--body", "$(x)"]);
         assert!(!a.iter().any(|x| x == "--web" || x == "--fill" || x == "--draft"));
+    }
+
+    #[test]
+    fn pr_detail_argv_reads_body_labels_and_checks() {
+        let a = Provider::GitHub.argv(&Op::PrDetail(4));
+        assert_eq!(&a[..4], ["pr", "view", "4", "--json"]);
+        for f in ["body", "labels", "statusCheckRollup", "headRefOid", "mergeStateStatus"] {
+            assert!(a[4].split(',').any(|x| x == f), "{f}");
+        }
     }
 
     #[test]

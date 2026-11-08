@@ -31,6 +31,7 @@ import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine"
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
 import { type Move, outermost } from "./treenav";
 import { CicdView, forgeApi, PullRequestsSection } from "./forge";
+import { PrDetailView } from "./prdetail";
 import { resolveArgv } from "./prlist";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
@@ -1714,13 +1715,40 @@ const gitView = new GitView(status, () => void tree.refresh(), host.copy, {
 });
 // Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
 // An approved request ran gh (a denied one did not): reload the PR list and the working tree.
-const requests = new RequestsSection(status, (_r, d) => {
+const requests = new RequestsSection(status, (r, d) => {
   if (d.outcome !== "denied") gitView.reload();
+  for (const v of prViews.values()) v.decided(r, d);
 });
 gitView.addSections(
   requests,
-  new PullRequestsSection({ status, onCard: (id) => requests.reveal(id), onResolve: (n) => void resolvePr(n) }),
+  new PullRequestsSection({ status, onCard: (id) => requests.reveal(id), onResolve: (n) => void resolvePr(n), onOpen: (n) => openPr(n) }),
 );
+
+// PR detail: one centre tab per PR (src/prdetail.ts; operator answer forge-ux-pr-detail-placement).
+// The PR's approval cards live in its merge box while the tab is open.
+const prViews = new Map<number, PrDetailView>();
+function openPr(n: number) {
+  const id = `pr:${n}`;
+  if (tabs.has(id)) return showTab(id);
+  const view = new PrDetailView(n, {
+    status,
+    onLink: (href, kind) => (kind === "web" ? void openInBrowser(href).then(status) : status(`Not a web link: ${href}`)),
+    onResolve: (k) => void resolvePr(k),
+    onCard: (cardId) => requests.reveal(cardId),
+    attachBox: (k, box) => requests.attachBox(k, box),
+    detachBox: (k) => requests.detachBox(k),
+    setLabel: (label, tip) => {
+      const t = tabs.get(id);
+      if (!t) return;
+      t.label = label;
+      t.tip = tip;
+      renderTabs();
+    },
+  });
+  prViews.set(n, view);
+  addTab({ id, label: `#${n}`, icon: "git", tip: `Pull request #${n}`, pinned: false, el: view.el, show: () => void view.reload(), close: () => (view.dispose(), prViews.delete(n), true) });
+}
+requests.openPr = (n) => openPr(n);
 
 /** Resolve on a conflicting PR (operator answer forge-ux-resolve-before-x7): a worktree of the
  *  PR beside this checkout with the base merged in, then a terminal tab there that lists the
