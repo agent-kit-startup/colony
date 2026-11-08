@@ -265,6 +265,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
     let app = appupdate::register(builder)
         .manage(AppState { startup: Mutex::new(startup), ..Default::default() })
@@ -453,6 +454,42 @@ pub fn run() {
 mod tests {
     /// Colony embeds no web page (plan colony-sidebar-native-kit s3): every kit item is a
     /// native view, so the window allows no frame at all and no page defines a frame hook.
+    /// Web links open in the system browser through tauri-plugin-opener (kit ADR 2026-10-15,
+    /// amend 2026-11-07). The plugin refuses any URL its scope does not allow, so the refusal
+    /// of every scheme but http and https lives in the capability file: exactly one opener
+    /// permission, `allow-open-url`, whose allow list is `http://*` and `https://*` with no
+    /// `app` (the default browser). `opener:default` and `allow-default-urls` would add
+    /// `mailto:` and `tel:`; `allow-open-path` and `allow-reveal-item-in-dir` would open files.
+    #[test]
+    fn opener_scope_http_https_only() {
+        let cap: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let perms = cap["permissions"].as_array().unwrap();
+        let opener: Vec<&serde_json::Value> = perms
+            .iter()
+            .filter(|p| p.as_str().or_else(|| p["identifier"].as_str()).is_some_and(|id| id.starts_with("opener:")))
+            .collect();
+        assert_eq!(opener.len(), 1, "one opener permission only: {opener:?}");
+        let p = opener[0];
+        assert_eq!(p["identifier"], "opener:allow-open-url", "{p}");
+        assert!(p.get("deny").is_none(), "{p}");
+        let allow = p["allow"].as_array().expect("an explicit allow list, not the default scope");
+        let urls: Vec<&str> = allow
+            .iter()
+            .map(|e| {
+                assert!(e.get("app").is_none() && e.get("path").is_none(), "{e}");
+                assert_eq!(e.as_object().unwrap().len(), 1, "{e}");
+                e["url"].as_str().unwrap()
+            })
+            .collect();
+        assert_eq!(urls, ["http://*", "https://*"]);
+        // The webview never calls the plugin with another program, nor for a path.
+        let fe = [include_str!("../../src/browser.ts"), include_str!("../../src/main.ts"), include_str!("../../src/termview.ts")].concat();
+        for gone in ["openPath", "revealItemInDir", "inAppBrowser"] {
+            assert!(!fe.contains(gone), "the frontend uses {gone}");
+        }
+        assert!(include_str!("../../src/browser.ts").contains("webUrl(href)"), "browser.ts checks the scheme first");
+    }
+
     #[test]
     fn no_frames_no_web_panel() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();

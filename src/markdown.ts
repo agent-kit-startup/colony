@@ -52,7 +52,8 @@ export function parseInline(text: string): Inline[] {
   return out;
 }
 
-/** What a link may do: open a repo file in Colony ("repo"), copy a web address ("web"), or
+/** What a link may do: open a repo file in Colony ("repo"), open a web address in the system
+ *  browser ("web", http and https only; ./browser.ts checks it again), or
  *  nothing (null: script, data and file URLs, in-page anchors). */
 export function linkKind(href: string): "repo" | "web" | null {
   const h = href.trim();

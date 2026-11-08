@@ -13,6 +13,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
@@ -20,6 +21,7 @@ import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutS
 import { DriverChat, type DriverChatHost } from "./driverchat";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
+import { openInBrowser } from "./browser";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
@@ -442,13 +444,13 @@ function docTodos(path: string): DocTodo[] | null {
   return p ? p.todos : null;
 }
 
-/** A link in a preview: a repo file opens in Colony, a web address is copied (no browser
- *  here). `./` and `../` resolve from the file's folder; any other path (kit docs cite
+/** A link in a preview: a repo file opens in Colony, a web address (http or https only) in
+ *  the system browser (./browser.ts; kit ADR 2026-10-15 amend 2026-11-07). `./` and `../` resolve from the file's folder; any other path (kit docs cite
  *  repo-root paths: `.cursor/...`, `src/main.ts:42`) from the folder root. A `:line` suffix
  *  and a `#anchor` are dropped. */
 function docLink(from: string, href: string, kind: "repo" | "web") {
   if (kind === "web") {
-    void copyText(href).then((ok) => status(ok ? `Copied ${href}` : `Copy failed: ${href}`));
+    void openInBrowser(href).then(status);
     return;
   }
   if (!workspace) return;
@@ -2847,6 +2849,18 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         rows === $("recents").querySelectorAll(".recent-new").length &&
         workspace?.root === before;
       await log("new-window", ok, { bare, withFolder, missing, recentRows: rows, keptWorkspace: workspace?.root === before });
+    }
+    // Web links (kit ADR 2026-10-15 amend 2026-11-07): Colony's own check refuses a non-web
+    // scheme before the plugin, and the plugin's capability scope refuses one sent straight
+    // to it. No http(s) address is opened here: that would start the user's browser.
+    {
+      const refused = await openInBrowser("mailto:smoke@example.com");
+      const scope: Record<string, string> = {};
+      for (const u of ["mailto:smoke@example.com", "tel:+10000000000", "file:///etc/hostname"]) {
+        scope[u] = await openUrl(u).then(() => "opened", (e) => errText(e));
+      }
+      const ok = refused.startsWith("Not a web address") && Object.values(scope).every((v) => v !== "opened");
+      await log("web-link-scope", ok, { refused, scope });
     }
     // Command palette: the kit's catalog (the fake agent-kit's fixture, or a real engine),
     // run only for PROMPT_SLASH names, copy for the rest, markup shown as text. An engine

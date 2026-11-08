@@ -1,9 +1,11 @@
 // One xterm.js view over a Rust PTY (src-tauri/src/pty.rs). Used by the bottom terminal
 // tabs and by the center tabs that run an interactive vendor CLI or the queue runner.
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { api, Channel, errText, focusPolicy, h, type PtyEvent } from "./api";
+import { openInBrowser } from "./browser";
 import { onSkin, termFont, token } from "./skin";
 
 // The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
@@ -22,7 +24,8 @@ const termTheme = () => ({
   brightBlack: token("--text-muted"),
 });
 
-/** Where a terminal reports a clipboard failure (main.ts points it at the status bar). */
+/** Where a terminal reports a clipboard failure or a link it opened (main.ts points it at the
+ *  status bar). */
 export const termStatus = { show: (_msg: string): void => {} };
 
 export class TermView {
@@ -55,6 +58,16 @@ export class TermView {
       theme: termTheme(),
     });
     this.term.loadAddon(this.fitAddon);
+    // http(s) links underline on hover; Ctrl+click opens one in the system browser (kit ADR
+    // 2026-10-15 amend 2026-11-07). A plain click stays a click in the terminal (selection,
+    // the program's own mouse mode) and only says how to open it. The addon's own pattern
+    // matches http:// and https:// only, and openInBrowser checks the scheme again.
+    this.term.loadAddon(
+      new WebLinksAddon((ev, uri) => {
+        if (ev.ctrlKey || ev.metaKey) void openInBrowser(uri).then((m) => termStatus.show(m));
+        else termStatus.show(`Ctrl+click opens ${uri} in your browser`);
+      }),
+    );
     this.term.open(pane);
     TermView.byPane.set(pane, this);
     this.offSkin = onSkin(() => {
