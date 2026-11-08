@@ -331,6 +331,7 @@ pub fn run() {
             agent::agent_stop,
             agent::agent_kill,
             gitops::git_status,
+            gitops::git_marks,
             gitops::git_diff,
             gitops::git_commit,
             gitops::git_push,
