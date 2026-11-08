@@ -1,2 +1,12 @@
 Mission Kit Colony
 Copyright 2026 The Mission Kit Authors
+
+This product includes file-type glyphs from the following projects (src/fileglyphs.ts,
+which records each glyph's upstream file and commit):
+
+- Material Design Icons by Pictogrammers (https://github.com/Templarian/MaterialDesign-SVG,
+  commit 9e04201d4557e729822fb57f62a316c3dea1d4a8), icons licensed under the Apache License,
+  Version 2.0 (see LICENSE).
+- Seti-UI (https://github.com/jesseweed/seti-ui, commit
+  2d6c5e68b4ded73c92dac291845ee44e1182d511), Copyright (c) 2014 Jesse Weed, MIT License
+  (see licenses/seti-ui.MIT.txt).
