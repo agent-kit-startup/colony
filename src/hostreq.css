@@ -18,9 +18,26 @@
 .hostreq-done > summary { cursor: pointer; list-style: none; }
 .hostreq-done > summary::-webkit-details-marker { display: none; }
 .hostreq-done-out { min-height: 0; max-height: 200px; flex: none; margin: 2px 0 6px; font-size: 11px; }
-.pr-row { border-top: 1px solid var(--border); padding: 6px 0; display: flex; flex-direction: column; gap: 2px; }
-.pr-row:first-child { border-top: 0; }
-.pr-failing { color: var(--red); }
+/* PR list, forge style (plan colony-git-tab-forge-ux r3): one line per PR. A selected or focused
+   row changes only its 1px border colour: no left bar, no inset, no tinted fill. */
+.pr-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pr-filters:empty { display: none; }
+.pr-filters select { max-width: 160px; }
+.pr-who { display: inline-flex; gap: 2px; }
+button.pr-filter { padding: 2px 8px; font-size: var(--mc-chrome-subtitle-size); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); background: transparent; }
+button.pr-filter.on { border-color: var(--blue); color: var(--text-primary); }
+.pr-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 6px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); }
+.pr-bulk[hidden] { display: none; }
+.pr-list { display: flex; flex-direction: column; gap: 2px; }
+.pr-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid transparent; border-radius: var(--mc-radius-chrome); min-width: 0; }
+.pr-row:hover { border-color: var(--border); }
+.pr-row.is-selected, .pr-row:focus-within { border-color: var(--blue); }
+.pr-row .pr-title { min-width: 0; }
+.pr-row .pr-meta { max-width: 180px; }
+.pr-row .pr-num { padding: 0; }
+.pr-row .pr-act:empty { display: none; }
+.pr-row .pr-act button { padding: 2px 8px; }
+.pr-row input.pr-select { margin: 0; }
 .cicd-run { border-top: 1px solid var(--border); padding: 4px 0; }
 .cicd-run:first-child { border-top: 0; }
 .cv-cicd .filters { display: flex; gap: 4px; }

@@ -3,7 +3,9 @@
 # requests, the PR list and the CI/CD tab without touching GitHub. Use it with
 # COLONY_GH_BIN=<this file>. Every call is appended to gh-proof.txt in the working folder;
 # answers are canned (PR 7 targets feat/base, PR 8 targets release, PR 9 is staging -> main,
-# PR 11 is a release-close PR into staging, run 4243 failed). `api graphql` answers the kit
+# PR 11 is a release-close PR into staging, run 4243 failed; for the forge-style PR list: PR 13
+# is a bot PR behind its base, PR 14 conflicts, PR 15 has checks running, PR 16 fails a check,
+# PR 17 has merged already). `api graphql` answers the kit
 # ship lane collector (Mission Control data 1.8.0) with PR 11 open and tag CI run 4300 failed;
 # put this file first on PATH as `gh` so the engine's collector reads it too.
 # It reads no credentials and makes no network call.
@@ -16,8 +18,17 @@ if [ "$1" = api ]; then
 fi
 printf '%s\n' "$*" >> gh-proof.txt
 pr_json() {
-  cross=false owner=smoke
+  cross=false owner=smoke author='{"login":"smoke","is_bot":false}' state=OPEN mergeable=MERGEABLE merge=CLEAN
+  pass='{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"}'
+  rollup="$pass,{\"__typename\":\"CheckRun\",\"name\":\"lint\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}"
   [ "$1" = 10 ] && cross=true owner=mallory
+  case "$1" in
+    13) author='{"login":"app/agent-kit-idle","is_bot":true}' merge=BEHIND ;;
+    14) author='{"login":"mallory","is_bot":false}' mergeable=CONFLICTING merge=DIRTY ;;
+    15) rollup="$pass,{\"__typename\":\"CheckRun\",\"name\":\"e2e\",\"status\":\"IN_PROGRESS\",\"conclusion\":null}" merge=UNSTABLE ;;
+    16) rollup="$pass,{\"__typename\":\"CheckRun\",\"name\":\"signature-scan\",\"status\":\"COMPLETED\",\"conclusion\":\"FAILURE\"}" merge=UNSTABLE ;;
+    17) state=MERGED mergeable=UNKNOWN merge=UNKNOWN ;;
+  esac
   case "$1" in
     7) base=feat/base head=feat/seven title="Smoke PR seven" ;;
     8) base=release head=feat/eight title="Smoke PR eight (release) <img src=x onerror=alert(1)>" ;;
@@ -26,7 +37,7 @@ pr_json() {
     10) base=main head=staging title="Promote staging to main (fork)" ;;
     *) base=feat/base head=feat/other title="Smoke PR $1" ;;
   esac
-  printf '{"number":%s,"title":"%s","state":"OPEN","headRefName":"%s","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"%s","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","url":"https://example.invalid/pr/%s","author":{"login":"smoke"},"isCrossRepository":%s,"headRepositoryOwner":{"login":"%s"},"statusCheckRollup":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}' "$1" "$title" "$head" "$base" "$1" "$cross" "$owner"
+  printf '{"number":%s,"title":"%s","state":"%s","headRefName":"%s","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"%s","isDraft":false,"mergeable":"%s","mergeStateStatus":"%s","reviewDecision":"APPROVED","url":"https://example.invalid/pr/%s","author":%s,"createdAt":"2026-11-07T12:00:00Z","isCrossRepository":%s,"headRepositoryOwner":{"login":"%s"},"statusCheckRollup":[%s]}' "$1" "$title" "$state" "$head" "$base" "$mergeable" "$merge" "$1" "$author" "$cross" "$owner" "$rollup"
 }
 run_json() {
   case "$1" in
@@ -37,7 +48,7 @@ run_json() {
 }
 case "$1 $2" in
   "auth status") echo "github.com: Logged in to github.com account smoke (fake gh)" ;;
-  "pr list") printf '[%s,%s,%s]\n' "$(pr_json 7)" "$(pr_json 8)" "$(pr_json 9)" ;;
+  "pr list") printf '[%s,%s,%s,%s,%s,%s,%s]\n' "$(pr_json 7)" "$(pr_json 8)" "$(pr_json 9)" "$(pr_json 13)" "$(pr_json 14)" "$(pr_json 15)" "$(pr_json 16)" ;;
   "pr view")
     case " $* " in
       *" --web "*) echo "Opening https://example.invalid/pr/$3 in your browser." ;;
@@ -47,6 +58,8 @@ case "$1 $2" in
   "pr diff") printf 'diff --git a/smoke.txt b/smoke.txt\n--- a/smoke.txt\n+++ b/smoke.txt\n@@ -1 +1 @@\n-old line\n+new line from PR %s\n' "$3" ;;
   "pr merge") echo "Merged pull request #$3 ($4) (fake gh)" ;;
   "pr create") echo "https://example.invalid/pr/12 (fake gh: created)" ;;
+  "pr update-branch") echo "PR branch #$3 updated (fake gh)" ;;
+  "pr close") echo "Closed pull request #$3 (fake gh)" ;;
   "run list") printf '[%s,%s]\n' "$(run_json 4242)" "$(run_json 4243)" ;;
   "run view") run_json "$3"; echo ;;
   "run rerun") echo "Requested rerun of the failed jobs of run $3 (fake gh)" ;;
