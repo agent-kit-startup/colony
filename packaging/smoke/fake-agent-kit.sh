@@ -11,8 +11,34 @@
 # gates are not `context-checkpoint`, so the policy pre-answer never fires on them. `queue gates --json` / `--prompt` print one deferred gate in the shape of the
 # kit's helper and write nothing (the driver chat panel calls them whenever the Queue view
 # renders, so they must never touch the workspace).
+# `conflicts --json` goes to a real kit when COLONY_SMOKE_KIT_REAL names one (an executable
+# that runs `agent-kit`, from a kit after 6.14.0): the conflict window splices by the kit's
+# marker lines, so a canned listing would drift. `conflicts propose` is stubbed (no model,
+# no session): one accepted proposal per hunk, theirs then ours, built from that listing.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
+if [ "${1:-}" = conflicts ]; then
+  [ -n "${COLONY_SMOKE_KIT_REAL:-}" ] || { echo "Unknown command conflicts (fixture: COLONY_SMOKE_KIT_REAL is not set)" >&2; exit 1; }
+  if [ "${2:-}" != propose ]; then exec "$COLONY_SMOKE_KIT_REAL" "$@"; fi
+  path=$3 kcwd=. backend=auto
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cwd) kcwd=$2; shift ;;
+      --backend) backend=$2; shift ;;
+    esac
+    shift
+  done
+  "$COLONY_SMOKE_KIT_REAL" conflicts --json --cwd "$kcwd" | node -e '
+    let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      const [path, backend] = process.argv.slice(1);
+      const f = JSON.parse(s).files.find((x) => x.path === path);
+      if (!f) { console.error(`fixture: ${path} is not conflicted`); process.exit(1); }
+      const proposals = f.hunks.map((h) => ({ hunk: h.index, status: "accepted", text: h.theirs + h.ours, rationale: "fixture: theirs, then ours" }));
+      const verification = { status: "skipped", reason: "fixture: no verification", commands: [], notes: ["COLONY_SMOKE propose stub: no agent session ran"] };
+      console.log(JSON.stringify({ schema: 1, path, backend: `${backend} (fixture)`, proposals, unresolvedHunks: [], resolvedText: null, verification }));
+    });' "$path" "$backend"
+  exit $?
+fi
 cmd=${1:-}
 sub=${2:-}
 backend=cursor-agent max=10 cwd=. json=0 prompt=0
