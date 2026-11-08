@@ -35,6 +35,9 @@ export interface LayoutSettings {
   railPosition?: "left" | "right";
   /** false: icon-only rail (tooltips and aria-labels kept). */
   railLabels?: boolean;
+  /** Where new terminal tabs of each kind open (unset kind: its default). Saved on its own
+   *  patch when the operator moves a tab, never by the panel-change save. */
+  terminalPlacement?: { shell?: "editor" | "panel"; interactive?: "editor" | "panel"; queue?: "editor" | "panel" };
 }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }

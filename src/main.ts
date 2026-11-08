@@ -960,7 +960,10 @@ const px = (name: string) => {
   const v = Number.parseFloat(shell.style.getPropertyValue(name));
   return Number.isFinite(v) ? Math.round(v) : null;
 };
-function layoutNow(): Required<{ [K in keyof LayoutSettings]: LayoutSettings[K] | null }> {
+/** The panel layout this window shows. The remembered terminal placement is not part of it:
+ *  it is written only when a tab moves (its own patch), so this save never overwrites it. */
+type PanelLayout = Omit<LayoutSettings, "terminalPlacement">;
+function layoutNow(): Required<{ [K in keyof PanelLayout]: PanelLayout[K] | null }> {
   return {
     terminalDock: dock(),
     terminalVisible: !shell.classList.contains("no-bottom"),
@@ -2467,7 +2470,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     {
       const now = layoutNow();
       const sideW = Math.round($("side").getBoundingClientRect().width);
-      const want = Object.entries(bootLayout) as [keyof LayoutSettings, unknown][];
+      const want = Object.entries(bootLayout).filter(([k]) => k !== "terminalPlacement") as [keyof PanelLayout, unknown][];
       const mismatch = want.filter(([k, v]) => now[k] !== v).map(([k, v]) => `${k}: saved ${v}, applied ${now[k]}`);
       const widthOk = bootLayout.explorerWidth === undefined || bootLayout.explorerVisible === false || sideW === bootLayout.explorerWidth;
       await log("layout-boot", !mismatch.length && widthOk, { saved: bootLayout, applied: now, explorerWidth: sideW, mismatch });

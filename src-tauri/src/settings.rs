@@ -84,10 +84,33 @@ pub struct LayoutSettings {
     /// Labels under the rail icons (default true); false = icon-only, tooltips kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rail_labels: Option<bool>,
+    /// Where new terminal tabs of each kind open: the bar that kind was last moved to
+    /// (kit ADR 2026-10-24, amend 2026-11-07 tab placement memory). Written only when the
+    /// operator moves a tab, never with the rest of the layout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_placement: Option<TerminalPlacement>,
+}
+
+/// The remembered bar per terminal kind: `editor` (the centre tab bar) or `panel` (the
+/// drawer). Unset = the kind's default: shells in the panel, interactive CLIs and the queue
+/// runner in the editor area.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TerminalPlacement {
+    /// Drawer shells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Centre PTYs of kind `interactive`: Open interactive, resumed chats, the driver chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<String>,
+    /// The queue runner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
 }
 
 pub const DOCKS: &[&str] = &["bottom", "top", "side"];
 pub const RAIL_POSITIONS: &[&str] = &["left", "right"];
+pub const TERMINAL_PLACES: &[&str] = &["editor", "panel"];
 /// Sizes outside this range are refused (a typo in settings.json, not a real window).
 const LAYOUT_PX: std::ops::RangeInclusive<u64> = 40..=8000;
 
@@ -132,10 +155,35 @@ pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<
             "explorerWidth" => l.explorer_width = px(v)?,
             "terminalHeight" => l.terminal_height = px(v)?,
             "terminalWidth" => l.terminal_width = px(v)?,
+            "terminalPlacement" => l.terminal_placement = merge_placement(l.terminal_placement.take().unwrap_or_default(), v)?,
             _ => return Err(format!("Unknown layout field: {k}")),
         }
     }
     Ok(l)
+}
+
+/// `terminalPlacement`: `null` clears every kind; an object sets each named kind to
+/// `editor` or `panel`, `null` clearing that kind. Any other kind or value is an error.
+/// All kinds unset gives `None`, so the field leaves settings.json.
+fn merge_placement(mut p: TerminalPlacement, v: &serde_json::Value) -> Result<Option<TerminalPlacement>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let obj = v.as_object().ok_or_else(|| format!("layout.terminalPlacement: {v} is not an object"))?;
+    for (kind, place) in obj {
+        let slot = match kind.as_str() {
+            "shell" => &mut p.shell,
+            "interactive" => &mut p.interactive,
+            "queue" => &mut p.queue,
+            _ => return Err(format!("layout.terminalPlacement.{kind}: unknown kind (shell, interactive or queue)")),
+        };
+        *slot = match place.as_str() {
+            None if place.is_null() => None,
+            Some(x) if TERMINAL_PLACES.contains(&x) => Some(x.to_string()),
+            _ => return Err(format!("layout.terminalPlacement.{kind}: {place} (editor or panel)")),
+        };
+    }
+    Ok(if p == TerminalPlacement::default() { None } else { Some(p) })
 }
 
 pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
@@ -496,6 +544,80 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260,"railPosition":"right","railLabels":false}}}"#).unwrap();
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260, "railPosition": "right", "railLabels": false}));
+    }
+
+    #[test]
+    fn terminal_placement_merges_kind_by_kind() {
+        let base = merge_layout(LayoutSettings::default(), &serde_json::json!({"terminalDock": "side"})).unwrap();
+        let l = merge_layout(base.clone(), &serde_json::json!({"terminalPlacement": {"shell": "editor"}})).unwrap();
+        let p = l.terminal_placement.clone().unwrap();
+        assert_eq!(p.shell.as_deref(), Some("editor"));
+        assert_eq!((p.interactive.as_deref(), p.queue.as_deref()), (None, None));
+        assert_eq!(l.terminal_dock.as_deref(), Some("side"), "the rest of the layout is kept");
+        // a second kind merges in, the first stays
+        let l = merge_layout(l, &serde_json::json!({"terminalPlacement": {"interactive": "panel", "queue": "panel"}})).unwrap();
+        let p = l.terminal_placement.clone().unwrap();
+        assert_eq!((p.shell.as_deref(), p.interactive.as_deref(), p.queue.as_deref()), (Some("editor"), Some("panel"), Some("panel")));
+        // a layout patch without the field (layoutNow) keeps the memory
+        let l = merge_layout(l, &serde_json::json!({"terminalDock": "bottom", "explorerWidth": 300, "railLabels": null})).unwrap();
+        assert_eq!(l.terminal_placement, Some(p));
+        // null clears one kind
+        let l = merge_layout(l, &serde_json::json!({"terminalPlacement": {"shell": null}})).unwrap();
+        assert_eq!(l.terminal_placement.as_ref().unwrap().shell, None);
+        assert_eq!(l.terminal_placement.as_ref().unwrap().queue.as_deref(), Some("panel"));
+        // clearing the last kinds drops the field
+        let l = merge_layout(l, &serde_json::json!({"terminalPlacement": {"interactive": null, "queue": null}})).unwrap();
+        assert_eq!(l.terminal_placement, None);
+        // null resets every kind (the palette reset)
+        let l = merge_layout(l, &serde_json::json!({"terminalPlacement": {"shell": "editor", "queue": "panel"}})).unwrap();
+        let l = merge_layout(l, &serde_json::json!({"terminalPlacement": null})).unwrap();
+        assert_eq!(l.terminal_placement, None);
+        assert_eq!(l, merge_layout(base, &serde_json::json!({"terminalDock": "bottom", "explorerWidth": 300})).unwrap());
+    }
+
+    #[test]
+    fn terminal_placement_refuses_bad_values_and_writes_nothing() {
+        let l = merge_layout(LayoutSettings::default(), &serde_json::json!({"terminalPlacement": {"shell": "editor"}})).unwrap();
+        for bad in [
+            serde_json::json!({"terminalPlacement": "editor"}),
+            serde_json::json!({"terminalPlacement": true}),
+            serde_json::json!({"terminalPlacement": ["shell"]}),
+            serde_json::json!({"terminalPlacement": {"shell": "drawer"}}),
+            serde_json::json!({"terminalPlacement": {"shell": "Editor"}}),
+            serde_json::json!({"terminalPlacement": {"interactive": 1}}),
+            serde_json::json!({"terminalPlacement": {"queue": true}}),
+            serde_json::json!({"terminalPlacement": {"editor": "panel"}}),
+            serde_json::json!({"terminalPlacement": {"interactive": "panel", "browser": "editor"}}),
+            serde_json::json!({"terminalPlacement": {"queue": "panel"}, "terminalDock": "left"}),
+        ] {
+            assert!(merge_layout(l.clone(), &bad).is_err(), "{bad}");
+        }
+        // the store writes nothing when the merge errs
+        let dir = std::env::temp_dir().join(format!("colony-placement-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"ui":{"layout":{"terminalPlacement":{"shell":"editor"}}}}"#).unwrap();
+        let store = Store::at(path.clone());
+        let before = std::fs::read_to_string(&path).unwrap();
+        let r = store.update(|s| {
+            s.ui.layout = Some(merge_layout(s.ui.layout.clone().unwrap_or_default(), &serde_json::json!({"terminalPlacement": {"shell": "nowhere"}}))?);
+            Ok(())
+        });
+        assert!(r.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn terminal_placement_reads_and_round_trips() {
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalPlacement":{"shell":"editor","queue":"panel"}}}}"#).unwrap();
+        let p = s.ui.layout.as_ref().unwrap().terminal_placement.clone().unwrap();
+        assert_eq!((p.shell.as_deref(), p.interactive.as_deref(), p.queue.as_deref()), (Some("editor"), None, Some("panel")));
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalPlacement": {"shell": "editor", "queue": "panel"}}));
+        // no memory: the key is absent, not null
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top"}}}"#).unwrap();
+        assert!(serde_json::to_value(&s).unwrap()["ui"]["layout"].get("terminalPlacement").is_none());
     }
 
     #[test]
