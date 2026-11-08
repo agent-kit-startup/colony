@@ -54,7 +54,7 @@ import { sectionInfo, workspaceSection } from "./workspace";
 import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
-import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, otherPlace, type Place } from "./tabmove";
+import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
 import menuSpec from "./menu.json";
@@ -751,11 +751,13 @@ async function trashItem(path: string, isDir: boolean) {
   void gitView.panel.refresh();
 }
 
-/** Explorer → Open terminal here: a drawer shell with `dir` as its cwd. */
+/** Explorer → Open terminal here: a shell with `dir` as its cwd, where shells were last moved. */
 async function terminalHere(dir: string) {
+  const inEditor = (await placeFor("shell")) === "editor";
   const made = terminals.create(undefined, dir === workspace?.root ? undefined : dir.slice(dir.lastIndexOf("/") + 1), dir);
   // The tab exists now, so showing the drawer does not start a second shell.
-  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  if (inEditor) movePty(terminals.newestKey, "editor", { auto: true });
+  else if (shell.classList.contains("no-bottom")) toggleTerminal(true);
   await made;
 }
 
@@ -836,7 +838,9 @@ const terminals = new Terminals($("term-tabs"), $("terms"), status, () => worksp
 terminals.onExit = () => renderTabs();
 refreshDrawer = () => terminals.refresh();
 drawerHas = (id) => terminals.has(id);
-$("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => runAction("new-terminal"));
+// The drawer bar's + always opens its shell in the drawer; New shell terminal (menu, palette,
+// Ctrl+Shift+T) opens where shells were last moved.
+$("term-tabs").querySelector(".tab-add")!.addEventListener("click", () => void newDrawerShell());
 // A shell tab clicked while the drawer is closed opens it (capture: before the tab shows its
 // shell, so that shell gets the focus). Its close button only closes it.
 $("term-tabs").addEventListener(
@@ -954,6 +958,11 @@ function setRail(p: { position?: RailPosition; labels?: boolean }) {
   status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
 }
 
+/** The agent kind of each centre PTY (drawer shells are `shell` by their id), and the
+ *  remembered placement per kind as this window last read it (see placeFor). */
+const ptyKinds = new Map<string, TermKind>();
+let placement: Placement = {};
+
 // Layout persistence (settings.json ui.layout): saved after every panel change (debounced),
 // applied when the window opens. A size is saved only once a splitter set it.
 const px = (name: string) => {
@@ -995,6 +1004,7 @@ function applyLayout(l: LayoutSettings) {
 async function loadLayout(): Promise<LayoutSettings> {
   const info = await api.settingsGet().catch(() => null);
   const l = ((info?.settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout ?? {}) as LayoutSettings;
+  placement = readPlacement(l.terminalPlacement);
   applyLayout(l);
   return l;
 }
@@ -1059,7 +1069,10 @@ new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
 
 async function openTermTab(argv: string[], label: string, tip: string, icon: IconKind, agent?: TermAgent): Promise<{ id: string; view: TermView } | undefined> {
+  const kind: TermKind | null = agent?.kind ?? null;
+  const place = kind && workspace ? await placeFor(kind) : "editor";
   const id = `term:${++termCounter}`;
+  if (kind) ptyKinds.set(id, kind);
   const el = h("div", { class: "term-center" });
   const pane = h("div", { class: "term-pane" });
   if (agent && workspace) el.append(new ContextStrip(workspace.root, agent.engine, (p) => void openInEditor(p)).el);
@@ -1084,11 +1097,12 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
     close: () => {
       view.dispose();
       centerTerms.delete(id);
+      ptyKinds.delete(id);
       launches.dropTerm(id);
       ttys.closed(id);
       return true;
     },
-  });
+  }, place === "editor");
   ttys.add({ key: id, place: "tab", label, argv, root: workspace?.root ?? "", startedAt: Date.now() });
   view.term.onTitleChange((title) => ttys.update(id, { title: title.slice(0, 200) }));
   view.onExit = (code) => {
@@ -1104,6 +1118,9 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
       void chats.refresh();
     };
   }
+  // Remembered in the panel: it moves there once, before it is shown (not a move by the
+  // operator, so it records nothing).
+  if (place === "panel") movePty(id, "panel", { auto: true });
   try {
     await view.spawn(argv);
   } catch (e) {
@@ -1115,12 +1132,66 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
   return { id, view };
 }
 
+// ---- remembered placement per kind (kit ADR 2026-10-24 amend 2026-11-07, tab placement memory)
+// A move by the operator records the moved tab's kind (shell, interactive, queue) and its new
+// bar in settings.json ui.layout.terminalPlacement; a new tab of that kind opens there (the VS
+// Code terminal.integrated.defaultLocation pattern). Tabs already open never jump. Read fresh
+// on every open, like the rest of settings.json (another window may have recorded a move).
+
+/** Where a new tab of `kind` opens: settings.json now, else the last copy this window read. */
+async function placeFor(kind: TermKind): Promise<Place> {
+  const info = await api.settingsGet().catch(() => null);
+  if (info) placement = readPlacement((info.settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout?.terminalPlacement);
+  return openPlace(kind, placement);
+}
+
+/** settings.json's placement as written (COLONY_SMOKE). */
+async function readPlacementOnDisk(): Promise<Placement> {
+  const info = await api.settingsGet();
+  return readPlacement((info.settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout?.terminalPlacement);
+}
+
+/** The last placement write (COLONY_SMOKE waits on it). */
+let placementSaved: Promise<unknown> = Promise.resolve();
+
+function recordPlacement(id: string, to: Place) {
+  const kind = tabKind(id, ptyKinds.get(id));
+  if (!kind) return;
+  // Written every time (another window may have recorded a different place since).
+  placement = recordMove(placement, kind, to);
+  placementSaved = api.settingsSetLayout(placementPatch(kind, to)).catch((e) => status(`Terminal placement: ${errText(e)}`));
+}
+
+function resetPlacement() {
+  placement = {};
+  placementSaved = api
+    .settingsSetLayout({ terminalPlacement: null })
+    .then(() => status("Terminal placements reset: new shells open in the panel, new agent terminals in the editor area (open tabs stay where they are)"))
+    .catch((e) => status(`Reset terminal placements: ${errText(e)}`));
+}
+
+/** The drawer's + : a shell in the drawer, whatever shells remember. */
+function newDrawerShell() {
+  // Opening an empty drawer starts its first shell: that one is the new terminal.
+  if (shell.classList.contains("no-bottom") && toggleTerminal(true)) return;
+  return terminals.create();
+}
+
+/** New shell terminal (menu, palette, Ctrl+Shift+T): where shells were last moved. */
+async function newShell() {
+  if (!workspace || (await placeFor("shell")) !== "editor") return newDrawerShell();
+  const made = terminals.create();
+  movePty(terminals.newestKey, "editor", { auto: true });
+  return made;
+}
+
 // ---- terminal tabs move between the editor area and the panel ------------------------------
 // Kit ADR 2026-10-24 amend 2026-11-07: a drawer shell or a centre PTY moves to the other bar
 // by drag, by its context-menu row, or by View → Move terminal to … (also in the palette).
 // The session is reparented, never restarted: same process, scrollback and tab id. A centre
 // PTY keeps its element (context strip included), its gate badge and border, and its own
-// close; a drawer shell keeps its last-folder close. The placement lasts until the tab closes.
+// close; a drawer shell keeps its last-folder close. A moved tab stays until it closes, and
+// the move is remembered for new tabs of its kind (see placeFor below).
 /** Centre tabs held by the drawer, put back as they were when they move back. */
 const parkedTabs = new Map<string, Tab>();
 /** A drawer shell's own tooltip (its argv) while it sits in the editor area. */
@@ -1149,7 +1220,9 @@ function focusPty(id: string): boolean {
   return true;
 }
 
-function movePty(id: string, to: Place): boolean {
+/** `auto`: Colony opening a new tab in its remembered bar, not a move by the operator (no
+ *  record, no "moved" status). */
+function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean {
   const from = ptyPlace(id);
   if (!workspace || !from || from === to) return false;
   if (to === "panel") {
@@ -1218,7 +1291,12 @@ function movePty(id: string, to: Place): boolean {
   }
   ttys.update(id, { place: to === "panel" ? "drawer" : "tab" });
   relayout();
-  status(`${tabLabelOf(id)} moved to the ${to === "panel" ? "panel" : "editor area"}`);
+  const where = to === "panel" ? "panel" : "editor area";
+  if (opts.auto) status(`${tabLabelOf(id)} opened in the ${where}, where this kind of terminal was last moved (View → Reset terminal placements)`);
+  else {
+    recordPlacement(id, to);
+    status(`${tabLabelOf(id)} moved to the ${where}; new ones of this kind open there`);
+  }
   return true;
 }
 
@@ -1946,6 +2024,7 @@ const ACTIONS: Record<string, () => unknown> = {
   "dock:side": () => setDock("side"),
   "term-to-panel": () => moveActiveToPanel(),
   "term-to-editor": () => moveActiveToEditor(),
+  "term-placement-reset": () => resetPlacement(),
   explorer: () => toggleExplorer(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
@@ -1955,11 +2034,7 @@ const ACTIONS: Record<string, () => unknown> = {
   interactive: () => host.interactive(),
   "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
   "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
-  "new-terminal": () => {
-    // Opening an empty drawer starts its first shell: that one is the new terminal.
-    if (shell.classList.contains("no-bottom") && toggleTerminal(true)) return;
-    return terminals.create();
-  },
+  "new-terminal": () => newShell(),
   engine: () => showEngine(),
   about: () => openAboutPanel(status),
   omarchy: () => openOmarchyPanel(status),
@@ -3425,6 +3500,84 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       setDock(dockBefore);
       toggleTerminal(shownBefore);
       await log("tab-move", ok, { shell: sKey, pty: pty?.id ?? null, docks });
+    }
+    // Remembered placement per kind (kit ADR 2026-10-24 amend 2026-11-07, tab placement
+    // memory): a move records the kind in settings.json, a new tab of that kind opens there
+    // (and still echoes), Colony's own open-there move records nothing, the drawer's + stays in
+    // the drawer, and the reset sends new tabs back to the defaults without moving open ones.
+    // Surviving a restart is the operator's dogfood (one process here).
+    {
+      const shownBefore = !shell.classList.contains("no-bottom");
+      const onDisk = readPlacementOnDisk;
+      const settle = async () => {
+        await wait(100);
+        await placementSaved;
+      };
+      const echoes = async (id: string, tag: string) => {
+        const v = ptyView(id);
+        if (!v || v.exited) return false;
+        await v.send(`echo ${tag}-$((6*7))\r`).catch(() => {});
+        return until(() => v.output.includes(`${tag}-42`), 4000);
+      };
+      const inPanel = (id: string) => terminals.has(id) && !tabs.has(id) && ttys.get(id)?.place === "drawer";
+      const inEditor = (id: string) => tabs.has(id) && !terminals.has(id) && ttys.get(id)?.place === "tab";
+      const agent = { kind: "interactive", plan: "", backend: "smoke", engine: "claude" } as const;
+      const r: Record<string, unknown> = {};
+      runAction("term-placement-reset");
+      await settle();
+      r.startsEmpty = JSON.stringify(await onDisk()) === "{}";
+      // interactive: move one to the panel, the next opens there
+      const a = await openTermTab(["sh"], "smoke placement a", "COLONY_SMOKE tab placement", "terminals", agent);
+      await wait(300);
+      if (a) {
+        showTab(a.id);
+        runAction("term-to-panel");
+      }
+      await settle();
+      const disk1 = await onDisk();
+      r.recordsInteractive = JSON.stringify(disk1) === JSON.stringify({ interactive: "panel" });
+      const b = await openTermTab(["sh"], "smoke placement b", "COLONY_SMOKE tab placement", "terminals", agent);
+      await wait(400);
+      await settle();
+      r.newInteractiveInPanel = !!b && inPanel(b.id) && !!$("term-tabs").querySelector(`.tab[data-key="${b.id}"]`);
+      r.newInteractiveEchoes = !!b && (await echoes(b.id, "placement-b"));
+      r.openMoveRecordsNothing = JSON.stringify(await onDisk()) === JSON.stringify(disk1);
+      // shell: move one to the editor area, New shell terminal opens there, the drawer's + does not
+      toggleTerminal(true);
+      await terminals.create();
+      await wait(300);
+      const s1 = terminals.activeKey();
+      runAction("term-to-editor");
+      await settle();
+      r.recordsShell = JSON.stringify(await onDisk()) === JSON.stringify({ shell: "editor", interactive: "panel" });
+      runAction("new-terminal");
+      await wait(600);
+      const s2 = terminals.newestKey;
+      r.newShellInEditor = s2 !== s1 && inEditor(s2) && activeTab === s2;
+      $("term-tabs").querySelector<HTMLElement>(".tab-add")!.click();
+      await wait(600);
+      const s3 = terminals.newestKey;
+      r.plusStaysInDrawer = s3 !== s2 && inPanel(s3);
+      // reset: open tabs stay, new ones take the defaults
+      runAction("term-placement-reset");
+      await settle();
+      r.resetClears = JSON.stringify(await onDisk()) === "{}";
+      r.openTabsStay = !!a && !!b && inPanel(a.id) && inPanel(b.id) && inEditor(s1) && inEditor(s2);
+      const c = await openTermTab(["sh"], "smoke placement c", "COLONY_SMOKE tab placement", "terminals", agent);
+      await wait(300);
+      r.afterResetInteractiveInEditor = !!c && inEditor(c.id);
+      runAction("new-terminal");
+      await wait(600);
+      const s4 = terminals.newestKey;
+      r.afterResetShellInDrawer = s4 !== s3 && inPanel(s4);
+      for (const t of [a, b, c]) if (t) await closeTab(t.id);
+      for (const k of [s1, s2]) if (tabs.has(k)) await closeTab(k);
+      for (const k of [s3, s4]) {
+        terminals.focusKey(k);
+        $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${k}"] .tab-close`)?.click();
+      }
+      toggleTerminal(shownBefore);
+      await log("tab-placement", Object.values(r).every((v) => v === true), { a: a?.id ?? null, b: b?.id ?? null, c: c?.id ?? null, shells: [s1, s2, s3, s4], ...r });
     }
     showTab("mission");
     // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
