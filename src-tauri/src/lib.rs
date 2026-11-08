@@ -495,6 +495,16 @@ mod tests {
             })
             .collect();
         assert_eq!(urls, ["http://*", "https://*"]);
+        // The plugin tests a URL against each entry with glob::Pattern::matches (default
+        // options, so `*` crosses `/`; tauri-plugin-opener src/scope.rs `matches_url`): the two
+        // entries admit every http(s) address the frontend sends, and nothing else.
+        let admits = |u: &str| urls.iter().any(|p| glob::Pattern::new(p).unwrap().matches(u));
+        for u in ["https://example.com/", "https://github.com/agent-kit-startup/colony/pull/62?x=1#y", "http://localhost:5173/a/b"] {
+            assert!(admits(u), "{u}");
+        }
+        for u in ["mailto:a@b.c", "tel:+10000000000", "file:///etc/hostname", "javascript:alert(1)", "ftp://example.com/"] {
+            assert!(!admits(u), "{u}");
+        }
         // The webview never calls the plugin with another program, nor for a path.
         let fe = [include_str!("../../src/browser.ts"), include_str!("../../src/main.ts"), include_str!("../../src/termview.ts")].concat();
         for gone in ["openPath", "revealItemInDir", "inAppBrowser"] {

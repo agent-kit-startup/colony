@@ -20,3 +20,11 @@ export function webUrl(href: string): string | null {
   if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname) return null;
   return u.href;
 }
+
+/** A click on a link in a terminal, whichever xterm provider found it (an address printed as
+ *  text, or an OSC 8 hyperlink): Ctrl+click (Cmd+click) opens it, as in VS Code and terminal
+ *  emulators; a plain click stays a terminal click (selection, the program's own mouse mode)
+ *  and only names the gesture. */
+export function termLinkClick(mods: { ctrlKey: boolean; metaKey: boolean }, uri: string): { open: string } | { hint: string } {
+  return mods.ctrlKey || mods.metaKey ? { open: uri } : { hint: `Ctrl+click opens ${uri} in your browser` };
+}

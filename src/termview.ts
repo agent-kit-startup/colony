@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { api, Channel, errText, focusPolicy, h, type PtyEvent } from "./api";
 import { openInBrowser } from "./browser";
 import { onSkin, termFont, token } from "./skin";
+import { termLinkClick } from "./weblink";
 
 // The skin's surfaces and semantic colors (src/tokens.css); bright variants stay xterm's.
 const termTheme = () => ({
@@ -27,6 +28,14 @@ const termTheme = () => ({
 /** Where a terminal reports a clipboard failure or a link it opened (main.ts points it at the
  *  status bar). */
 export const termStatus = { show: (_msg: string): void => {} };
+
+/** A click on a terminal link: Ctrl+click opens it in the system browser, a plain click only
+ *  says how (./weblink.ts termLinkClick). */
+function activateLink(ev: MouseEvent, uri: string) {
+  const act = termLinkClick(ev, uri);
+  if ("open" in act) void openInBrowser(act.open).then((m) => termStatus.show(m));
+  else termStatus.show(act.hint);
+}
 
 export class TermView {
   private static byPane = new WeakMap<Element, TermView>();
@@ -56,18 +65,19 @@ export class TermView {
       cursorBlink: true,
       scrollback: 10000,
       theme: termTheme(),
+      // OSC 8 hyperlinks (the `ESC ] 8 ; ; URL` escape that CLIs such as Claude Code, gh and
+      // ls --hyperlink print) are xterm's own link provider, which runs before any addon's.
+      // Without a handler it calls confirm() and window.open(), and the webview opens no
+      // window, so Ctrl+click on such a link did nothing (plan residual x1b). It now goes the
+      // same way as an address printed as text. allowNonHttpProtocols stays false: xterm
+      // drops an OSC 8 link that is not http(s) before it is a link at all.
+      linkHandler: { activate: (ev, uri) => activateLink(ev, uri), allowNonHttpProtocols: false },
     });
     this.term.loadAddon(this.fitAddon);
-    // http(s) links underline on hover; Ctrl+click opens one in the system browser (kit ADR
-    // 2026-10-15 amend 2026-11-07). A plain click stays a click in the terminal (selection,
-    // the program's own mouse mode) and only says how to open it. The addon's own pattern
-    // matches http:// and https:// only, and openInBrowser checks the scheme again.
-    this.term.loadAddon(
-      new WebLinksAddon((ev, uri) => {
-        if (ev.ctrlKey || ev.metaKey) void openInBrowser(uri).then((m) => termStatus.show(m));
-        else termStatus.show(`Ctrl+click opens ${uri} in your browser`);
-      }),
-    );
+    // http(s) addresses printed as text underline on hover (kit ADR 2026-10-15 amend
+    // 2026-11-07). The addon's own pattern matches http:// and https:// only, and
+    // openInBrowser checks the scheme again.
+    this.term.loadAddon(new WebLinksAddon((ev, uri) => activateLink(ev, uri)));
     this.term.open(pane);
     TermView.byPane.set(pane, this);
     this.offSkin = onSkin(() => {

@@ -38,6 +38,10 @@ tauri-plugin-deep-link = "2"
 # scope admits http:// and https:// only (lib.rs test opener_scope_http_https_only).
 tauri-plugin-opener = "2.7"
 
+[dev-dependencies]
+# The opener scope test matches URLs the way tauri-plugin-opener does (already in Cargo.lock).
+glob = "0.3"
+
 [features]
 # Build-time distribution channel: `direct` (default; GitHub Releases, in-app updates of
 # the AppImage) or `package` (`--no-default-features`; distro packages, updated by the
