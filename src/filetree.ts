@@ -8,7 +8,7 @@ import { api, errText, h, type Entry } from "./api";
 import { GLYPHS } from "./fileglyphs";
 import { classFor, glyphFor } from "./fileicons";
 import { buildMarkIndex, debounce, type MarkIndex } from "./gitmarks";
-import { contextTargets, filterRows, firstMatch, navKey, type NavRow, outermost, selectTo } from "./treenav";
+import { contextTargets, DRAG_THRESHOLD, dropDir, filterRows, firstMatch, type Move, movePlan, navKey, type NavRow, outermost, selectTo } from "./treenav";
 
 export type TreeItem = { path: string; isDir: boolean };
 
@@ -16,8 +16,13 @@ export type TreeItem = { path: string; isDir: boolean };
  *  `targets`: what Delete and Copy path act on (the selection when the row is in it). */
 export type TreeContext = { path: string | null; isDir: boolean; x: number; y: number; targets: TreeItem[] };
 
-/** What the tree's own keys hand back to the window (F2 and Delete). */
-export type TreeKeys = { rename: (path: string, isDir: boolean) => void; trash: (items: TreeItem[]) => void };
+/** What the tree hands back to the window: F2, Delete, and a drop of rows on a folder (one
+ *  rename per row, shell ADR amend 2026-11-07 point 5). */
+export type TreeKeys = {
+  rename: (path: string, isDir: boolean) => void;
+  trash: (items: TreeItem[]) => void;
+  move: (moves: Move[], dest: string) => void;
+};
 
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
 
@@ -63,6 +68,7 @@ export class FileTree {
       this.onContext({ path: null, isDir: true, x: ev.clientX, y: ev.clientY, targets: [] });
     });
     el.addEventListener("keydown", (ev) => void this.onKey(ev));
+    el.addEventListener("pointerdown", (ev) => this.onPress(ev));
     el.addEventListener("focus", () => {
       if (!this.focused || !this.rowOf(this.focused)) this.setFocus(this.visibleRows()[0]?.dataset.path ?? null);
     });
@@ -162,6 +168,65 @@ export class FileTree {
     this.paintSelection();
     if (document.activeElement !== this.el) this.el.focus({ preventScroll: true });
     return !(ev.shiftKey || ev.ctrlKey || ev.metaKey);
+  }
+
+  /** Drag rows onto a folder (pointer events, like the tab move: the window keeps its OS file
+   *  drop). A press that travels less than the threshold stays a click; Escape cancels. The
+   *  target folder row, or the tree for the root, changes only its 1px border colour. */
+  private onPress(down: PointerEvent) {
+    const t = down.target as HTMLElement;
+    const row = t.closest<HTMLElement>(".tree-row[data-path]");
+    if (down.button !== 0 || !row || row.classList.contains("editing") || t.closest(".tree-input") || !this.keys) return;
+    const path = row.dataset.path ?? "";
+    let sources: string[] | null = null;
+    let plan: Move[] = [];
+    let dest: string | null = null;
+    const mark = (target: string | null) => {
+      for (const r of this.el.querySelectorAll(".tree-row.drop-target")) r.classList.remove("drop-target");
+      this.el.classList.toggle("drop-root", target === this.root);
+      if (target && target !== this.root) this.rowOf(target)?.classList.add("drop-target");
+    };
+    const move = (ev: PointerEvent) => {
+      if (!sources) {
+        if (Math.hypot(ev.clientX - down.clientX, ev.clientY - down.clientY) < DRAG_THRESHOLD) return;
+        // Dragging a row outside the selection drags that row alone.
+        if (!this.selected.has(path)) this.select(path);
+        sources = this.selection().map((i) => i.path);
+        this.el.classList.add("tree-dragging");
+      }
+      ev.preventDefault();
+      const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      const hit = under?.closest<HTMLElement>("#tree .tree-row[data-path]") ?? null;
+      dest = dropDir(hit ? { path: hit.dataset.path ?? "", isDir: hit.classList.contains("dir") } : null, !!under?.closest("#tree"), this.root);
+      plan = dest ? movePlan(sources, dest) : [];
+      mark(plan.length ? dest : null);
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key, true);
+      this.el.classList.remove("tree-dragging");
+      mark(null);
+      if (!sources) return;
+      // The release after a drag is not a click on the row under it.
+      const eat = (ev: MouseEvent) => ev.stopPropagation();
+      window.addEventListener("click", eat, true);
+      window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
+      if (drop && dest && plan.length) this.keys?.move(plan, dest);
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key, true);
   }
 
   private async onKey(ev: KeyboardEvent) {

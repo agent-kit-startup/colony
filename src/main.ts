@@ -29,7 +29,7 @@ import { Editors } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
-import { outermost } from "./treenav";
+import { type Move, outermost } from "./treenav";
 import { CicdView, PullRequestsSection } from "./forge";
 import { GateAlerts, pendingGates } from "./gates";
 import { openOmarchyPanel, publishShellStatus } from "./omarchy";
@@ -440,6 +440,7 @@ const editors = new Editors($("monaco-host"), () => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx), {
   rename: (p, isDir) => void renameItem(p, isDir),
   trash: (items) => void trashItems(items),
+  move: (moves, dest) => void moveItems(moves, dest),
 });
 const isFile = (id: string) => id.startsWith("/");
 
@@ -727,6 +728,43 @@ async function renameItem(path: string, isDir: boolean) {
   } catch (e) {
     status(`Rename failed: ${errText(e)}`);
   }
+}
+
+/** Explorer drag to move: each dropped row is one rename_path into `dest` (shell ADR amend
+ *  2026-11-07 point 5, no new command). Item by item: a row whose target exists is refused by
+ *  the jail and nothing is overwritten; a row with unsaved edits in an open tab is skipped.
+ *  Rows already moved stay moved, and the notice names both. Open tabs follow a moved file. */
+async function moveItems(moves: Move[], dest: string) {
+  const moved: string[] = [];
+  const refused: string[] = [];
+  const reopen: string[] = [];
+  let active: string | null = null;
+  for (const m of moves) {
+    const open = tabsUnder(m.from);
+    const dirty = open.find((p) => editors.isDirty(p));
+    if (dirty) {
+      refused.push(`${relPath(m.from)} (unsaved changes in ${relPath(dirty)})`);
+      continue;
+    }
+    try {
+      const to = await api.renamePath(m.from, m.to);
+      moved.push(relPath(m.from));
+      if (open.includes(activeTab)) active = to + activeTab.slice(m.from.length);
+      for (const id of open) {
+        reopen.push(to + id.slice(m.from.length));
+        await closeTab(id);
+      }
+    } catch (e) {
+      refused.push(`${relPath(m.from)} (${errText(e)})`);
+    }
+  }
+  for (const p of reopen) if (p !== active) await openFile(p);
+  if (active) await openFile(active);
+  if (moved.length) await tree.reveal(dest, true);
+  const where = dest === workspace?.root ? workspace.name : relPath(dest);
+  const done = moved.length ? `Moved ${moved.join(", ")} to ${where}` : "Move: nothing moved";
+  status(refused.length ? `${done}; not moved: ${refused.join("; ")}` : done);
+  if (moved.length) void gitView.panel.refresh();
 }
 
 /** Explorer → Delete's question (the code-path smoke answers it). */
