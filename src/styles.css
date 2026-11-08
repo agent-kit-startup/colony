@@ -715,8 +715,49 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .git-out:empty { display: none; }
 .git-work .git-files { max-height: 260px; }
 .git-work .git-out { max-height: 420px; }
-.git-graph { margin: 0; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 6px; min-width: 0; }
-.git-graph-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+/* Commit graph (src/gitgraph.ts): one 24px row per commit, an SVG lane cell, refs and subject.
+   Lane colours are the seven semantic tokens; selection and focus change the 1px border only. */
+.git-bento > .bento-wide { grid-column: 1 / -1; }
+.gg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gg-head { color: var(--text-secondary); }
+.gg-head:empty { display: none; }
+.gg-list { max-height: 480px; overflow: auto; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--mc-radius-chrome); padding: 2px 0; min-width: 0; }
+.gg-row { display: grid; grid-template-columns: var(--gg-w, 14px) minmax(0, 1fr) auto auto auto; align-items: center; gap: 8px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: var(--mc-radius-sm); cursor: pointer; }
+.gg-row:hover { border-color: var(--border); }
+.gg-row:focus { outline: none; }
+.gg-row:focus-visible { border-color: var(--text-secondary); }
+.gg-row.is-selected { border-color: var(--blue); }
+.gg-graph { display: flex; height: 24px; }
+.gg-svg { display: block; overflow: visible; }
+.gg-line { fill: none; stroke: var(--gg); stroke-width: 1.5; }
+.gg-dot { fill: var(--gg); stroke: var(--bg-primary); stroke-width: 1; }
+.gg-head-ring { fill: none; stroke: var(--text-primary); stroke-width: 1.5; }
+.gg-c0 { --gg: var(--blue); }
+.gg-c1 { --gg: var(--green); }
+.gg-c2 { --gg: var(--purple); }
+.gg-c3 { --gg: var(--orange); }
+.gg-c4 { --gg: var(--cyan); }
+.gg-c5 { --gg: var(--yellow); }
+.gg-c6 { --gg: var(--red); }
+.gg-msg { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: var(--mc-chrome-label-size); }
+.gg-row.is-head .gg-subject { color: var(--text-primary); font-weight: 600; }
+.gg-subject { overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); min-width: 0; }
+.gg-author, .gg-date { white-space: nowrap; }
+.gg-author { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.gg-hash { font-family: var(--mc-font-mono); }
+.gg-ref { flex: none; font-family: var(--mc-font-mono); font-size: var(--mc-chrome-meta-size); line-height: 16px; padding: 0 5px; border: 1px solid var(--border-active); border-radius: var(--mc-radius-pill); color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.gg-ref-branch { border-color: var(--blue); color: var(--blue); }
+.gg-ref-remote { border-color: var(--purple); color: var(--purple); }
+.gg-ref-tag { border-color: var(--yellow); color: var(--yellow); }
+.gg-ref.is-upstream { border-color: var(--cyan); color: var(--cyan); }
+.gg-ref.is-head { border-color: var(--green); color: var(--green); font-weight: 600; }
+.gg-more { align-self: flex-start; }
+.gg-more[hidden], .gg-detail[hidden] { display: none; }
+.gg-detail { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; min-width: 0; }
+.gg-message { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mc-font-mono); font-size: 12px; color: var(--text-primary); }
+.gg-detail .git-files { max-height: 220px; }
+.gg-detail .git-out { max-height: 420px; }
+@media (max-width: 1100px) { .gg-author { display: none; } }
 .prod-card { border-color: color-mix(in srgb, var(--yellow) 45%, var(--border)); }
 
 /* ---- agent tab (transcript) --------------------------------------------------------- */

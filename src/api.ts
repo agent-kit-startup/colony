@@ -122,6 +122,13 @@ export interface GitFile { xy: string; path: string }
 export interface GitStatus { isRepo: boolean; branch: string; header: string; prodBranch: boolean; files: GitFile[] }
 /** The Explorer's git marks (`git_marks`): absolute paths; a path ending in `/` is a collapsed folder. */
 export interface GitMarks { isRepo: boolean; marks: { path: string; mark: "M" | "A" | "U" | "D" | "R" | "!" | "I" }[] }
+/** One decoration on a graph commit (`git_graph`): local branch, remote-tracking branch, tag or other ref. */
+export interface GraphRef { name: string; kind: "branch" | "remote" | "tag" | "other"; head: boolean }
+export interface GraphCommit { hash: string; parents: string[]; refs: GraphRef[]; author: string; date: string; subject: string }
+/** One page of the read-only commit graph, newest first (children before parents). */
+export interface GraphPage { isRepo: boolean; head: string | null; branch: string | null; upstream: string | null; commits: GraphCommit[]; more: boolean }
+export interface CommitFile { status: string; path: string; oldPath: string | null }
+export interface CommitDetail { hash: string; parents: string[]; author: string; email: string; date: string; message: string; files: CommitFile[] }
 
 export const api = {
   appInfo: () => invoke<StartupInfo>("app_info"),
@@ -215,6 +222,9 @@ export const api = {
   gitStatus: () => invoke<GitStatus>("git_status"),
   gitMarks: () => invoke<GitMarks>("git_marks"),
   gitDiff: (path?: string) => invoke<string>("git_diff", { path: path ?? null }),
+  gitGraph: (skip: number, limit: number) => invoke<GraphPage>("git_graph", { skip, limit }),
+  gitCommitDetail: (hash: string) => invoke<CommitDetail>("git_commit_detail", { hash }),
+  gitCommitDiff: (hash: string, path: string) => invoke<string>("git_commit_diff", { hash, path }),
   gitCommit: (message: string, stageAll: boolean) => invoke<string>("git_commit", { message, stageAll }),
   gitPush: (typedConfirm?: string) => invoke<string>("git_push", { typedConfirm: typedConfirm ?? null }),
 };
