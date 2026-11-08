@@ -38,7 +38,7 @@ import { openOmarchyPanel, publishShellStatus } from "./omarchy";
 import { ConflictView } from "./conflicts";
 import { GitView } from "./git";
 import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq";
-import { gitCicdSmoke, hostSmoke } from "./hostsmoke";
+import { forgeUxSmoke, gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
 import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
@@ -1715,14 +1715,16 @@ const gitView = new GitView(status, () => void tree.refresh(), host.copy, {
 });
 // Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
 // An approved request ran gh (a denied one did not): reload the PR list and the working tree.
+// The card may have been approved in a PR tab with the Git view hidden: the PR list reloads anyway.
 const requests = new RequestsSection(status, (r, d) => {
-  if (d.outcome !== "denied") gitView.reload();
+  if (d.outcome !== "denied") {
+    gitView.reload();
+    prList.refresh();
+  }
   for (const v of prViews.values()) v.decided(r, d);
 });
-gitView.addSections(
-  requests,
-  new PullRequestsSection({ status, onCard: (id) => requests.reveal(id), onResolve: (n) => void resolvePr(n), onOpen: (n) => openPr(n) }),
-);
+const prList = new PullRequestsSection({ status, onCard: (id) => requests.reveal(id), onResolve: (n) => void resolvePr(n), onOpen: (n) => openPr(n) });
+gitView.addSections(requests, prList);
 
 // PR detail: one centre tab per PR (src/prdetail.ts; operator answer forge-ux-pr-detail-placement).
 // The PR's approval cards live in its merge box while the tab is open.
@@ -3793,6 +3795,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const smokeCtx = { root, log, wait, until, shot, showTab, view, term: (line: string) => terminals.sendToActive(line), activeTab: () => activeTab };
     await hostSmoke(smokeCtx);
     await gitCicdSmoke(smokeCtx);
+    await forgeUxSmoke({ ...smokeCtx, closeTab, tabIds: () => [...tabs.keys()] });
     const seen = new Map<number, string[]>();
     const off = runs.on((c) => {
       if (c.kind === "event") seen.set(c.run.id, [...(seen.get(c.run.id) ?? []), String(c.ev.type)]);
