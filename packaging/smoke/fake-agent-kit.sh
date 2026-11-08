@@ -15,6 +15,7 @@
 # that runs `agent-kit`, from a kit after 6.14.0): the conflict window splices by the kit's
 # marker lines, so a canned listing would drift. `conflicts propose` is stubbed (no model,
 # no session): one accepted proposal per hunk, theirs then ours, built from that listing.
+# `promote rules|wait --json` print the kit's JSON shapes and write nothing.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
 if [ "${1:-}" = conflicts ]; then
@@ -57,6 +58,17 @@ while [ $# -gt 0 ]; do
   shift
 done
 cd "$cwd" || exit 1
+if [ "$cmd" = promote ]; then
+  # `agent-kit promote rules|wait --json` stand-ins (kit commands/promote.ts, #1417/#1418), read-only
+  # like the real ones: the PR detail's merge box runs them for a promote. They must never fall
+  # through to the run-plan stand-in below, which edits files.
+  case "$sub" in
+    rules) echo '{"ok":true,"base":"main","unmodeled":[{"name":"required_signatures","rulesetId":42}]}' ;;
+    wait) echo '{"outcome":"merged","pr":{"state":"MERGED","mergedAt":"2026-11-08T12:00:00Z"},"polls":1}' ;;
+    *) echo "fixture: unknown promote subcommand ${sub:-none}" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
 if [ "$cmd" = queue ]; then
   # `agent-kit queue gates` stand-in (kit commands/queue.ts, captured from the real helper on
   # a HANDOFF with one deferred-operator row). Read-only, like the real one: no file is written.
