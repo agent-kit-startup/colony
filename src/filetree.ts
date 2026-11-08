@@ -1,7 +1,10 @@
 // Explorer: lazy file tree of the opened workspace. Clicking a row selects it (the target
 // folder of New file / New folder); names for a new item or a rename are typed inline.
-// Each row carries its git mark (src/gitmarks.ts), refreshed in place without a re-render.
+// Each row carries its file-type glyph (src/fileicons.ts) and its git mark (src/gitmarks.ts),
+// the mark refreshed in place without a re-render.
 import { api, errText, h, type Entry } from "./api";
+import { GLYPHS } from "./fileglyphs";
+import { classFor, glyphFor } from "./fileicons";
 import { buildMarkIndex, debounce, type MarkIndex } from "./gitmarks";
 
 /** Right-click on a row (`path` set) or on the empty Explorer (`path` null: the root). */
@@ -131,7 +134,7 @@ export class FileTree {
     const d = this.dirs.get(dir);
     if (!d) return null;
     const input = h("input", { class: "tree-input", spellcheck: "false", autocomplete: "off", "aria-label": kind === "file" ? "New file name" : "New folder name", placeholder: kind === "file" ? "name.md" : "folder" }) as HTMLInputElement;
-    const row = h("div", { class: `tree-row editing ${kind === "file" ? "file" : "dir"}` }, h("span", { class: "caret" }, kind === "folder" ? "▸" : ""), input);
+    const row = h("div", { class: `tree-row editing ${kind === "file" ? "file" : "dir"}` }, h("span", { class: "caret" }, kind === "folder" ? "▸" : ""), fileIcon("", kind === "folder"), input);
     row.style.paddingLeft = `${8 + d.depth * 12}px`;
     d.box.prepend(row);
     const name = await this.edit(() => typed(input, ""));
@@ -182,7 +185,8 @@ export class FileTree {
       row.dataset.path = entry.path;
       row.style.paddingLeft = `${8 + depth * 12}px`;
       const caret = h("span", { class: "caret" }, entry.isDir ? (this.expanded.has(entry.path) ? "▾" : "▸") : "");
-      row.append(caret, h("span", { class: "name" }, entry.name));
+      const glyph = fileIcon(entry.name, entry.isDir, entry.isDir && this.expanded.has(entry.path));
+      row.append(caret, glyph, h("span", { class: "name" }, entry.name));
       this.paintMark(row);
       if (entry.path === this.active) row.classList.add("active");
       if (entry.path === this.selected?.path) row.classList.add("selected");
@@ -206,9 +210,11 @@ export class FileTree {
             this.dirs.delete(entry.path);
             kids.replaceChildren();
             caret.textContent = "▸";
+            setGlyph(glyph, "folder");
           } else {
             this.expanded.add(entry.path);
             caret.textContent = "▾";
+            setGlyph(glyph, "folder-open");
             await load();
           }
         });
@@ -259,4 +265,36 @@ function typed(input: HTMLInputElement, value: string, selEnd = value.length): P
       }, 100),
     );
   });
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** A row's 16px file-type glyph, coloured by its class in CSS (`.file-icon[data-class]`). Built
+ *  from the bundled path data with createElementNS: no markup string is parsed, and the file
+ *  name only picks a table entry. */
+function fileIcon(name: string, isDir: boolean, expanded = false): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "file-icon");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "currentColor");
+  setGlyph(svg, glyphFor(name, isDir, expanded));
+  return svg;
+}
+
+/** Swap an icon's glyph in place (a folder opening or closing). */
+function setGlyph(svg: SVGSVGElement, id: string) {
+  const g = GLYPHS[id] ?? GLYPHS.file;
+  svg.setAttribute("viewBox", g.vb);
+  svg.dataset.glyph = id;
+  svg.dataset.class = classFor(id);
+  svg.replaceChildren(
+    ...g.d.map((p) => {
+      const el = document.createElementNS(SVG_NS, "path");
+      el.setAttribute("d", typeof p === "string" ? p : p[0]);
+      if (typeof p !== "string") el.setAttribute("opacity", String(p[1]));
+      return el;
+    }),
+  );
 }

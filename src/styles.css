@@ -206,6 +206,18 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 /* Where a drag from the desktop would land (main.ts markDrop): a 1px border over it, no fill. */
 #drop-mark { position: fixed; z-index: 70; pointer-events: none; border: 1px solid var(--blue); border-radius: var(--mc-radius-sm); }
 .tree-row .caret { width: 12px; color: var(--text-secondary); font-size: 10px; }
+/* File-type glyphs (src/fileicons.ts): the colour is the file class's skin token, never a
+   palette written here; ignored files dim the glyph with their name. */
+.tree-row .file-icon { width: 16px; height: 16px; flex: none; color: var(--text-muted); }
+.tree-row .file-icon[data-class="dir"] { color: var(--blue); }
+.tree-row .file-icon[data-class="code"] { color: var(--green); }
+.tree-row .file-icon[data-class="config"] { color: var(--yellow); }
+.tree-row .file-icon[data-class="docs"] { color: var(--cyan); }
+.tree-row .file-icon[data-class="image"] { color: var(--purple); }
+.tree-row .file-icon[data-class="archive"] { color: var(--red); }
+.tree-row .file-icon[data-class="exec"] { color: var(--orange); }
+.tree-row .file-icon[data-class="other"] { color: var(--text-muted); }
+.tree-row.git-ignored .file-icon { color: var(--text-muted); }
 .tree-row.dir .name { color: var(--text-primary); }
 /* Git marks (shell ADR amend 2026-11-07, Explorer git workbench, points 2 and 3): a letter
    at the row's end in its skin token; ignored rows dimmed. Content, not selection styling:
