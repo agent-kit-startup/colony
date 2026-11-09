@@ -3656,6 +3656,126 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       toggleTerminal(shownBefore);
       await log("tab-move", ok, { shell: sKey, pty: pty?.id ?? null, docks });
     }
+    // Web links reach the system browser (kit ADR 2026-10-15 amend 2026-11-07; plan residual
+    // x1b): a Ctrl+click on an http(s) address printed in a terminal (plain text and an OSC 8
+    // hyperlink) and a click on one in the doc preview hand that address to the opener; a
+    // plain click in the terminal opens nothing, xterm's own confirm()/window.open() path is
+    // never taken, and a file: OSC 8 link is not a link. Runs only when the runner put an
+    // xdg-open/gio shim on PATH (marker <root>/.git/colony-opener-shim; the shim appends its
+    // argv to <root>/.git/colony-opener.log): without it a real browser would start.
+    if (await api.readTextFile(`${root}/.git/colony-opener-shim`).then(() => true, () => false)) {
+      const opened = async () => (await api.readTextFile(`${root}/.git/colony-opener.log`).catch(() => "")).split("\n").filter(Boolean);
+      const reached = async (url: string) => {
+        for (let i = 0; i < 20; i++) {
+          if ((await opened()).some((l) => l.endsWith(` ${url}`))) return true;
+          await wait(150);
+        }
+        return false;
+      };
+      const xtermCalls: string[] = [];
+      const realConfirm = window.confirm;
+      const realOpen = window.open;
+      window.confirm = (m?: string) => (xtermCalls.push(`confirm ${m ?? ""}`), false);
+      window.open = (u?: string | URL) => (xtermCalls.push(`open ${String(u ?? "")}`), null);
+      const plain = "https://example.invalid/colony-smoke/plain?q=1";
+      const osc = "https://example.invalid/colony-smoke/osc8";
+      const doc = "https://example.invalid/colony-smoke/doc";
+      const r: Record<string, unknown> = {};
+      toggleTerminal(true);
+      const script = `printf '%s\\n' '${plain}'; printf '\\033]8;;${osc}\\033\\\\OSC 8 label\\033]8;;\\033\\\\\\n'; printf '\\033]8;;file:///etc/hostname\\033\\\\file link\\033]8;;\\033\\\\\\n'; exec sleep 600`;
+      await terminals.create(["sh", "-c", script], "web links");
+      const key = terminals.activeKey();
+      let v = terminals.view(key);
+      await until(() => !!v && v.output.includes("file link"), 4000);
+      await wait(300);
+      // Mouse events on the cell that holds `text`: hover first (xterm resolves the link under
+      // the pointer on mousemove), then press and release.
+      const clickText = async (text: string, mods: { ctrlKey?: boolean }) => {
+        if (!v) return false;
+        const t = v.term;
+        const b = t.buffer.active;
+        let row = -1;
+        let col = -1;
+        for (let y = b.viewportY; y < b.viewportY + t.rows; y++) {
+          const at = b.getLine(y)?.translateToString(true).indexOf(text) ?? -1;
+          if (at >= 0) {
+            row = y - b.viewportY;
+            col = at;
+            break;
+          }
+        }
+        const screen = v.pane.querySelector<HTMLElement>(".xterm-screen");
+        if (row < 0 || !screen) return false;
+        const box = screen.getBoundingClientRect();
+        const clientX = box.left + (col + 1.5) * (box.width / t.cols);
+        const clientY = box.top + (row + 0.5) * (box.height / t.rows);
+        const init = { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, ...mods };
+        // xterm re-resolves the link under the pointer only when the hovered cell changes, so
+        // pass over an empty cell (bottom right) first, as a real pointer does.
+        screen.dispatchEvent(new MouseEvent("mousemove", { ...init, clientX: box.right - 2, clientY: box.bottom - 2, buttons: 0 }));
+        await wait(60);
+        screen.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0 }));
+        await wait(120);
+        screen.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1 }));
+        screen.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        screen.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+        await wait(150);
+        return true;
+      };
+      let before = (await opened()).length;
+      r.plainNoCtrlClicked = await clickText("example.invalid/colony-smoke/plain", {});
+      await wait(400);
+      r.plainNoCtrlOpensNothing = (await opened()).length === before;
+      r.plainNoCtrlHint = $("st-msg").textContent?.startsWith("Ctrl+click opens") ?? false;
+      r.plainCtrlClicked = await clickText("example.invalid/colony-smoke/plain", { ctrlKey: true });
+      r.plainCtrlOpens = await reached(plain);
+      before = (await opened()).length;
+      r.oscNoCtrlClicked = await clickText("OSC 8 label", {});
+      await wait(400);
+      r.oscNoCtrlOpensNothing = (await opened()).length === before;
+      r.oscCtrlClicked = await clickText("OSC 8 label", { ctrlKey: true });
+      r.oscCtrlOpens = await reached(osc);
+      before = (await opened()).length;
+      r.fileOscClicked = await clickText("file link", { ctrlKey: true });
+      await wait(400);
+      r.fileOscOpensNothing = (await opened()).length === before;
+      // The same Ctrl+clicks while the program has turned on mouse reporting (Claude Code's
+      // full-screen mode does): xterm sends the click to the program and still opens the link.
+      const mouseScript = `printf '\\033[?1000h\\033[?1002h\\033[?1006h'; ${script}`;
+      await terminals.create(["sh", "-c", mouseScript], "web links, mouse mode");
+      const mouseKey = terminals.activeKey();
+      v = terminals.view(mouseKey);
+      await until(() => !!v && v.output.includes("file link"), 4000);
+      await wait(300);
+      const mouseBefore = (await opened()).length;
+      r.mouseModeOn = !!v && (v.term.modes.mouseTrackingMode === "drag" || v.term.modes.mouseTrackingMode === "vt200");
+      r.mousePlainCtrlClicked = await clickText("example.invalid/colony-smoke/plain", { ctrlKey: true });
+      r.mouseOscCtrlClicked = await clickText("OSC 8 label", { ctrlKey: true });
+      await wait(600);
+      r.mouseModeOpens = (await opened()).slice(mouseBefore).filter((l) => l.endsWith(` ${plain}`) || l.endsWith(` ${osc}`)).length === 2;
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${mouseKey}"] .tab-close`)?.click();
+      // The doc preview: a click on a web link (Ctrl held, as the operator does) opens it;
+      // a mailto: address is not a link there.
+      const md = `${root}/.git/HANDOFF.md`;
+      await api.writeTextFile(md, `# Links\n\n- [smoke site](${doc})\n- [mail](mailto:smoke@example.com)\n`).catch((e) => (r.mdWrite = errText(e)));
+      await openFile(md, "preview");
+      const pv = $("doc-preview");
+      const link = await until(() => !pv.hidden && !!pv.querySelector(".md-link"), 4000).then(() => [...pv.querySelectorAll<HTMLElement>(".md-link")].find((a) => a.title.startsWith(doc)));
+      r.docLinks = [...pv.querySelectorAll<HTMLElement>(".md-link")].map((a) => a.textContent).join(",");
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0, ctrlKey: true }));
+      r.docCtrlOpens = !!link && (await reached(doc));
+      await closeTab(md);
+      const lines = await opened();
+      r.onlyWeb = lines.length > 0 && lines.every((l) => / https:\/\/example\.invalid\/colony-smoke\/(plain\?q=1|osc8|doc)$/.test(l));
+      r.xtermDefault = xtermCalls.length === 0;
+      window.confirm = realConfirm;
+      window.open = realOpen;
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"] .tab-close`)?.click();
+      const ok = Object.entries(r).every(([k, x]) => k === "docLinks" || x === true);
+      await log("web-link-open", ok, { ...r, opener: lines, xtermCalls });
+    } else {
+      await log("web-link-open", true, "skipped: no opener shim on PATH (marker .git/colony-opener-shim), so no real browser is started");
+    }
     // Remembered placement per kind (kit ADR 2026-10-24 amend 2026-11-07, tab placement
     // memory): a move records the kind in settings.json, a new tab of that kind opens there
     // (and still echoes), Colony's own open-there move records nothing, the drawer's + stays in

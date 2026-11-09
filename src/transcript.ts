@@ -29,8 +29,8 @@ export type MdLinkHandler = (href: string, kind: "repo" | "web") => void;
 function linkNode(text: string, href: string, onLink?: MdLinkHandler): HTMLElement {
   const kind = linkKind(href);
   if (!onLink || !kind) return h("span", { class: "md-link-text", title: href }, ...inlineMd(text));
-  // No href: the webview never navigates; a repo file opens in Colony, a web address is copied.
-  const a = h("a", { class: "md-link", role: "link", tabindex: "0", title: kind === "web" ? `${href}\nClick to copy the address` : href }, ...inlineMd(text));
+  // No href: the webview never navigates; a repo file opens in Colony, a web address opens in the system browser (./browser.ts).
+  const a = h("a", { class: "md-link", role: "link", tabindex: "0", title: kind === "web" ? `${href}\nClick to open in your browser` : href }, ...inlineMd(text));
   a.addEventListener("click", () => onLink(href, kind));
   a.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") onLink(href, kind);

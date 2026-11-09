@@ -491,6 +491,7 @@ dependencies = [
 name = "colony"
 version = "0.4.0"
 dependencies = [
+ "glob",
  "libc",
  "minisign-verify",
  "portable-pty",
