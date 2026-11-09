@@ -25,7 +25,7 @@ import { openInBrowser } from "./browser";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
-import { Editors } from "./editor";
+import { Editors, editorStatus } from "./editor";
 import { openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -2605,6 +2605,7 @@ window.addEventListener("contextmenu", (ev) => {
 
 // A terminal's refused clipboard read or write shows in the status bar (termview.ts).
 termStatus.show = status;
+editorStatus.show = status;
 
 // ---- files dropped from the desktop (src/droproute.ts) ------------------------------------
 /** Route one drop by the element under its position; returns the zone it went to. */
@@ -3660,7 +3661,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // x1b): a Ctrl+click on an http(s) address printed in a terminal (plain text and an OSC 8
     // hyperlink) and a click on one in the doc preview hand that address to the opener; a
     // plain click in the terminal opens nothing, xterm's own confirm()/window.open() path is
-    // never taken, and a file: OSC 8 link is not a link. Runs only when the runner put an
+    // never taken, and a file: OSC 8 link is not a link; the same for a link in the editor
+    // (plan residual x1c). Runs only when the runner put an
     // xdg-open/gio shim on PATH (marker <root>/.git/colony-opener-shim; the shim appends its
     // argv to <root>/.git/colony-opener.log): without it a real browser would start.
     if (await api.readTextFile(`${root}/.git/colony-opener-shim`).then(() => true, () => false)) {
@@ -3765,14 +3767,87 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0, ctrlKey: true }));
       r.docCtrlOpens = !!link && (await reached(doc));
       await closeTab(md);
+      // The editor (Monaco), as in VS Code (plan residual x1c): holding Ctrl over an address it
+      // underlined marks it as a link, Ctrl+click opens it (written form kept: `?q=1`), a plain
+      // click places the cursor and opens nothing, and a Ctrl+click on a file: address is
+      // refused. Monaco's default opener (window.open(), or location.href for other schemes)
+      // is never reached.
+      const edUrl = "https://example.invalid/colony-smoke/editor?q=1";
+      const edPath = `${root}/.git/colony-links.txt`;
+      await api.writeTextFile(edPath, `editor link: ${edUrl}\nfile link: file:///etc/hostname\nlast line\n`).catch((e) => (r.edWrite = errText(e)));
+      await openFile(edPath);
+      const ed = editors.editor;
+      const edHost = $("monaco-host");
+      r.edLinksDetected = await until(() => edHost.querySelectorAll(".detected-link").length >= 2, 6000);
+      // What Monaco made of each press and release (target type 6 = text, Ctrl, line) and the
+      // element each click went to, for the log.
+      const edEvents: string[] = [];
+      // Mouse events at a character of the editor: Monaco hit-tests the element under the
+      // point, so they go to document.elementFromPoint there.
+      const clickEditor = async (lineNumber: number, column: number, mods: { ctrlKey?: boolean }, press = true) => {
+        ed.revealLine(lineNumber);
+        await wait(60);
+        const pos = ed.getScrolledVisiblePosition({ lineNumber, column });
+        const dom = ed.getDomNode();
+        if (!pos || !dom) return false;
+        const box = dom.getBoundingClientRect();
+        const clientX = box.left + pos.left + 2;
+        const clientY = box.top + pos.top + pos.height / 2;
+        const at = () => {
+          const el = document.elementFromPoint(clientX, clientY);
+          return el && dom.contains(el) ? el : null;
+        };
+        let target = at();
+        if (!target) return false;
+        edEvents.push(`${press ? "click" : "move"} ${lineNumber}:${column}${mods.ctrlKey ? " ctrl" : ""} on ${target.tagName.toLowerCase()}.${String(target.className).trim().split(/\s+/).join(".")}`);
+        const init = { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1, ...mods };
+        const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true };
+        target.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0 }));
+        await wait(80);
+        if (!press) return true;
+        // Holding Ctrl over a link re-renders its line (the underline decoration), so the span
+        // hovered a moment ago may be gone: press on what is under the pointer now.
+        target = at();
+        if (!target) return false;
+        target.dispatchEvent(new PointerEvent("pointerdown", { ...init, ...ptr, buttons: 1 }));
+        target.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1 }));
+        await wait(30);
+        target = at() ?? target;
+        target.dispatchEvent(new PointerEvent("pointerup", { ...init, ...ptr, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+        await wait(150);
+        return true;
+      };
+      const edMouse = (kind: string) => (e: Parameters<Parameters<typeof ed.onMouseDown>[0]>[0]) => edEvents.push(`${kind} t${e.target.type} ctrl${e.event.ctrlKey ? 1 : 0} l${e.target.position?.lineNumber ?? 0}`);
+      const edSubs = [ed.onMouseDown(edMouse("down")), ed.onMouseUp(edMouse("up"))];
+      ed.setPosition({ lineNumber: 3, column: 1 });
+      r.edCtrlHoverMoved = await clickEditor(1, 22, { ctrlKey: true }, false);
+      r.edCtrlHoverUnderline = await until(() => !!edHost.querySelector(".detected-link-active"), 1000);
+      await clickEditor(3, 2, {}, false);
+      before = (await opened()).length;
+      r.edPlainClicked = await clickEditor(1, 22, {});
+      await wait(400);
+      r.edPlainOpensNothing = (await opened()).length === before;
+      r.edPlainPlacesCursor = ed.getPosition()?.lineNumber === 1;
+      r.edCtrlClicked = await clickEditor(1, 22, { ctrlKey: true });
+      r.edCtrlOpens = await reached(edUrl);
+      await wait(600); // the open's own status line lands first
+      before = (await opened()).length;
+      r.edFileClicked = await clickEditor(2, 16, { ctrlKey: true });
+      await wait(400);
+      r.edFileOpensNothing = (await opened()).length === before;
+      r.edFileRefused = $("st-msg").textContent?.startsWith("Not a web address Colony opens") ?? false;
+      for (const d of edSubs) d.dispose();
+      await closeTab(edPath);
       const lines = await opened();
-      r.onlyWeb = lines.length > 0 && lines.every((l) => / https:\/\/example\.invalid\/colony-smoke\/(plain\?q=1|osc8|doc)$/.test(l));
-      r.xtermDefault = xtermCalls.length === 0;
+      r.onlyWeb = lines.length > 0 && lines.every((l) => / https:\/\/example\.invalid\/colony-smoke\/(plain\?q=1|osc8|doc|editor\?q=1)$/.test(l));
+      r.noDefaultOpener = xtermCalls.length === 0;
       window.confirm = realConfirm;
       window.open = realOpen;
       $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"] .tab-close`)?.click();
       const ok = Object.entries(r).every(([k, x]) => k === "docLinks" || x === true);
-      await log("web-link-open", ok, { ...r, opener: lines, xtermCalls });
+      await log("web-link-open", ok, { ...r, opener: lines, xtermCalls, edEvents });
     } else {
       await log("web-link-open", true, "skipped: no opener shim on PATH (marker .git/colony-opener-shim), so no real browser is started");
     }

@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { termLinkClick, webUrl } from "../src/weblink.ts";
+import { editorLink, termLinkClick, webUrl } from "../src/weblink.ts";
 
 test("http and https addresses open, normalised", () => {
   assert.equal(webUrl("https://github.com/agent-kit-startup/colony/pull/62"), "https://github.com/agent-kit-startup/colony/pull/62");
@@ -40,4 +40,23 @@ test("both xterm link providers go through Colony's handler, never xterm's confi
   const src = readFileSync(new URL("../src/termview.ts", import.meta.url), "utf8");
   assert.match(src, /linkHandler:\s*\{\s*activate:\s*\(ev, uri\) => activateLink\(ev, uri\),\s*allowNonHttpProtocols:\s*false\s*\}/);
   assert.match(src, /new WebLinksAddon\(\(ev, uri\) => activateLink\(ev, uri\)\)/);
+});
+
+test("an editor link: http(s) opens as written, command: stays Monaco's, every other scheme is refused", () => {
+  assert.deepEqual(editorLink("https://example.com/a?q=1"), { open: "https://example.com/a?q=1" }, "the query kept as written");
+  assert.deepEqual(editorLink("http://localhost:5173/x#y"), { open: "http://localhost:5173/x#y" });
+  assert.equal(editorLink("command:editor.action.quickFix"), null, "Monaco's own hover actions");
+  for (const uri of ["file:///etc/hostname", "mailto:a@b.c", "javascript:alert(1)", "ftp://example.com/", "data:text/html,x", "vscode://file/x"]) {
+    assert.deepEqual(editorLink(uri), { refuse: `Not a web address Colony opens (http or https only): ${uri}` }, uri);
+  }
+});
+
+test("the editor's links go through Colony's opener, never Monaco's window.open()/location.href", () => {
+  // Monaco's default opener (editor/browser/services/openerService.js in monaco-editor 0.52)
+  // calls window.open() for http(s), which the webview drops, and sets location.href for any
+  // other scheme (plan residual x1c). registerLinkOpener puts Colony's opener first; the
+  // COLONY_SMOKE step web-link-open Ctrl+clicks a link in a real editor.
+  const src = readFileSync(new URL("../src/editor.ts", import.meta.url), "utf8");
+  assert.match(src, /monaco\.editor\.registerLinkOpener\(\{\s*open\(uri\) \{[\s\S]*?editorLink\(uri\.toString\(true\)\)[\s\S]*?openInBrowser\(act\.open\)/);
+  assert.doesNotMatch(src, /multiCursorModifier:\s*"ctrlCmd"/, "Ctrl+click stays the link gesture (Alt adds cursors)");
 });
