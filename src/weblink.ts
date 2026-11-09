@@ -28,3 +28,14 @@ export function webUrl(href: string): string | null {
 export function termLinkClick(mods: { ctrlKey: boolean; metaKey: boolean }, uri: string): { open: string } | { hint: string } {
   return mods.ctrlKey || mods.metaKey ? { open: uri } : { hint: `Ctrl+click opens ${uri} in your browser` };
 }
+
+/** A link Monaco opens (a Ctrl+click, Cmd+click on macOS, on an address it underlined, or a
+ *  link in one of its hovers). Monaco's own opener would call window.open() for http(s),
+ *  which the webview turns into nothing, and set location.href for any other scheme, which
+ *  would navigate Colony's window. So: http(s) goes to the system browser, `command:` (the
+ *  editor's own hover actions) stays Monaco's, and every other scheme is refused here. */
+export function editorLink(uri: string): { open: string } | { refuse: string } | null {
+  if (/^command:/i.test(uri)) return null;
+  const url = webUrl(uri);
+  return url ? { open: url } : { refuse: `Not a web address Colony opens (http or https only): ${uri}` };
+}

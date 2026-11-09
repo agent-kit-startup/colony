@@ -6,7 +6,9 @@ import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { api, focusPolicy } from "./api";
+import { openInBrowser } from "./browser";
 import { monoFont, onSkin } from "./skin";
+import { editorLink } from "./weblink";
 
 self.MonacoEnvironment = {
   getWorker(_id: string, label: string) {
@@ -24,6 +26,26 @@ monaco.editor.defineTheme("colony", {
   inherit: true,
   rules: [],
   colors: { "editor.background": "#141414", "editorGutter.background": "#141414" },
+});
+
+/** Where the editor reports a link it opened or refused (main.ts points it at the status bar). */
+export const editorStatus = { show: (_msg: string): void => {} };
+
+// Links in the editor (kit ADR 2026-10-15, amend 2026-11-07): Monaco underlines http(s)
+// addresses and, as in VS Code, opens one on Ctrl+click (Cmd+click on macOS; a plain click
+// places the cursor). Its default opener ends in window.open(), which the webview drops, so
+// the address goes through ./browser.ts like the terminal's and the doc preview's. One
+// opener for every editor (Monaco keeps it in its global services); ./weblink.ts editorLink
+// decides.
+monaco.editor.registerLinkOpener({
+  open(uri) {
+    // toString(true): the address as written (toString() would encode `?q=1` as `?q%3D1`).
+    const act = editorLink(uri.toString(true));
+    if (!act) return false;
+    if ("open" in act) void openInBrowser(act.open).then((m) => editorStatus.show(m));
+    else editorStatus.show(act.refuse);
+    return true;
+  },
 });
 
 interface Doc {
