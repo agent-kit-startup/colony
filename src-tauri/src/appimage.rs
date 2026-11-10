@@ -120,12 +120,13 @@ pub struct Handler {
 
 /// Register this AppImage for `colony://` the way tauri-plugin-deep-link 2.6.3 `register()` does
 /// on Linux: write the handler entry, refresh the MIME cache (`update-desktop-database`), make
-/// the entry the default (`xdg-mime default`). Two differences: both programs run with
-/// [`host_env_changes`] applied, and a failed cache refresh is reported and does not stop the
-/// default, because the cache is an optimisation and `xdg-mime default` is the registration.
+/// the entry the default (`xdg-mime default`). Three differences: both programs run with
+/// [`host_env_changes`] applied; a failed cache refresh is reported and does not stop the
+/// default, because the cache is an optimisation and `xdg-mime default` is the registration;
+/// and `Exec` quotes the path only when it has to ([`exec_value`]).
 pub fn register(handler: &Handler, config_dir: &Path, changes: &[EnvChange]) -> Result<(), String> {
     let mime = format!("x-scheme-handler/{SCHEME}");
-    let exec = format!("\"{}\" %u", handler.appimage.to_string_lossy());
+    let exec = exec_value(&handler.appimage)?;
     std::fs::create_dir_all(&handler.dir).map_err(|e| format!("{}: {e}", handler.dir.display()))?;
     let path = handler.dir.join(&handler.file_name);
     let current = std::fs::read_to_string(&path).ok();
@@ -151,6 +152,34 @@ pub fn register(handler: &Handler, config_dir: &Path, changes: &[EnvChange]) -> 
         return Err(format!("`xdg-mime default {} {mime}` failed: {status}", handler.file_name));
     }
     Ok(())
+}
+
+/// The `Exec` value that hands `path` the URL. The plugin always writes `"<path>" %u`, and
+/// xdg-utils' generic `xdg-open` (no GNOME or KDE: Hyprland, Sway, a bare X session) takes the
+/// first word with its quotes as the command, finds no such file and falls through to the
+/// browsers (exit 3). So the path is quoted only when the Desktop Entry spec requires it (a
+/// reserved character), with the spec's escapes: `"`, `` ` ``, `$` and `\` inside the quotes,
+/// then `\` again for the string, and `%` doubled. A path a desktop entry cannot hold (not
+/// UTF-8, a control character) is refused.
+fn exec_value(path: &OsStr) -> Result<String, String> {
+    const RESERVED: &[char] = &[' ', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')', '`'];
+    let path = path.to_str().ok_or_else(|| format!("{} is not UTF-8", path.to_string_lossy()))?;
+    if path.chars().any(char::is_control) {
+        return Err(format!("{path:?} has a control character"));
+    }
+    let path = path.replace('%', "%%");
+    if !path.contains(RESERVED) {
+        return Ok(format!("{path} %u"));
+    }
+    let mut quoted = String::from("\"");
+    for c in path.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    Ok(format!("{} %u", quoted.replace('\\', "\\\\")))
 }
 
 /// The plugin's new entry (its `template.desktop`).
@@ -421,7 +450,7 @@ mod tests {
         assert!(!ran("decoy").exists(), "the xdg-mime inside the mount ran");
         assert!(config.is_dir());
         let entry = std::fs::read_to_string(handler.dir.join("colony-handler.desktop")).unwrap();
-        assert!(entry.lines().any(|l| l == format!("Exec=\"{}\" %u", d.join("Colony.AppImage").display())));
+        assert!(entry.lines().any(|l| l == format!("Exec={} %u", d.join("Colony.AppImage").display())));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -443,18 +472,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Byte for byte what 0.5.0 (the plugin) wrote, so a later start finds nothing to change.
+    /// The plugin's layout; a later start finds nothing to change.
     #[test]
     fn a_new_entry_is_the_plugins() {
-        let exec = "\"/out/Colony.AppImage\" %u";
-        let entry = merged_entry(None, "Colony", exec, "x-scheme-handler/colony").unwrap();
+        let exec = exec_value(OsStr::new("/out/Colony.AppImage")).unwrap();
+        let entry = merged_entry(None, "Colony", &exec, "x-scheme-handler/colony").unwrap();
         assert_eq!(
             entry,
-            "[Desktop Entry]\nType=Application\nName=Colony\nExec=\"/out/Colony.AppImage\" %u\nTerminal=false\nMimeType=x-scheme-handler/colony\nNoDisplay=true\n"
+            "[Desktop Entry]\nType=Application\nName=Colony\nExec=/out/Colony.AppImage %u\nTerminal=false\nMimeType=x-scheme-handler/colony\nNoDisplay=true\n"
         );
-        assert_eq!(entry.len(), 139);
-        assert_eq!(merged_entry(Some(&entry), "Colony", exec, "x-scheme-handler/colony"), None);
-        assert_eq!(merged_entry(Some("garbage\n"), "Colony", exec, "x-scheme-handler/colony"), Some(entry));
+        assert_eq!(merged_entry(Some(&entry), "Colony", &exec, "x-scheme-handler/colony"), None);
+        assert_eq!(merged_entry(Some("garbage\n"), "Colony", &exec, "x-scheme-handler/colony"), Some(entry));
+    }
+
+    /// What 0.4.2 and 0.5.0 wrote (the plugin's quoted `Exec`, which the generic `xdg-open`
+    /// cannot run) is rewritten at the next start.
+    #[test]
+    fn the_quoted_entry_from_0_5_0_is_rewritten() {
+        let old = "[Desktop Entry]\nType=Application\nName=Colony\nExec=\"/out/Colony.AppImage\" %u\nTerminal=false\nMimeType=x-scheme-handler/colony\nNoDisplay=true\n";
+        let exec = exec_value(OsStr::new("/out/Colony.AppImage")).unwrap();
+        assert_eq!(
+            merged_entry(Some(old), "Colony", &exec, "x-scheme-handler/colony").unwrap(),
+            old.replace("Exec=\"/out/Colony.AppImage\" %u", "Exec=/out/Colony.AppImage %u")
+        );
+    }
+
+    #[test]
+    fn exec_quotes_the_path_only_when_it_has_to() {
+        let exec = |p: &str| exec_value(OsStr::new(p));
+        assert_eq!(exec("/home/me/Apps/Colony_0.5.1_amd64.AppImage").unwrap(), "/home/me/Apps/Colony_0.5.1_amd64.AppImage %u");
+        assert_eq!(exec("/home/me/100%/Colony.AppImage").unwrap(), "/home/me/100%%/Colony.AppImage %u");
+        assert_eq!(exec("/home/me/My Apps/Colony.AppImage").unwrap(), "\"/home/me/My Apps/Colony.AppImage\" %u");
+        // `$` and `\` are escaped for the Exec quoting, then `\` again for the string value.
+        assert_eq!(exec("/a/$x/b\\c").unwrap(), "\"/a/\\\\$x/b\\\\\\\\c\" %u");
+        assert_eq!(exec("/a/\"q\"`b`").unwrap(), "\"/a/\\\\\"q\\\\\"\\\\`b\\\\`\" %u");
+        assert!(exec("/a/b\nExec=/bin/sh").is_err());
+        assert!(exec("/a/b\tc").is_err());
+        use std::os::unix::ffi::OsStrExt;
+        assert!(exec_value(OsStr::from_bytes(b"/a/\xff")).is_err());
     }
 
     #[test]
