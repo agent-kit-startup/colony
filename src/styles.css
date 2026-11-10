@@ -962,7 +962,19 @@ button.kv-filter.on { background: transparent; border-color: var(--border-active
 .colony-tile[data-tile="fog"] { fill: var(--bg-secondary); }
 .colony-tile[data-tile="barren"] { fill: #4b5563; }
 .colony-tile[data-tile="green"] { fill: #3f7d5a; }
-.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: none; }
+.colony-tile[data-tile="ground"] { fill: #5b6148; }
+.colony-tile[data-tile="ground"][data-terrain="v"] { fill: #3d4a3a; }
+.colony-tile[data-tile="ground"][data-terrain="s"] { fill: #565e66; }
+.colony-tile[data-tile="ground"][data-terrain="e"] { fill: #66704f; }
+.colony-tile[data-hex] { cursor: default; }
+.colony-tile.selected { stroke: var(--border-active); stroke-width: 1; }
+.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: auto; }
+.colony-glyph[data-mark="queued"] { opacity: 0.55; }
+.colony-glyph[data-mark="offline"] { fill: #e08a6b; }
+.colony-counters { display: flex; flex-wrap: wrap; gap: 6px; }
+.colony-counters button:disabled { cursor: not-allowed; opacity: 0.6; }
+.colony-card-art-none { display: grid; place-items: center; }
+.colony-card-glyph { font: 600 22px var(--mc-font-mono); color: var(--text-secondary); }
 .colony-side { display: flex; flex-direction: column; gap: var(--mc-space-lg); }
 .colony-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--mc-space-md); }
 .colony-resource { border: 1px solid var(--border); border-radius: var(--mc-radius); padding: var(--mc-space-md); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
