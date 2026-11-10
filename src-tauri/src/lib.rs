@@ -1,6 +1,8 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
 mod agent;
+#[cfg(target_os = "linux")]
+mod appimage;
 mod appupdate;
 mod branchrule;
 mod catalog;
@@ -218,6 +220,25 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
     state.startup.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
+/// Make this AppImage (`appimage`, the file) the `colony://` handler. Not through the plugin:
+/// its `update-desktop-database` and `xdg-mime` inherit the AppImage's
+/// `LD_LIBRARY_PATH` and load the bundled glib (appimage.rs).
+#[cfg(target_os = "linux")]
+fn register_appimage_scheme(app: &tauri::App, appimage: std::ffi::OsString) -> Result<(), String> {
+    let bin = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+    let file_name = format!("{}-handler.desktop", bin.file_name().map_or("colony".into(), |n| n.to_string_lossy()));
+    let handler = appimage::Handler {
+        dir: app.path().data_dir().map_err(|e| e.to_string())?.join("applications"),
+        name: app.config().product_name.clone().unwrap_or_else(|| file_name.clone()),
+        file_name,
+        appimage,
+    };
+    let config_dir = app.path().config_dir().map_err(|e| e.to_string())?;
+    let roots = appimage::appdir_roots(app.env().appdir.as_deref());
+    let changes = appimage::host_env_changes(std::env::vars_os(), &roots);
+    appimage::register(&handler, &config_dir, &changes)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `colony request ...`: the host-action CLI (hostreq.rs), no GUI.
@@ -382,9 +403,9 @@ pub fn run() {
             host_requests.start_watcher();
             // An AppImage has no installer to write its desktop entry. The other installs
             // register the scheme when they install (packaging/install.sh, the .deb).
-            if app.env().appimage.is_some() && std::env::var_os("COLONY_SMOKE").is_none() {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                if let Err(e) = app.deep_link().register_all() {
+            #[cfg(target_os = "linux")]
+            if let Some(path) = app.env().appimage.filter(|_| std::env::var_os("COLONY_SMOKE").is_none()) {
+                if let Err(e) = register_appimage_scheme(app, path) {
                     eprintln!("colony: could not register the colony:// link: {e}");
                 }
             }
