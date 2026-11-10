@@ -5,7 +5,9 @@
 // plays the game's catalog when COLONY_GAME_CATALOG names a JSON file
 // `{ "structures": [...], "threats": [...], "twoHex": [...] }` (.github/workflows/release.yml
 // fetches it from the private content repository). Data only: nothing from that file runs.
+// `node scripts/oligarchy-catalog.mjs` runs the same check on that file before the build.
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { validateRulesCatalog } from "@dadado/oligarchy-engine";
 
 export const CATALOG_MODULE = "virtual:oligarchy-catalog";
@@ -28,10 +30,8 @@ export function catalogProblems(catalog) {
   return [...problems, ...validateRulesCatalog(catalog)];
 }
 
-/** The source of the catalog module: the placeholder, or the checked catalog file. Throws on a bad file. */
-export function catalogModuleSource(env = process.env, read = (p) => readFileSync(p, "utf8")) {
-  const path = catalogPath(env);
-  if (!path) return 'export { placeholderCatalog as default } from "@dadado/oligarchy-engine/placeholder";\nexport const source = "placeholder";\n';
+/** Read and check the catalog file at `path`. Returns its data; throws on a bad file. */
+export function readCatalog(path, read = (p) => readFileSync(p, "utf8")) {
   let catalog;
   try {
     catalog = JSON.parse(read(path));
@@ -40,9 +40,37 @@ export function catalogModuleSource(env = process.env, read = (p) => readFileSyn
   }
   const problems = catalogProblems(catalog);
   if (problems.length) throw new Error(`${CATALOG_ENV}=${path}: invalid catalog:\n- ${problems.join("\n- ")}`);
-  const data = { structures: catalog.structures, threats: catalog.threats, twoHex: catalog.twoHex };
-  return `export default ${JSON.stringify(data)};\nexport const source = "content";\n`;
+  return { structures: catalog.structures, threats: catalog.threats, twoHex: catalog.twoHex };
 }
+
+/** The source of the catalog module: the placeholder, or the checked catalog file. Throws on a bad file. */
+export function catalogModuleSource(env = process.env, read = (p) => readFileSync(p, "utf8")) {
+  const path = catalogPath(env);
+  if (!path) return 'export { placeholderCatalog as default } from "@dadado/oligarchy-engine/placeholder";\nexport const source = "placeholder";\n';
+  return `export default ${JSON.stringify(readCatalog(path, read))};\nexport const source = "content";\n`;
+}
+
+/**
+ * The release check (release.yml, before the build): exit 0 when COLONY_GAME_CATALOG names a
+ * catalog the engine accepts, 1 otherwise, an unset variable included.
+ */
+export function checkCatalogCli(env = process.env, log = console.log, fail = console.error) {
+  const path = catalogPath(env);
+  if (!path) {
+    fail(`::error::${CATALOG_ENV} is not set: no catalog file to check`);
+    return 1;
+  }
+  try {
+    const { structures, threats, twoHex } = readCatalog(path);
+    log(`${CATALOG_ENV}=${path}: ${structures.length} structures, ${threats.length} threats, twoHex ${twoHex.join(", ") || "none"}`);
+    return 0;
+  } catch (e) {
+    fail(`::error::${e instanceof Error ? e.message.replaceAll("\n", " ") : e}`);
+    return 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) process.exit(checkCatalogCli());
 
 /** Vite plugin: serves `virtual:oligarchy-catalog`. */
 export function oligarchyCatalog() {

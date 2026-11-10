@@ -13,7 +13,8 @@ Colony publishes under its own identity, not the personal `dadado` account (the 
 | App private key (`.pem`) | in `~/.config/colony-release/` (700 / 600); move into the password manager | operator, owed |
 | Release signing key | Tauri signer key (minisign format), key id `9A9BB4349C2248C6`, private key in the operator's `~/.tauri/colony-updater.key`; secrets `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` set. The public key is pinned in `packaging/install.sh`. | operator |
 | npm account | none: Colony is not on npm, and installs without npm | - |
-| CI auth without surprise expiry | the release job uses only the per-run `GITHUB_TOKEN` and the signing key (no expiry) | - |
+| Game content deploy key | a read-only deploy key on the private `agent-kit-startup/colony-game` (title `colony release (read-only)`); its private key is the secret `COLONY_GAME_DEPLOY_KEY` of the Environment `game-content`, whose deployment policy admits only `v*` tags. The release job names that Environment and reads `content/catalog.json` with it (see [Game content](../README.md#game-content)). | operator, owed |
+| CI auth without surprise expiry | the release job uses only the per-run `GITHUB_TOKEN`, the signing key and the game content deploy key (none expires) | - |
 | Download host | the GitHub Releases of this public repository (default base of `install.sh`; operator decision `Usar GitHub Releases`, 2026-10-23). No separate release host. | - |
 | `colony.missionkit.io` | a redirect only: `/install.sh` to `https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh` (and `/` to the repository). DNS and the redirect are not set up yet. | operator, owed |
 
@@ -21,7 +22,7 @@ Colony publishes under its own identity, not the personal `dadado` account (the 
 
 1. Bump the same version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json` (merged to `main`).
 2. Push the tag `v<version>` on that commit. Pushing a tag is a release: operator only.
-3. `.github/workflows/release.yml` checks that the tag matches the three versions and that the signing key secret exists (it refuses an unsigned release), builds with `pnpm tauri build`, runs `cargo test`, assembles the files with `packaging/make-release.sh`, signs `SHA256SUMS` with `pnpm tauri signer sign`, installs the result with `packaging/install.sh` from a `file://` base on the runner, and creates the GitHub release with the files.
+3. `.github/workflows/release.yml` checks that the tag matches the three versions and that the signing key secret exists (it refuses an unsigned release), fetches the game's catalog from `agent-kit-startup/colony-game` with the `game-content` deploy key and checks it against the engine (an official release without the key or the file fails here), builds with `pnpm tauri build`, runs `cargo test`, assembles the files with `packaging/make-release.sh`, signs `SHA256SUMS` with `pnpm tauri signer sign`, installs the result with `packaging/install.sh` from a `file://` base on the runner, and creates the GitHub release with the files.
 4. A plain `v<x.y.z>` tag becomes the **Latest** release, which is what `install.sh` installs by default. A tag with a pre-release suffix (`v0.2.0-rc.1`) is created as a prerelease: GitHub never reports a prerelease as latest, so it is only installed with `--version 0.2.0-rc.1`. The version check of step 3 still applies, so the three version files must carry the same suffixed version. The suffix carries into every file name as is: `v0.3.0-rc.1` produced `colony-0.3.0-rc.1-linux-x86_64.tar.gz`, `Colony_0.3.0-rc.1_amd64.deb` and `Colony_0.3.0-rc.1_amd64.AppImage` (release run 41219807456).
 
 Release files:
