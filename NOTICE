@@ -17,6 +17,7 @@ Authors, licensed under the Apache License, Version 2.0, with its generic placeh
 
 Oligarchy game content is not licensed under the Apache License. The game's story, catalog
 data and art added from 2026-11-06 on are Copyright 2026 The Mission Kit Authors, all rights
-reserved. They are not in this source repository; Colony release builds may include the
-catalog, redistributed unmodified with Colony under the rights holder's written grant. Art
-already published in this repository (assets/art/) keeps the license it shipped with.
+reserved. They are not in this source repository; official Colony releases include the
+catalog, redistributed unmodified with Colony under the rights holder's written grant, and
+builds from these sources play the engine's placeholder catalog. Art already published in
+this repository (assets/art/) keeps the license it shipped with.
