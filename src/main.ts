@@ -3610,7 +3610,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           tiles: cv.querySelectorAll(".colony-map polygon").length,
           cards: cv.querySelectorAll('[data-act="build"]').length,
           structures: gameRules.structures.length,
-          hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.textContent === hubRow?.glyph),
+          hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.dataset.glyph === hubRow?.glyph),
           hubBlocked: cv.querySelector<HTMLButtonElement>(`[data-structure="${gameRules.hub}"]`)?.disabled === true,
           settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).some((b: { structure?: string; hex?: number }) => b.structure === seedRow?.id && b.hex === seedHex),
           placeholderChip: !!cv.querySelector('[data-catalog="placeholder"]') === (catalogSource === "placeholder"),
@@ -4434,7 +4434,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
  * this window over the single-instance socket (COLONY_SMOKE_SOCKET=1 keeps the socket on), then
  * checks the same: the game on a new colony, nothing to build, Open folder in it, nothing saved.
  */
-async function runPlaySmoke() {
+async function runPlaySmoke(info: StartupInfo) {
   const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   try {
@@ -4446,12 +4446,13 @@ async function runPlaySmoke() {
     const builds = [...cv.querySelectorAll<HTMLButtonElement>('[data-act="build"]')];
     const before = Object.keys(localStorage).filter((k) => k.startsWith("oligarchy-")).length;
     const d = {
+      via: info.initialView === "play" ? "argv" : "socket",
       shown: colonyView.visible && !cv.hidden,
       welcomeHidden: $("welcome").hidden,
       noFolderShell: shell.classList.contains("no-folder"),
       catalog: catalogSource,
       tiles: cv.querySelectorAll(".colony-map polygon").length,
-      hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.textContent === hubRow?.glyph),
+      hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.dataset.glyph === hubRow?.glyph),
       cards: builds.length,
       structures: gameRules.structures.length,
       allBlocked: builds.every((b) => b.disabled),
@@ -4546,6 +4547,6 @@ api
     if (info.initialView) showView(info.initialView);
     pushShellStatus();
     if (info.smoke && workspace) await runSmoke(workspace.root, info, savedLayout);
-    else if (info.smoke) await runPlaySmoke();
+    else if (info.smoke) await runPlaySmoke(info);
   })
   .catch((e) => status(errText(e)));

@@ -788,6 +788,7 @@ export class ColonyView extends View {
         const text = document.createElementNS(NS, "text");
         text.setAttribute("class", "colony-glyph");
         text.dataset.mark = m.mark;
+        text.dataset.glyph = m.glyph;
         text.setAttribute("x", cx.toFixed(1));
         text.setAttribute("y", (cy + 4).toFixed(1));
         text.setAttribute("text-anchor", "middle");
