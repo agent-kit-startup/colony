@@ -56,6 +56,8 @@ import "./styles.css";
 import { retireShell, Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
 import { sectionInfo, workspaceSection } from "./workspace";
+import { hexFor, ledgerOf, playTarget, stateKey as gameStateKey, terrainFor } from "./oligarchy";
+import { catalogSource, rules as gameRules } from "./oligarchycatalog";
 import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
@@ -1663,7 +1665,7 @@ const terminalsView = new TerminalsView(kitHost, {
     void terminals.create(s.argv ?? undefined, s.argv ? s.label : undefined);
   },
 });
-const colonyView = new ColonyView(kitHost);
+const colonyView = new ColonyView(kitHost, { openFolder: () => void pickFolder(), welcome: () => showWelcome() });
 const memoryView = new MemoryView(kitHost, () => showTab("decisions"));
 const healthView = new HealthView(kitHost);
 const decisionsView = new DecisionsView(kitHost);
@@ -2505,6 +2507,8 @@ async function openWorkspace(path: string) {
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
   shell.classList.remove("no-folder");
+  // The game may be on screen with no folder (`colony://play`): it stops folding until shown again.
+  colonyView.hide();
   showTab("mission");
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace(workspace.root);
@@ -3586,29 +3590,37 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const runBtns = view("commands").querySelectorAll('[data-act="run"]').length;
     wsLists.commands = commandsView.loadError ? isGate("commands") || !!view("commands").querySelector(".empty-state-cta") : rowsIn("commands").length === cmdRows.length && runBtns === cmdRows.filter((r) => r.run).length && !cmdRows.some((r) => (r.name === "git-prod" || r.name === "kit-prod") && r.run);
     await log("native-workspace", Object.values(wsLists).every((v) => v === true), { version: ver, decisionIndex: decIndex?.length ?? null, rules: snapshot.rules?.length ?? null, decOpen, commandsError: commandsView.loadError || null, lists: wsLists });
-    // Colony: the map and the five structures; a build seeded as started two hours ago (one
-    // hour long) settles into the Uplink on the map, and the Uplink can no longer be built.
-    const gameKey = `colony-game-state-v1:${root}`;
+    // Oligarchy (the engine): the 61-hex map with the hub on hex 0, one card per catalog
+    // structure, and a build seeded as started two hours ago (one hour long) that settles onto its
+    // hex; the hub, unique, can no longer be built.
+    const gameKey = gameStateKey(root);
     const savedGame = localStorage.getItem(gameKey);
-    localStorage.setItem(gameKey, JSON.stringify({ v: 1, seq: 1, queue: [{ id: 1, structure: "uplink", startedAt: Date.now() - 2 * 3600_000, durationMs: 3600_000 }], built: [], spent: { logic: 0, compute: 3, rare: 0 } }));
+    const seedGame = gameRules.newGame();
+    const seedRow = gameRules.structures.find((st) => st.terrain === "plain" && gameRules.spanOf(st.id) === 1) ?? gameRules.structures.find((st) => st.terrain === "plain");
+    const seedHex = seedRow ? hexFor(gameRules, seedGame, ledgerOf(null), seedRow.id, terrainFor(root)) : null;
+    if (seedRow && seedHex !== null) localStorage.setItem(gameKey, JSON.stringify({ ...seedGame, seq: 2, queue: [{ id: 2, structure: seedRow.id, hex: seedHex, startedAt: Date.now() - 2 * 3600_000, durationMs: 3600_000 }], spent: seedRow.cost }));
     colonyView.invalidate();
     showTab("colony");
     await wait(150);
     const cv = view("colony");
+    const hubRow = gameRules.structures.find((st) => st.id === gameRules.hub);
     const game = snapshot.outcomeLedger
       ? {
+          catalog: catalogSource,
           tiles: cv.querySelectorAll(".colony-map polygon").length,
           cards: cv.querySelectorAll('[data-act="build"]').length,
-          uplinkGlyph: [...cv.querySelectorAll(".colony-glyph")].some((t) => t.textContent === "U"),
-          uplinkBlocked: cv.querySelector<HTMLButtonElement>('[data-structure="uplink"]')?.disabled === true,
-          settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).length === 1,
+          structures: gameRules.structures.length,
+          hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.textContent === hubRow?.glyph),
+          hubBlocked: cv.querySelector<HTMLButtonElement>(`[data-structure="${gameRules.hub}"]`)?.disabled === true,
+          settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).some((b: { structure?: string; hex?: number }) => b.structure === seedRow?.id && b.hex === seedHex),
+          placeholderChip: !!cv.querySelector('[data-catalog="placeholder"]') === (catalogSource === "placeholder"),
           art: [...cv.querySelectorAll<HTMLImageElement>("img.colony-card-art")].map((i) => i.getAttribute("src") ?? "").every((s) => !s.startsWith("http")),
         }
       : { gate: isGate("colony") };
     if (savedGame === null) localStorage.removeItem(gameKey);
     else localStorage.setItem(gameKey, savedGame);
     colonyView.invalidate();
-    const gameOk = "gate" in game ? game.gate === true : game.tiles === 61 && game.cards === 5 && game.uplinkGlyph && game.uplinkBlocked && game.settled && game.art;
+    const gameOk = "gate" in game ? game.gate === true : game.tiles === 61 && game.cards === game.structures && game.hubGlyph && game.hubBlocked && game.settled && game.placeholderChip && game.art;
     await log("native-colony", gameOk, { ledger: snapshot.outcomeLedger ? { entries: snapshot.outcomeLedger.entries, totals: snapshot.outcomeLedger.totals } : null, ...game });
     // Terminals: a shell closed in the drawer bar stays listed (closed, its folder), Reopen
     // starts a new drawer shell, Focus shows the drawer; the rail item never toggles it.
@@ -4416,6 +4428,52 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
   await api.smokeExit();
 }
 
+/**
+ * COLONY_SMOKE with no folder: the `colony://play` path. Started with `colony://play` it checks the
+ * game the link opened; started without it, it waits for a second `colony colony://play` to reach
+ * this window over the single-instance socket (COLONY_SMOKE_SOCKET=1 keeps the socket on), then
+ * checks the same: the game on a new colony, nothing to build, Open folder in it, nothing saved.
+ */
+async function runPlaySmoke() {
+  const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await log("play-wait", true, "no folder: waiting for colony://play");
+    for (let i = 0; i < 300 && !(colonyView.visible && !colonyView.el.hidden); i++) await wait(200);
+    await wait(300);
+    const cv = colonyView.el;
+    const hubRow = gameRules.structures.find((st) => st.id === gameRules.hub);
+    const builds = [...cv.querySelectorAll<HTMLButtonElement>('[data-act="build"]')];
+    const before = Object.keys(localStorage).filter((k) => k.startsWith("oligarchy-")).length;
+    const d = {
+      shown: colonyView.visible && !cv.hidden,
+      welcomeHidden: $("welcome").hidden,
+      noFolderShell: shell.classList.contains("no-folder"),
+      catalog: catalogSource,
+      tiles: cv.querySelectorAll(".colony-map polygon").length,
+      hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.textContent === hubRow?.glyph),
+      cards: builds.length,
+      structures: gameRules.structures.length,
+      allBlocked: builds.every((b) => b.disabled),
+      openFolder: !!cv.querySelector('[data-act="open-folder"]'),
+      back: !!cv.querySelector('[data-act="welcome"]'),
+      placeholderChip: !!cv.querySelector('[data-catalog="placeholder"]') === (catalogSource === "placeholder"),
+      saved: before,
+      status: $("st-msg").textContent ?? "",
+    };
+    const ok = d.shown && d.welcomeHidden && d.noFolderShell && d.tiles === 61 && d.hubGlyph && d.cards === d.structures && d.allBlocked && d.openFolder && d.back && d.placeholderChip && d.saved === 0 && !/Open a folder first/.test(d.status);
+    await log("play-no-folder", ok, d);
+    cv.querySelector<HTMLElement>('[data-act="welcome"]')?.click();
+    await wait(200);
+    await log("play-back", !$("welcome").hidden && cv.hidden && !colonyView.visible, { welcome: !$("welcome").hidden, gameHidden: cv.hidden });
+    await log("done", true);
+  } catch (e) {
+    await log("error", false, errText(e));
+  }
+  await wait(500);
+  await api.smokeExit();
+}
+
 /** `colony --inbox` / `colony --open-folder` (menu entries, bar widget) and the `colony://play` link: show that view. */
 function showView(view: string) {
   if (view === "inbox") {
@@ -4423,9 +4481,27 @@ function showView(view: string) {
     else status("Open a folder first: the Inbox belongs to a folder");
   } else if (view === "open-folder") void pickFolder();
   else if (view === "play") {
-    if (workspace) showTab("colony");
-    else status("Open a folder first: the game belongs to a folder");
+    if (playTarget(!!workspace) === "tab") showTab("colony");
+    else showPlayWithoutFolder();
   }
+}
+
+/** `colony://play` with no folder open: the game on a new colony, with Open folder in it. A deep
+ *  link never ends on a status line; the folder's tabs stay closed until a folder opens. */
+function showPlayWithoutFolder() {
+  for (const t of tabs.values()) t.el.hidden = true;
+  $("welcome").hidden = true;
+  colonyView.el.hidden = false;
+  colonyView.invalidate();
+  colonyView.show();
+}
+
+/** Back to the welcome screen from the game with no folder. */
+function showWelcome() {
+  if (workspace) return;
+  colonyView.hide();
+  colonyView.el.hidden = true;
+  $("welcome").hidden = false;
 }
 
 // ---- boot ------------------------------------------------------------------------------
@@ -4470,5 +4546,6 @@ api
     if (info.initialView) showView(info.initialView);
     pushShellStatus();
     if (info.smoke && workspace) await runSmoke(workspace.root, info, savedLayout);
+    else if (info.smoke) await runPlaySmoke();
   })
   .catch((e) => status(errText(e)));

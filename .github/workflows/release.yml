@@ -77,6 +77,48 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The game's own catalog (kit ADR 2026-11-06 game-content-canon-one-way-flow, amend
+      # 2026-11-07 point 8): all rights reserved, never in this public repository. A release
+      # plays it when the read-only secret COLONY_GAME_TOKEN reaches the private
+      # agent-kit-startup/colony-game repository, which holds it as content/catalog.json
+      # ({ structures, threats, twoHex }, data only). Without the secret the release plays the
+      # engine's placeholder catalog, as a build from source does, and this step warns.
+      - name: Game content (is the token set)
+        id: content
+        env:
+          COLONY_GAME_TOKEN: ${{ secrets.COLONY_GAME_TOKEN }}
+        run: |
+          if [ -n "$COLONY_GAME_TOKEN" ]; then
+            echo "fetch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fetch=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::secret COLONY_GAME_TOKEN is not set: this release plays the engine's placeholder catalog"
+          fi
+
+      - name: Game content (fetch)
+        if: steps.content.outputs.fetch == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: agent-kit-startup/colony-game
+          token: ${{ secrets.COLONY_GAME_TOKEN }}
+          path: .colony-game
+          sparse-checkout: content/catalog.json
+          sparse-checkout-cone-mode: false
+          lfs: false
+          persist-credentials: false
+
+      # A token with no catalog behind it fails the release: it never ships the placeholder by
+      # accident. The build checks the file against the engine (scripts/oligarchy-catalog.mjs).
+      - name: Game content (use)
+        if: steps.content.outputs.fetch == 'true'
+        run: |
+          catalog="$GITHUB_WORKSPACE/.colony-game/content/catalog.json"
+          if [ ! -s "$catalog" ]; then
+            echo "::error::agent-kit-startup/colony-game has no content/catalog.json"
+            exit 1
+          fi
+          echo "COLONY_GAME_CATALOG=$catalog" >> "$GITHUB_ENV"
+
       # Direct channel. createUpdaterArtifacts signs the AppImage for the updater with the
       # release key (Colony_<v>_amd64.AppImage.sig); kept out of tauri.conf.json so local
       # builds need no signing key. --verbose: without it tauri-cli runs the bundler at log

@@ -8,14 +8,12 @@
 // Repo text (titles, descriptions, commands) is always rendered as text.
 import { type CommandRow, type CommandsCatalog, api, errText, h } from "./api";
 import { type CockpitHost, View } from "./cockpit";
-import * as game from "./colonygame";
+import { type EnemyPreference, type GameState, type Ledger, type Purse, buildEndsAt, MAP_RADIUS, overclockActive, ring, TILES, TUNING, turnsLeft, wallet } from "@dadado/oligarchy-engine";
+import * as og from "./oligarchy";
+import { catalogSource, rules } from "./oligarchycatalog";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { type TtySession, ttys } from "./ttys";
 import { ago, btn, card, chip, checkChip, empty, emptyCta, metaRow } from "./ui";
-import artUplink from "../assets/art/uplink-tower-road.webp";
-import artNursery from "../assets/art/seed-tree-crane.webp";
-import artTundra from "../assets/art/rover-frozen-flats.webp";
-import artPurifier from "../assets/art/atmospheric-purifier.webp";
 
 export interface KitViewsHost extends CockpitHost {
   showEngine(): void;
@@ -490,13 +488,29 @@ export class CommandsView extends ListView {
 // biome-ignore lint: the snapshot is open JSON
 const arrOf = (v: unknown): J[] => (Array.isArray(v) ? (v as any[]).filter((x) => x && typeof x === "object") : []);
 
-// ---- Colony (the game) -----------------------------------------------------------------
-const ART: Record<string, string> = { "uplink-tower-road.webp": artUplink, "seed-tree-crane.webp": artNursery, "rover-frozen-flats.webp": artTundra, "atmospheric-purifier.webp": artPurifier };
+// ---- Oligarchy (the game) --------------------------------------------------------------
+// The public rules engine (@dadado/oligarchy-engine) over the kit's outcome ledger, bound to the
+// catalog of this build (./oligarchycatalog.ts). Earned totals come only from the ledger; what the
+// player builds and spends is Colony's own state, kept per folder. The ledger is folded only while
+// this view is on screen (the engine's host contract), so an attack never lands unseen.
+
+/** Colony's own art (Apache-2.0, assets/art/), by catalog art id. Other ids show their glyph. */
+const ART: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob<string>("../assets/art/*.webp", { eager: true, query: "?url", import: "default" })).map(([path, url]) => [path.replace(/^.*\/|\.webp$/g, ""), url]),
+);
+
+export interface GameHost {
+  /** Pick a folder (the welcome screen's Open folder). */
+  openFolder(): void;
+  /** Back to the welcome screen, with no folder open. */
+  welcome(): void;
+}
 
 export class ColonyView extends View {
   private timer = 0;
+  private selected: number | null = null;
 
-  constructor(host: KitViewsHost) {
+  constructor(host: KitViewsHost, private game: GameHost) {
     super(host, "kv kv-colony");
   }
 
@@ -512,75 +526,116 @@ export class ColonyView extends View {
     window.clearInterval(this.timer);
   }
 
-  private key(): string {
-    return game.stateKey(this.host.workspaceRoot());
+  private root(): string {
+    return this.host.workspaceRoot();
   }
 
-  /** The player's state for this folder, finished builds settled (persisted only on change). */
-  state(now = Date.now()): game.GameState {
+  private enemy(): EnemyPreference {
+    const root = this.root();
+    return root ? og.parseEnemy(localStorage.getItem(og.enemyKey(root))) : "on";
+  }
+
+  private ledger(): Ledger {
+    return og.ledgerOf(this.root() ? snapshot.outcomeLedger : null);
+  }
+
+  /** The player's state brought up to now (persisted only on change). No folder: a new colony, never saved. */
+  state(now = Date.now()): GameState {
+    const root = this.root();
+    if (!root) return rules.newGame();
     let raw: unknown = null;
     try {
-      raw = JSON.parse(localStorage.getItem(this.key()) ?? "null");
+      raw = JSON.parse(localStorage.getItem(og.stateKey(root)) ?? "null");
     } catch {
       raw = null;
     }
-    const ledger = snapshot.outcomeLedger;
-    const { state, changed } = game.settle(game.parseState(raw), now, game.overclockActive(ledger?.flow, now));
+    const { state, changed } = og.advance(rules, raw, this.ledger(), now, this.enemy());
     if (changed) this.save(state);
     return state;
   }
 
-  private save(s: game.GameState): boolean {
+  private save(s: GameState): boolean {
+    const root = this.root();
+    if (!root) return false;
     try {
-      localStorage.setItem(this.key(), JSON.stringify(s));
+      localStorage.setItem(og.stateKey(root), JSON.stringify(s));
       return true;
     } catch {
       return false;
     }
   }
 
-  /** Spend and start a build (the Build button); false when it cannot be queued. */
-  build(id: string): boolean {
-    const now = Date.now();
-    const next = game.queueBuild(this.state(now), id, game.earned(snapshot.outcomeLedger), now);
-    if (!next || !this.save(next)) return false;
+  private apply(next: GameState | null, failed: string): boolean {
+    if (!next || !this.save(next)) {
+      this.host.status(`Oligarchy: ${failed}`);
+      return false;
+    }
     this.invalidate();
     return true;
   }
 
-  protected render(): Node[] {
-    const nd = this.noData();
-    if (nd) return nd;
-    const ledger = snapshot.outcomeLedger;
-    if (!ledger) return [needsEngine(this.host as KitViewsHost, "The Colony (it grows from the kit's outcome ledger)", "1.9.0")];
+  /** Spend and start a build on the selected hex, or the first free one (the Build button). */
+  build(id: string): boolean {
     const now = Date.now();
     const s = this.state(now);
-    const e = game.earned(ledger);
-    const w = game.wallet(e, s);
-    const overclock = game.overclockActive(ledger.flow, now);
-    const tiles = game.hexTiles(game.MAP_RADIUS);
-    const green = game.greenTiles(e, s, tiles.length);
-    const flow = obj(ledger.flow);
+    const ledger = this.ledger();
+    const terrain = og.terrainFor(this.root());
+    const hex = og.hexFor(rules, s, ledger, id, terrain, this.selected);
+    if (hex === null) return this.apply(null, "no free ground for it yet");
+    this.selected = null;
+    return this.apply(rules.queueBuild(s, ledger, id, hex, { now, terrain }), "could not start the build");
+  }
+
+  repair(builtId: number): boolean {
+    const now = Date.now();
+    return this.apply(rules.queueRepair(this.state(now), this.ledger(), builtId, { now }), "could not start the repair");
+  }
+
+  counter(id: string): boolean {
+    return this.apply(rules.pickCountermeasure(this.state(), this.ledger(), id), "could not pay for the countermeasure");
+  }
+
+  protected render(): Node[] {
+    const root = this.root();
+    if (root) {
+      const nd = this.noData();
+      if (nd) return nd;
+      if (!snapshot.outcomeLedger) return [needsEngine(this.host as KitViewsHost, "Oligarchy (it grows from the kit's outcome ledger)", "1.9.0")];
+    }
+    const summary = root ? obj(snapshot.outcomeLedger) : {};
+    const now = Date.now();
+    const s = this.state(now);
+    const ledger = this.ledger();
+    const w = wallet(ledger, s);
+    const overclock = overclockActive(ledger.flow, now);
+    const green = rules.greenTiles(ledger, s);
+    const reach = rules.revealedRing(ledger, s);
+    const tier = rules.unlockedTier(ledger, s);
+    const terrain = og.terrainFor(root);
+    const name = (id: string) => rules.structures.find((x) => x.id === id)?.name ?? id;
+    const flow = ledger.flow ?? {};
     const flowText = overclock
       ? `Flow overclock on: a streak of ${flow.streak} closed to-dos, builds run 25% faster`
       : typeof flow.streak === "number"
-        ? `Flow streak ${flow.streak} (overclock at ${game.FLOW_STREAK} closes in a row, the last within 2 h)`
+        ? `Flow streak ${flow.streak} (overclock at ${TUNING.flowStreak} closes in a row, the last within 2 h)`
         : "Flow: no closed to-do in a mission yet";
-    const res = (label: string, k: game.Resource) => h("div", { class: "colony-resource" }, h("span", { class: "dim small" }, label), h("strong", { class: "colony-resource-value" }, String(w[k])), h("span", { class: "dim small mono" }, `${e[k]} earned · ${s.spent[k]} spent`));
+    const res = (label: string, k: "logic" | "compute" | "rare") => h("div", { class: "colony-resource" }, h("span", { class: "dim small" }, label), h("strong", { class: "colony-resource-value" }, String(w[k])), h("span", { class: "dim small mono" }, `${ledger.totals[k]} earned · ${s.spent[k]} spent`));
     const queue = s.queue.map((b) => {
-      const st = game.STRUCTURES.find((x) => x.id === b.structure);
-      const ends = game.buildEndsAt(b, overclock);
+      const ends = buildEndsAt(b, overclock);
       const at = new Date(ends);
-      return row([h("strong", { class: "grow" }, st ? st.name : b.structure), h("span", { class: "dim small mono", title: at.toISOString() }, `${game.formatDuration(ends - now)} left · ready at ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`)]);
+      return row([h("strong", { class: "grow" }, `${b.rebuildOf !== undefined ? "Repair: " : ""}${name(b.structure)}`), h("span", { class: "dim small mono", title: at.toISOString() }, `${og.formatDuration(ends - now)} left · ready at ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`)]);
     });
-    const recent = (Array.isArray(ledger.recent) ? ledger.recent : []).slice(0, 6);
-    const cards = game.STRUCTURES.map((st) => {
-      const blocker = game.buildBlocker(st, s, w);
+    const recent = arrOf(summary.recent).slice(0, 6);
+    const placeholder = catalogSource === "placeholder";
+    const cards = rules.structures.map((st) => {
+      const blocked = rules.buildBlocker(s, ledger, st.id);
+      const hex = blocked ? null : og.hexFor(rules, s, ledger, st.id, terrain, this.selected);
+      const blocker = !root ? "Open a folder to build" : (blocked ?? (hex === null ? "No free ground for it yet" : null));
       const n = s.built.filter((b) => b.structure === st.id).length;
-      const art = st.art && ART[st.art] ? h("img", { class: "colony-card-art", src: ART[st.art], alt: "", loading: "lazy", decoding: "async" }) : h("div", { class: "colony-card-art colony-card-art-none", "aria-hidden": "true" });
-      const b = btn(blocker ?? "Build", () => {
-        if (!this.build(st.id)) this.host.status(`Colony: ${blocker ?? "could not save the build"}`);
-      }, { class: "status-bar-btn", "data-act": "build", "data-structure": st.id, title: blocker ?? `Spend ${game.formatCost(st.cost)} and start building`, "aria-label": `Build ${st.name}` });
+      const url = st.art ? ART[st.art] : undefined;
+      const art = url ? h("img", { class: "colony-card-art", src: url, alt: "", loading: "lazy", decoding: "async" }) : h("div", { class: "colony-card-art colony-card-art-none", "aria-hidden": "true" }, h("span", { class: "colony-card-glyph" }, st.glyph));
+      const where = hex !== null && this.selected === hex ? ` on hex ${hex}` : "";
+      const b = btn(blocker ?? "Build", () => void this.build(st.id), { class: "status-bar-btn", "data-act": "build", "data-structure": st.id, title: blocker ?? `Spend ${og.formatCost(st.cost)} and start building${where}`, "aria-label": `Build ${st.name}` });
       if (blocker) b.disabled = true;
       return h(
         "div",
@@ -588,67 +643,161 @@ export class ColonyView extends View {
         art,
         h("strong", {}, st.name, ...(n ? [h("span", { class: "dim small" }, ` ×${n}`)] : [])),
         h("div", { class: "dim small" }, st.blurb),
-        h("div", { class: "dim small mono" }, `${game.formatCost(st.cost)} · ${game.formatDuration(st.minutes * 60_000)}`),
+        h("div", { class: "dim small mono" }, `${og.formatCost(st.cost)} · ${og.formatDuration(st.build_minutes * 60_000)}${rules.spanOf(st.id) === 2 ? " · two hexes" : ""}`),
         b,
       );
     });
+    const offline = s.built.filter((b) => s.offline.includes(b.id));
+    const repairs = offline.map((b) => {
+      const busy = s.queue.some((q) => q.rebuildOf === b.id);
+      const r = btn(busy ? "Repairing" : "Repair", () => void this.repair(b.id), { class: "status-bar-btn", "data-act": "repair", "data-built": String(b.id), title: "Half its cost and half its build time" });
+      if (busy) r.disabled = true;
+      return row([h("strong", { class: "grow" }, name(b.structure)), chip("offline", "chip-gate"), r]);
+    });
     return [
-      h("div", { class: "toolbar" }, h("strong", {}, `${green} of ${tiles.length} tiles green`), h("span", { class: "dim small" }, flowText)),
+      h(
+        "div",
+        { class: "toolbar" },
+        h("strong", {}, `${green} of ${TILES.length} tiles green · threat tier ${tier}`),
+        h("span", { class: "dim small" }, flowText),
+        ...(placeholder ? [h("span", { class: "chip", "data-catalog": "placeholder", title: "This build plays the engine's placeholder catalog. Colony release builds play the game's own." }, "Placeholder catalog")] : []),
+      ),
+      ...(root
+        ? []
+        : [
+            emptyCta({
+              icon: "folder",
+              headline: "Your colony grows from the work you ship",
+              support: "Open a folder: closed to-dos, passing tests, green CI and releases there earn the resources you build with. Until then this is a new colony with nothing earned.",
+              actions: [
+                { label: "Open folder", onClick: () => this.game.openFolder(), act: "open-folder", title: "Pick the folder whose shipped work grows this colony" },
+                { label: "Back", onClick: () => this.game.welcome(), act: "welcome", title: "Back to the welcome screen" },
+              ],
+            }),
+          ]),
       h(
         "div",
         { class: "colony-layout" },
-        h("div", { class: "card colony-map-card" }, colonyMap(green, s, tiles), ...(ledger.available === false ? [empty("The ledger was not read on this refresh (snapshot budget); totals come back on the next one.")] : []), ...(ledger.available !== false && !Number(ledger.entries) ? [empty("Nothing earned yet. Close a to-do, pass the tests (agent-kit outcome-ledger test) or ship a green CI run and the ground starts to turn.")] : [])),
+        h(
+          "div",
+          { class: "card colony-map-card" },
+          this.map(s, green, reach, terrain),
+          ...(this.selected !== null ? [h("div", { class: "dim small" }, `Hex ${this.selected} selected: Build puts a structure there when it fits.`)] : []),
+          ...(root && summary.available === false ? [empty("The ledger was not read on this refresh (snapshot budget); totals come back on the next one.")] : []),
+          ...(root && summary.available !== false && !ledger.total ? [empty("Nothing earned yet. Close a to-do, pass the tests (agent-kit outcome-ledger test) or ship a green CI run and the ground starts to turn.")] : []),
+        ),
         h(
           "div",
           { class: "colony-side" },
           card({ title: "Resources", icon: "overview" }, h("div", { class: "colony-resources" }, res("Logic", "logic"), res("Compute", "compute"), res("Rare", "rare"))),
-          card({ title: "Build queue", icon: "elapsed", aside: [h("span", { class: "card-count" }, `${s.queue.length}/${game.MAX_ACTIVE_BUILDS}`)] }, ...(queue.length ? queue : [empty("Nothing under construction. Timers are read when this view refreshes; nothing runs in the background.")])),
-          card({ title: "Ship log", icon: "activity" }, ...(recent.length ? recent.map((r: J) => row([chip(game.KIND_LABEL[str(r.kind)] ?? "Outcome"), h("span", { class: "grow ellipsis", title: str(r.label) }, str(r.label))])) : [empty("No outcomes yet.")])),
+          this.threatCard(s, w, name),
+          ...(repairs.length ? [card({ title: "Offline", icon: "shield" }, ...repairs)] : []),
+          card({ title: "Build queue", icon: "elapsed", aside: [h("span", { class: "card-count" }, `${s.queue.length}/${TUNING.maxBuilds}`)] }, ...(queue.length ? queue : [empty("Nothing under construction. Timers are read when this view refreshes; nothing runs in the background.")])),
+          card({ title: "Ship log", icon: "activity" }, ...(recent.length ? recent.map((r: J) => row([chip(og.KIND_LABEL[str(r.kind)] ?? "Outcome"), h("span", { class: "grow ellipsis", title: str(r.label) }, str(r.label))])) : [empty("No outcomes yet.")])),
         ),
       ),
       h("div", { class: "colony-cards" }, ...cards),
-      h("p", { class: "dim small" }, "Resources come only from verified outcomes in the kit's ledger, never from lines of code, commits or time. What you build is kept by Colony for this folder."),
+      h("p", { class: "dim small" }, "Resources come only from verified outcomes in the kit's ledger, never from lines of code, commits or time. One outcome is one turn: attacks move only when you ship, and nothing lands while you are away. What you build is kept by Colony for this folder."),
     ];
   }
-}
 
-/** The hex map (SVG): static geometry and constant glyphs only, no snapshot text. */
-function colonyMap(green: number, s: game.GameState, tiles: { q: number; r: number }[]): SVGSVGElement {
-  const NS = "http://www.w3.org/2000/svg";
-  const size = 14;
-  const fogFrom = Math.min(tiles.length, green + 12);
-  const placed = game.placedGlyphs(s, tiles.length);
-  const span = size * Math.sqrt(3) * (game.MAP_RADIUS + 0.6);
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("class", "colony-map");
-  svg.setAttribute("viewBox", `${(-span).toFixed(1)} ${(-span).toFixed(1)} ${(span * 2).toFixed(1)} ${(span * 2).toFixed(1)}`);
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", `Colony map: ${green} of ${tiles.length} tiles green`);
-  tiles.forEach((t, i) => {
-    const cx = size * Math.sqrt(3) * (t.q + t.r / 2);
-    const cy = size * 1.5 * t.r;
-    const poly = document.createElementNS(NS, "polygon");
-    poly.setAttribute("class", "colony-tile");
-    poly.dataset.tile = i < green ? "green" : i < fogFrom ? "barren" : "fog";
-    poly.setAttribute(
-      "points",
-      [0, 1, 2, 3, 4, 5]
-        .map((k) => {
-          const a = (Math.PI / 180) * (60 * k - 30);
-          return `${(cx + size * Math.cos(a)).toFixed(1)},${(cy + size * Math.sin(a)).toFixed(1)}`;
-        })
-        .join(" "),
-    );
-    svg.append(poly);
-    if (placed[i]) {
-      const text = document.createElementNS(NS, "text");
-      text.setAttribute("class", "colony-glyph");
-      text.setAttribute("x", cx.toFixed(1));
-      text.setAttribute("y", (cy + 4).toFixed(1));
-      text.setAttribute("text-anchor", "middle");
-      text.textContent = placed[i];
-      svg.append(text);
+  private threatCard(s: GameState, w: Purse, name: (id: string) => string): HTMLElement {
+    const enemy = h("select", { class: "colony-enemy", "data-act": "enemy", "aria-label": "Enemy", title: "How often the Oligarchy attacks" });
+    for (const [v, label] of [["on", "Enemy on"], ["rare", "Enemy rare"], ["off", "Enemy off"]] as const) {
+      const o = h("option", { value: v }, label);
+      if (v === this.enemy()) o.selected = true;
+      enemy.append(o);
     }
-  });
-  return svg;
+    enemy.addEventListener("change", () => {
+      const root = this.root();
+      if (!root) return;
+      localStorage.setItem(og.enemyKey(root), og.parseEnemy(enemy.value));
+      this.invalidate();
+    });
+    if (!this.root()) enemy.disabled = true;
+    const head = { title: "Oligarchy", icon: "shield" as const, aside: [enemy] };
+    const t = s.threat;
+    const last = s.lastResolution;
+    const lastLine = last ? h("div", { class: "dim small" }, `Last attack: ${rules.threats.find((x) => x.id === last.threat)?.name ?? last.threat}, ${last.outcome === "capture" ? "captured" : last.outcome === "half" ? "half the damage" : "full damage"}.`) : null;
+    if (!t) return card(head, empty("No attack in flight."), ...(lastLine ? [lastLine] : []));
+    const threat = rules.threats.find((x) => x.id === t.id);
+    const left = turnsLeft(s) ?? 0;
+    const target = s.built.find((b) => b.id === t.target);
+    const cost = rules.countermeasureCost(t.id);
+    const affordable = w.logic >= cost.logic && w.compute >= cost.compute && w.rare >= cost.rare;
+    const picks = t.picked
+      ? [h("div", { class: "small" }, `Answered with ${rules.countermeasures().find((c) => c.id === t.picked)?.name ?? t.picked}.`)]
+      : [
+          h("div", { class: "dim small" }, `Pick one countermeasure (${og.formatCost(cost)}). The right one captures the attack; one of the same family halves it.`),
+          h(
+            "div",
+            { class: "colony-counters" },
+            ...rules.countermeasures().map((c) => {
+              const b = btn(c.name, () => void this.counter(c.id), { class: "status-bar-btn", "data-act": "counter", "data-threat": c.id, title: `${c.family} · ${og.formatCost(cost)}` });
+              if (!affordable) b.disabled = true;
+              return b;
+            }),
+          ),
+        ];
+    return card(
+      { ...head, aside: [chip(`${left} ${left === 1 ? "turn" : "turns"} left`, "chip-gate"), enemy] },
+      h("strong", { "data-threat-live": t.id }, threat?.name ?? t.id),
+      h("div", { class: "dim small" }, `Tier ${threat?.tier ?? "?"} · ${threat?.family ?? ""} · ${threat?.vector ?? ""}${target ? ` · aimed at ${name(target.structure)}` : ""}`),
+      ...picks,
+      ...(lastLine ? [lastLine] : []),
+    );
+  }
+
+  /** The hex map (SVG): static geometry and catalog glyphs only, no snapshot text. */
+  private map(s: GameState, green: number, reach: number, terrain: readonly string[]): SVGSVGElement {
+    const NS = "http://www.w3.org/2000/svg";
+    const size = 14;
+    const marks = og.tileMarks(rules, s);
+    const span = size * Math.sqrt(3) * (MAP_RADIUS + 0.6);
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "colony-map");
+    svg.setAttribute("viewBox", `${(-span).toFixed(1)} ${(-span).toFixed(1)} ${(span * 2).toFixed(1)} ${(span * 2).toFixed(1)}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `Colony map: ${green} of ${TILES.length} tiles green`);
+    TILES.forEach((t, i) => {
+      const cx = size * Math.sqrt(3) * (t.q + t.r / 2);
+      const cy = size * 1.5 * t.r;
+      const poly = document.createElementNS(NS, "polygon");
+      poly.setAttribute("class", `colony-tile${this.selected === i ? " selected" : ""}`);
+      poly.dataset.hex = String(i);
+      poly.dataset.tile = ring(i) > reach ? "fog" : s.barren.includes(i) ? "barren" : i < green ? "green" : "ground";
+      poly.dataset.terrain = terrain[i];
+      poly.setAttribute(
+        "points",
+        [0, 1, 2, 3, 4, 5]
+          .map((k) => {
+            const a = (Math.PI / 180) * (60 * k - 30);
+            return `${(cx + size * Math.cos(a)).toFixed(1)},${(cy + size * Math.sin(a)).toFixed(1)}`;
+          })
+          .join(" "),
+      );
+      if (this.root() && ring(i) <= reach) {
+        poly.addEventListener("click", () => {
+          this.selected = this.selected === i ? null : i;
+          this.invalidate();
+        });
+      }
+      svg.append(poly);
+      const m = marks.get(i);
+      if (m) {
+        const text = document.createElementNS(NS, "text");
+        text.setAttribute("class", "colony-glyph");
+        text.dataset.mark = m.mark;
+        text.setAttribute("x", cx.toFixed(1));
+        text.setAttribute("y", (cy + 4).toFixed(1));
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = m.glyph;
+        const title = document.createElementNS(NS, "title");
+        title.textContent = `${m.name}${m.mark === "built" ? "" : ` (${m.mark === "queued" ? "under construction" : "offline"})`}`;
+        text.append(title);
+        svg.append(text);
+      }
+    });
+    return svg;
+  }
 }

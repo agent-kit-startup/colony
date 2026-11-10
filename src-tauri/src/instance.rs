@@ -11,7 +11,8 @@
 //! frontend subscribes waits in `Inbox` and is opened right after the startup folder.
 //!
 //! One socket per binary and `COLONY_ENGINE` (a dev build or another engine never
-//! hands its folder to the wrong window). Skipped under `COLONY_SMOKE`, with
+//! hands its folder to the wrong window). Skipped under `COLONY_SMOKE` (unless
+//! `COLONY_SMOKE_SOCKET=1`), with
 //! `--new-instance`, or without `$XDG_RUNTIME_DIR`. Any socket error starts a new
 //! window: single instance fails open, never leaves the user with nothing.
 
@@ -65,7 +66,7 @@ pub enum Claim {
 
 /// The socket for this binary and engine, or `None` when single instance is off.
 pub fn socket_path() -> Option<PathBuf> {
-    if std::env::var_os("COLONY_SMOKE").is_some_and(|s| !s.is_empty()) {
+    if smoke_skips_socket(std::env::var("COLONY_SMOKE").ok().as_deref(), std::env::var("COLONY_SMOKE_SOCKET").ok().as_deref()) {
         return None;
     }
     if skips_socket(std::env::args().skip(1)) {
@@ -78,6 +79,13 @@ pub fn socket_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let engine = std::env::var("COLONY_ENGINE").unwrap_or_default();
     Some(runtime.join(format!("colony-{}.sock", instance_key(&exe, &engine))))
+}
+
+/// A smoke run (`COLONY_SMOKE`) has no socket, so it never takes a request meant for another
+/// window, unless `COLONY_SMOKE_SOCKET=1` asks for it: the `colony://play` smoke drives a second
+/// launch into the smoke window (run it with a scratch `XDG_RUNTIME_DIR`).
+pub fn smoke_skips_socket(smoke: Option<&str>, smoke_socket: Option<&str>) -> bool {
+    smoke.is_some_and(|s| !s.is_empty()) && smoke_socket != Some("1")
 }
 
 /// `--new-instance` (`colony --new-instance`, File → New window): a window of its own, which
@@ -246,6 +254,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("i.sock")
+    }
+
+    #[test]
+    fn a_smoke_run_has_no_socket_unless_it_asks_for_one() {
+        assert!(!smoke_skips_socket(None, None));
+        assert!(!smoke_skips_socket(Some(""), None));
+        assert!(smoke_skips_socket(Some("/tmp/smoke.log"), None));
+        assert!(smoke_skips_socket(Some("/tmp/smoke.log"), Some("0")));
+        assert!(smoke_skips_socket(Some("/tmp/smoke.log"), Some("yes")));
+        assert!(!smoke_skips_socket(Some("/tmp/smoke.log"), Some("1")));
+        assert!(!smoke_skips_socket(None, Some("1")));
     }
 
     #[test]
