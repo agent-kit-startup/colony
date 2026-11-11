@@ -56,7 +56,7 @@ import { snapshot } from "./snapshot";
 import "./styles.css";
 import { retireShell, Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
-import { sectionInfo, workspaceSection } from "./workspace";
+import { groupSection, sectionInfo, type WorkspaceSection, workspaceSection } from "./workspace";
 import { hexFor, ledgerOf, playTarget, stateKey as gameStateKey, terrainFor } from "./oligarchy";
 import { catalogSource, rules as gameRules } from "./oligarchycatalog";
 import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
@@ -201,12 +201,12 @@ const nav = new NavHistory();
 /**
  * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
  * amend 2026-10-28; plan colony-sidebar-native-kit). A rail item shows one view, or a group of
- * views: Ship switches Git | CI/CD at the head of the tab strip; Workspace's sections switch
- * inside the view (`inner`), never in the strip. No item sits behind a More menu: the rail
+ * views that switch inside the view, never in the tab strip (amend 2026-11-11, point 3): Ship
+ * switches Git | CI/CD, Workspace its sections. No item sits behind a More menu: the rail
  * scrolls at any window height. The terminal drawer is not a rail item: its own bar (always on
  * screen) shows and hides it; the Terminals item is a list view.
  */
-interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; inner?: boolean; home?: string }
+interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string }
 /** Workspace's sections, in order: each one a view, switched inside the Workspace view. */
 const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "config", "plans"];
 const RAIL: RailItem[] = [
@@ -220,8 +220,13 @@ const RAIL: RailItem[] = [
   { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
-  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, inner: true, home: "plans" },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, home: "plans" },
   { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
+];
+/** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
+const SHIP_VIEWS: WorkspaceSection[] = [
+  { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push" },
+  { id: "cicd", label: "CI/CD", icon: "devops", tip: "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs" },
 ];
 /** Ctrl+1..9: the first nine rail items. The rail tooltips name these keys (cargo test
  *  terminal_drawer checks both); the terminal drawer toggles with Ctrl+` instead. */
@@ -325,9 +330,9 @@ $("rail").addEventListener("keydown", (ev) => {
   el.scrollIntoView({ block: "nearest" });
 });
 
-/** The tab strip: documents only (runs, terminals, files), after the switch of
- *  a rail group with more than one view (Ship: Git | CI/CD). Workspace switches its sections
- *  inside the view, not here. */
+/** The tab strip: Back / Forward (in the markup), then documents only (runs, terminals,
+ *  files). It has the same children whether a view or a document is active: a rail group with
+ *  more than one view (Ship, Workspace) switches inside its view (workspace.ts groupSection). */
 function renderTabs() {
   renderRail();
   renderTopActions();
@@ -359,26 +364,9 @@ function renderTabs() {
       el.addEventListener("click", () => showTab(t.id));
       return el;
     });
-  const group = RAIL.find((r) => r.views.length > 1 && !r.inner && r.views.includes(activeTab));
-  const sw = group
-    ? [
-        h(
-          "div",
-          { class: "view-switch", role: "tablist", "aria-label": group.label },
-          ...group.views.map((id) => {
-            const t = tabs.get(id);
-            const b = h("button", { class: `view-switch-btn ${activeTab === id ? "active" : ""}`, role: "tab", "aria-selected": String(activeTab === id), title: t?.tip ?? id }, ...(t?.icon ? [icon(t.icon, "tab-svg")] : []), t?.label ?? id);
-            b.dataset.view = id;
-            b.addEventListener("click", () => showTab(id));
-            return b;
-          }),
-        ),
-      ]
-    : [];
   // Only the document tabs scroll.
   const docBar = h("div", { class: "tabs-docs" }, ...docs);
-  const sep = () => h("span", { class: "tab-sep" });
-  rest.replaceChildren(...(sw.length ? [sep(), ...sw] : []), ...(docs.length ? [sep()] : []), docBar);
+  rest.replaceChildren(...(docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
   docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
@@ -1874,11 +1862,12 @@ function pinViews() {
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "git", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
-    hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
-  );
+  // Ship: Git and CI/CD, the switch at the head of each view (never in the tab strip).
+  const ship = (info: WorkspaceSection, body: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
+    pin(info.id, info.label, info.icon, info.tip, groupSection("Ship", SHIP_VIEWS, info.id, body, (id) => showTab(id)), v, badge);
+  ship(SHIP_VIEWS[0], gitView.el, gitView, () => (hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null));
   pin("queue", "Queue", "queue", "run-plan-all queue", queue.el, queue);
-  pin("cicd", "CI/CD", "devops", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
+  ship(SHIP_VIEWS[1], cicd.el, cicd);
   pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
   pin("activity", "Activity", "activity", "The kit's recent activity and health checks", activity.el, activity);
   pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
@@ -3454,6 +3443,34 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     navSteps["closed-left-history"] = navBtn("forward").disabled;
     navBtn("back").click();
     navAt("back-after-close", "inbox");
+    // The strip holds documents only (kit ADR 2026-10-24 amend 2026-11-11, point 3): after
+    // Back / Forward it has the same children with a document, a Ship view, the document
+    // again and the other Ship view active. Ship switches Git | CI/CD inside its view, the
+    // rail item reopens the member shown last, and Ctrl+7 still reaches Ship.
+    const strip = () => [...$("tabs-rest").children].map((el) => (el.classList.contains("tabs-docs") ? `docs[${[...el.children].map((t) => relPath((t as HTMLElement).dataset.tab ?? "")).join(",")}]` : el.className)).join(" ");
+    await openFile(navDoc);
+    const strips: Record<string, string> = { doc: strip() };
+    showTab("git");
+    strips.view = strip();
+    showTab(navDoc);
+    strips.docAgain = strip();
+    showTab("cicd");
+    strips.otherView = strip();
+    navSteps["strip-same-set"] = new Set(Object.values(strips)).size === 1 && strips.doc.includes("docs[") && strips.doc.includes("smoke-nav.txt") ? true : strips;
+    navSteps["strip-no-view-switch"] = !$("tabs").querySelector(".view-switch, [role='tablist']");
+    const shipNav = (id: string) => [...view(id).querySelectorAll<HTMLElement>(".ws-nav-btn")];
+    const shipBtns = shipNav("cicd").map((b) => `${b.dataset.section}${b.classList.contains("active") ? "*" : ""}`).join();
+    navSteps["ship-inner-switch"] = shipBtns === "git,cicd*" ? true : shipBtns;
+    shipNav("cicd").find((b) => b.dataset.section === "git")?.click();
+    navAt("ship-switch-click", "git");
+    showTab("cicd");
+    showTab(navDoc);
+    $("rail").querySelector<HTMLElement>('.rail-item[data-tab="ship"]')?.click();
+    navAt("rail-reopens-last", "cicd");
+    showTab(navDoc);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "7", code: "Digit7", ctrlKey: true, bubbles: true, cancelable: true }));
+    navAt("ctrl-7", "cicd");
+    await closeTab(navDoc);
     await log("inner-nav", Object.values(navSteps).every((v) => v === true), navSteps);
     // Leave the history as a fresh folder has it, for the steps after this one.
     nav.reset();
