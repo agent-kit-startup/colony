@@ -85,3 +85,25 @@ export function phaseDelay(motion: Motion, nowMs: number): string {
 export function enterPlays(prev: string | undefined, state: string): boolean {
   return prev !== undefined && prev !== state;
 }
+
+/** Pill tone of a queue state (a subset of ui.ts Tone; the Queue hero's tones): `running` is executing. */
+export type QueueTone = "executing" | "awaiting" | "idle" | "completed";
+const QUEUE_TONE: Record<string, QueueTone> = { running: "executing", held: "awaiting", stopped: "idle", exhausted: "completed" };
+
+/** The `queue_state` transcript card (ADR point 6): the queue row of the table for the event's
+ *  own status, its tone and its label. The card is a point-in-time record, so its mark is drawn
+ *  still: only the live surfaces (run chip, Queue hero) loop. */
+export function queueCard(status: string | null | undefined): { state: string; tone: QueueTone; label: string } {
+  const state = queueStatusState(status);
+  const known = Object.hasOwn(STATE_TABLE.queue, state);
+  return { state: known ? state : "idle", tone: known ? QUEUE_TONE[state] : "idle", label: known ? state : status?.trim() ? "queue" : "no status" };
+}
+
+/** Driver events whose transcript card or row gets the one-shot enter (ADR point 5). */
+export const ENTER_EVENTS: ReadonlySet<string> = new Set(["run_start", "tick_start", "tick_end", "run_end", "hitl_gate", "queue_state"]);
+
+/** The enter plays on a live append to a transcript the operator can see; a stored transcript, a
+ *  backfill or a hidden tab never animates, however many cards it has (ADR point 5). */
+export function cardEnters(type: string, live: boolean, shown: boolean): boolean {
+  return live && shown && ENTER_EVENTS.has(type);
+}

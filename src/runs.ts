@@ -430,10 +430,11 @@ export function liveQueueRun(root: string): Run | null {
   return live.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
 }
 
-/** `2/8` (1-based cursor of total), `–/8` when the cursor names no queued plan, `none`. */
+/** `2/8` (1-based cursor of total), `–/8` when the cursor names no queued plan (none, or past
+ *  the end once the queue is spent: cursor 2 of 2 is not `3/2`), `none`. */
 export function queuePosition(q: QueueState): string {
   if (q.total === 0) return "none";
-  return `${q.cursor === null ? "–" : q.cursor + 1}/${q.total}`;
+  return `${q.cursor === null || q.cursor >= q.total ? "–" : q.cursor + 1}/${q.total}`;
 }
 
 /** A run's tokens against its folder's budget: one line, and `over` when it passed it. */

@@ -12,7 +12,8 @@
 import { api, errText, h, type WorkspaceSettings } from "./api";
 import type { CockpitHost } from "./cockpit";
 import { pendingGates } from "./gates";
-import { stateMark } from "./icons";
+import { crossfade, oneShot, stateChanged, stateMark } from "./icons";
+import { queueStatusState } from "./drivermotion";
 import { gateCard } from "./inbox";
 import { CHAT_ENGINES, chatModel, type GatesDecision, gatesChange, gatesKey, NEVER_PREANSWER, noteProblem, offerRelaunch, parseDecision, PREANSWER_PROTOCOL, PREANSWERS, preanswerSetting } from "./resolver";
 import { liveQueueRun, type Run, runs, runTokens } from "./runs";
@@ -254,11 +255,16 @@ export class DriverChat {
     const live = liveQueueRun(this.root);
     const d = this.decision;
     const gates = d?.gates ?? [];
+    // State-change crossfades (motion ADR point 5): the gate pill as a gate opens (tracked while
+    // none is open too), the live line when the queue status changes.
+    const gateNew = stateChanged(`fade:dc-gate:${this.root}`, live?.gate?.askId ?? "");
+    const gatePill = live?.gate ? pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate")) : null;
+    if (gatePill && gateNew) oneShot(gatePill, "state-fade");
     const head = cardHeader({
       title: "Driver chat",
       icon: "queue",
       aside: [
-        ...(live?.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate"))] : []),
+        ...(gatePill ? [gatePill] : []),
         ...(this.offered.length ? [pill("Gate moved", "awaiting", "↻")] : []),
         pill(gates.length ? `${gates.length} deferred` : this.supported === false ? "No helper" : "Nothing deferred", gates.length ? "awaiting" : "idle"),
       ],
@@ -305,7 +311,7 @@ export class DriverChat {
     this.el.replaceChildren(
       head,
       h("p", { class: "hint" }, "Reads the queue's deferred gates and resolution prompt with agent-kit queue gates (no model call), then relaunches run-plan-all with your note. It never answers a gate for you, except the context-checkpoint pre-answer you can turn on below, and never edits HANDOFF."),
-      ...(live ? [h("div", { class: "dc-live hint" }, `Queue run #${live.id} is live${live.queue?.status ? ` · ${live.queue.status}` : ""}. Its gates, queue-end-gates included, are answered here or in the Inbox; its input stays open until run_end.`)] : []),
+      ...(live ? [crossfade(h("div", { class: "dc-live hint" }, `Queue run #${live.id} is live${live.queue?.status ? ` · ${live.queue.status}` : ""}. Its gates, queue-end-gates included, are answered here or in the Inbox; its input stays open until run_end.`), `dc-live:${this.root}:${live.id}`, queueStatusState(live.queue?.status))] : []),
       ...(liveGate ? [gateCard(liveGate, this.host, "dc-live-gate")] : []),
       ...((t) => (t ? [t] : []))(this.tokensLine()),
       gateList,

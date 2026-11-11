@@ -9,7 +9,7 @@ import type { RunControls } from "./agent";
 import { chats } from "./chats";
 import { pendingGates } from "./gates";
 import { missionState, runState } from "./drivermotion";
-import { icon, type IconKind, stateMark } from "./icons";
+import { crossfade, icon, type IconKind, oneShot, stateChanged, stateMark } from "./icons";
 import { gateCard, triageChip } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "./readiness";
@@ -204,16 +204,19 @@ const KIND_ICON: Record<Launch["kind"], IconKind> = { driver: "play", interactiv
 const planName = (f: string) => f.replace(/\.plan\.md$/, "");
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** A launch's state pill. `still`: no motion, when the card already shows a loop (ADR point 2). */
-function stateChip(l: Launch, still = false): HTMLElement {
-  if (l.state === "starting") return pill(l.state, "backlog", stateMark("run", "starting", { still: true }));
+/** A launch's state pill, crossfading in on a state change (ADR point 5). `still`: no motion
+ *  on the mark, when the card already shows a loop (ADR point 2). `where`: the surface, so each
+ *  copy of the same launch tracks its own change. */
+function stateChip(l: Launch, where: string, still = false): HTMLElement {
+  const key = `${where}:${l.tabId}`;
+  if (l.state === "starting") return crossfade(pill(l.state, "backlog", stateMark("run", "starting", { still: true })), key, "starting");
   const st = runState({ gate: l.state === "gate", running: l.state === "running", exitCode: l.exitCode, reason: l.reason });
   const mark = stateMark("run", st, { key: `launch:${l.tabId}`, still });
-  if (st === "gate") return pill("Awaiting gate", "awaiting", mark);
-  if (st === "running") return pill("Running", "running", mark);
+  const exit = `exit ${l.exitCode ?? "signal"}`;
   // A stop by request is a clean end at a tick boundary, not a failure (driver protocol 1.5.0).
-  if (st === "stopped") return pill(`Stopped · exit ${l.exitCode ?? "signal"}`, "idle", mark);
-  return st === "done" ? pill("Ended · exit 0", "completed", mark) : pill(`Ended · exit ${l.exitCode ?? "signal"}`, "failed", mark);
+  const [label, tone]: [string, Tone] = st === "gate" ? ["Awaiting gate", "awaiting"] : st === "running" ? ["Running", "running"] : st === "stopped" ? [`Stopped · ${exit}`, "idle"] : st === "done" ? ["Ended · exit 0", "completed"] : [`Ended · ${exit}`, "failed"];
+  const p = pill(label, tone, mark);
+  return crossfade(p, key, st);
 }
 
 /** One Colony launch (driver run or agent terminal tab); a click focuses its tab. */
@@ -223,7 +226,7 @@ function launchRow(l: Launch, kit: KitRun | undefined, host: CockpitHost): HTMLE
   const row = h(
     "div",
     { class: "row click run-row", title: `${name}\n${l.label} · ${l.root}${gateTip}${kit ? `\nkit reports: ${kit.label}` : ""}` },
-    stateChip(l),
+    stateChip(l, "launch-row"),
     // The one flexible field: the name ellipsizes (full text in the row title); the fields
     // after it drop whole by card width (container queries in styles.css), never cut.
     h("span", { class: "grow ellipsis run-name" }, h("strong", {}, name)),
@@ -290,15 +293,22 @@ function queueNow(root: string): { q: J; queue: string[]; cursor: number; hold: 
   return { q, queue, cursor, hold, live };
 }
 
-/** The live queue run: position, current plan, status, its open gate; a click opens it. */
-function liveQueueNote(live: Run, host: CockpitHost): HTMLElement {
+/** The live queue run: position, current plan, status, its open gate; a click opens it. The
+ *  queue pill crossfades on held / run, the gate pill as a gate opens (ADR point 5); `where`:
+ *  the view that draws it (Mission or Queue). */
+function liveQueueNote(live: Run, host: CockpitHost, where: string): HTMLElement {
   const q = live.queue;
   const held = q?.status?.toLowerCase() === "held";
+  const key = `${where}-queue-live:${live.id}`;
+  // Tracked while no gate is open too, so the next gate's pill fades in as it appears.
+  const gateNew = stateChanged(`fade:${key}:gate`, live.gate?.askId ?? "");
+  const gate = live.gate ? pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate", { still: true })) : null;
+  if (gate && gateNew) oneShot(gate, "state-fade");
   const note = h(
     "div",
     { class: "launch-pending click queue-live", title: "Open its tab" },
-    held ? pill("Queue held", "awaiting", stateMark("queue", "held")) : pill("Queue run", "running", stateMark("queue", "running", { still: true })),
-    ...(live.gate ? [pill(`Gate ${live.gate.askId}`, "awaiting", stateMark("run", "gate", { still: true }))] : []),
+    crossfade(held ? pill("Queue held", "awaiting", stateMark("queue", "held")) : pill("Queue run", "running", stateMark("queue", "running", { still: true })), key, held ? "held" : "running"),
+    ...(gate ? [gate] : []),
     h("span", { class: "grow" }, `#${live.id} · ${live.backend} · ${q ? `${queueText(q)}${q.status ? ` · ${q.status}` : ""}` : "waiting for the first queue_state"} · started ${clock(live.startedAt)} (${elapsed(live.startedAt)})${live.gate ? " · answer it in the Inbox" : ""}`),
   );
   note.dataset.run = String(live.id);
@@ -568,7 +578,7 @@ export class MissionView extends View {
         "div",
         { class: "launch-pending click", title: "Open its tab" },
         pill("Launched from Colony", "running", stateMark("run", "running", { still: true })),
-        stateChip(pend, true),
+        stateChip(pend, "mission-pending", true),
         h("span", { class: "grow" }, `${KIND_LABEL[pend.kind]} · ${pend.backend} · started ${clock(pend.startedAt)} (${elapsed(pend.startedAt)}) · waiting for HANDOFF to switch to this plan. HANDOFF still names ${plan ? planName(plan) : "no plan"}; Run plan runs that one.`),
       );
       note.dataset.plan = pend.plan;
@@ -596,11 +606,11 @@ export class MissionView extends View {
     const hero = h(
       "section",
       { class: "hero card" },
-      cardHeader({ title: "Current mission", aside: [...handoff, ...(status ? [pill(stLabel, stTone, stateMark("mission", missionState(status), { key: "mission" }))] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
+      cardHeader({ title: "Current mission", aside: [...handoff, ...(status ? [crossfade(pill(stLabel, stTone, stateMark("mission", missionState(status), { key: "mission" })), "mission-status", status)] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
       h("h2", { class: "now-plan-name" }, title),
       h("div", { class: "hero-file mono" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”."),
       ...pending,
-      ...(liveQ ? [liveQueueNote(liveQ, this.host)] : []),
+      ...(liveQ ? [liveQueueNote(liveQ, this.host, "mission")] : []),
       ...(total ? [stepbar(done, total, !!cur && !planDone, true, "to-dos")] : []),
       ...(plan || pend ? [stepper(missionSteps(prev, cur, next, { status, planDone, nextUpPlan: pend ? "" : str(now.nextUpPlan), done, total }))] : []),
       ...(gaps ? [h("div", { class: "gaps clamp-3", title: plainMd(gaps) }, h("span", { class: "ag-warn" }, "Gaps "), ...inlineMd(gaps))] : []),
@@ -993,7 +1003,7 @@ export class QueueView extends View {
     const head = h(
       "section",
       { class: "hero card" },
-      cardHeader({ title: "Run queue", icon: "queue", aside: [pill(stLabel, stTone, stateMark("queue", stState, { key: "queue-hero" }))] }),
+      cardHeader({ title: "Run queue", icon: "queue", aside: [crossfade(pill(stLabel, stTone, stateMark("queue", stState, { key: "queue-hero" })), "queue-hero", stLabel)] }),
       h("h2", { class: "now-plan-name" }, queue.length ? `${queue.length} plans · cursor ${cursor >= 0 ? cursor + 1 : "-"}${hold ? " · held" : ""}` : "No queue"),
       ...(queue.length ? [stepbar(done, queue.length, cursor >= 0 && cursor < queue.length && !hold, true, "plans done")] : []),
       metaRow([
@@ -1003,7 +1013,7 @@ export class QueueView extends View {
         str(q.status) ? { icon: "updated", text: str(q.status).split("\n")[0], title: str(q.status) } : null,
       ]),
       ...(hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", stateMark("queue", "held")), h("span", { class: "grow" }, holdText(hold, queue[cursor] ?? ""), " The queue resumes at its cursor once that run hands HANDOFF back (Queue status in HANDOFF)."))] : []),
-      ...(live ? [liveQueueNote(live, this.host)] : []),
+      ...(live ? [liveQueueNote(live, this.host, "queue")] : []),
       h(
         "div",
         { class: "actions now-actions" },

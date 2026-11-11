@@ -7,10 +7,11 @@
 import { errText, h, type TickReview } from "./api";
 import { gateControls } from "./agent";
 import { ContextStrip } from "./contextstrip";
-import { runState } from "./drivermotion";
-import { icon, stateMark } from "./icons";
+import { cardEnters, queueCard, runState } from "./drivermotion";
+import { icon, oneShot, stateMark } from "./icons";
 import { type Align, type Block, type ListItem, linkKind, parseBlocks, parseInline } from "./markdown";
-import { type Ev, type Run, type RunItem, runLabel, runs, runTokens } from "./runs";
+import { type Ev, queuePosition, queueState, type Run, type RunItem, runLabel, runs, runTokens } from "./runs";
+import { pill } from "./ui";
 
 const RESULT_MAX = 6000;
 
@@ -190,9 +191,12 @@ export class AgentTab {
     // Stopped by request reuses the done chip colours: a clean end, not a failure.
     this.chip.className = `chip chip-${state === "stopped" ? "done" : state}`;
     const text = r.gate ? "waiting for you" : r.running ? "running" : state === "stopped" ? `stopped · exit ${r.exitCode ?? "(signal)"}` : `exited ${r.exitCode ?? "(signal)"}`;
-    // The chip updates in place on every run event: the mark is rebuilt on a state change only.
+    // The chip updates in place on every run event: the mark is rebuilt on a state change only,
+    // and then the mark and the label crossfade in (ADR point 5; not on the first render).
     if (this.chip.dataset.state !== state) {
-      this.chip.replaceChildren(stateMark("run", state, { key: `run:${r.id}` }), h("span", {}, text));
+      const parts = [stateMark("run", state, { key: `run:${r.id}` }), h("span", {}, text)];
+      if (this.chip.dataset.state !== undefined) for (const p of parts) oneShot(p, "state-fade");
+      this.chip.replaceChildren(...parts);
       this.chip.dataset.state = state;
     } else (this.chip.lastChild as HTMLElement).textContent = text;
     this.title.textContent = runLabel(r);
@@ -222,6 +226,14 @@ export class AgentTab {
     this.tr.append(el);
     while (this.tr.childElementCount > 4000) this.tr.firstElementChild?.remove();
     if (follow && near && body) body.scrollTop = body.scrollHeight;
+  }
+
+  /** A driver event's card or row, with the one-shot enter on a live append the operator can
+   *  see (ADR point 5); the stored transcript replayed by the constructor never animates. */
+  private card(el: HTMLElement, type: string, live: boolean) {
+    // offsetParent is null while this tab, or the transcript behind Raw log, is hidden.
+    if (cardEnters(type, live, live && this.tr.offsetParent !== null)) oneShot(el, "tr-enter");
+    this.append(el, live);
   }
 
   private add(item: RunItem, live: boolean) {
@@ -270,14 +282,15 @@ export class AgentTab {
   private event(ev: Ev, live: boolean) {
     switch (ev.type) {
       case "run_start":
-        return this.append(
+        return this.card(
           h("div", { class: "tr-card tr-start" }, h("strong", { class: "tr-start-title" }, icon("play", "btn-icon tr-icon"), ` ${ev.plan || "run"}`), h("span", { class: "dim" }, ` · ${ev.backend} · ${ev.pending} pending · max ${ev.maxTicks} ticks · protocol ${ev.protocol} · HITL ${ev.hitl}`)),
+          ev.type,
           live,
         );
       case "tick_start": {
         const log = h("button", { class: "link", title: "Open the tick log" }, String(ev.log ?? ""));
         log.addEventListener("click", () => ev.log && this.host.openRepoFile(String(ev.log), this.run.root));
-        return this.append(h("div", { class: "tr-tick" }, h("span", {}, `Tick ${ev.tick}/${ev.maxTicks}`), h("span", { class: "dim" }, ` · ${ev.pending} pending · ${ev.backend ?? this.run.backend} · `), log), live);
+        return this.card(h("div", { class: "tr-tick" }, h("span", {}, `Tick ${ev.tick}/${ev.maxTicks}`), h("span", { class: "dim" }, ` · ${ev.pending} pending · ${ev.backend ?? this.run.backend} · `), log), ev.type, live);
       }
       case "agent_event":
         return this.agentEvent(ev.event ?? {}, live);
@@ -293,10 +306,13 @@ export class AgentTab {
       }
       case "run_end":
         this.syncGates();
-        return this.append(
+        return this.card(
           h("div", { class: `tr-card tr-end ${ev.exitCode === 0 ? "ok" : "bad"}` }, h("strong", {}, `■ Run ended · ${ev.reason}`), h("span", { class: "dim" }, ` · exit ${ev.exitCode} · ${ev.ticks} tick${ev.ticks === 1 ? "" : "s"} · ${ev.pending} pending${ev.planExhausted ? " · plan exhausted" : ""}`)),
+          ev.type,
           live,
         );
+      case "queue_state":
+        return this.queueCard(ev, live);
       default:
         return this.append(h("div", { class: "tr-line ag-dim mono" }, JSON.stringify(ev)), live);
     }
@@ -358,7 +374,7 @@ export class AgentTab {
     card.dataset.ask = askId;
     card.dataset.run = String(this.run.id);
     this.gates.set(askId, card);
-    this.append(card, live);
+    this.card(card, "hitl_gate", live);
     this.syncGates();
     if (live) requestAnimationFrame(() => card.scrollIntoView({ block: "nearest" }));
   }
@@ -395,6 +411,25 @@ export class AgentTab {
     if (Array.isArray(ev.replies) && ev.replies.length) lines.push(h("div", { class: "dim" }, `Replies: ${ev.replies.map((r: Ev) => r.line ?? `${r.askId} ${r.label ?? r.reply}`).join(" · ")}`));
     if (ev.stop) lines.push(h("div", { class: "ag-warn" }, `Stop: ${ev.stop.cause}${ev.stop.message ? ` (${ev.stop.message})` : ""}`));
     if (ev.limit) lines.push(h("div", { class: "ag-warn" }, `Usage limit: ${ev.limit.source}${ev.limit.detail ? ` · ${ev.limit.detail}` : ""}`));
-    this.append(h("div", { class: "tr-card tr-sum" }, ...lines), live);
+    this.card(h("div", { class: "tr-card tr-sum" }, ...lines), "tick_end", live);
+  }
+
+  /** `queue_state` (driver protocol 1.2.0) as a card: the event's own status mark, `cursor + 1
+   *  of total` and the current plan (ADR point 6). Built from the event, not from run.queue,
+   *  which already holds the newest state: each card records the queue as it was then. */
+  private queueCard(ev: Ev, live: boolean) {
+    const q = queueState(ev);
+    if (!q) return this.append(h("div", { class: "tr-line ag-dim mono" }, JSON.stringify(ev)), live);
+    const c = queueCard(q.status);
+    const el = h(
+      "div",
+      { class: "tr-card tr-queue" },
+      pill(c.label, c.tone, stateMark("queue", c.state, { still: true })),
+      h("strong", {}, ` Queue ${queuePosition(q)}`),
+      h("span", { class: "dim" }, `${q.current ? ` · ${q.current}` : ""}${q.status ? ` · ${q.status}` : ""}`),
+    );
+    el.dataset.status = c.state;
+    el.dataset.cursor = String(q.cursor ?? "");
+    this.card(el, ev.type, live);
   }
 }
