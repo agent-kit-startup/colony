@@ -17,7 +17,8 @@
 # no session): one accepted proposal per hunk, theirs then ours, built from that listing.
 # `promote rules|wait --json` print the kit's JSON shapes and write nothing.
 # `run-plan --model smoke-card-*` is the Current mission card branch (driver protocol 1.5.0
-# stop_after_tick; see below): it writes no files.
+# stop_after_tick; see below) and `--model smoke-motion` the driver motion one (running, gate,
+# running, done): neither writes a file.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
 if [ "${1:-}" = conflicts ]; then
@@ -147,7 +148,12 @@ ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
 #     the gate (driver stop, exit 4).
 #   smoke-card-old: protocol 1.4.0 (below stop_after_tick), no gate: the tick runs 4 s and
 #     the run ends on its own. Colony offers Kill there, which the smoke never clicks.
-if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*) true ;; *) false ;; esac; then
+# Driver motion (COLONY_SMOKE driver-motion and driver-motion-reduced steps), same rule, NO
+# file is written:
+#   smoke-motion: protocol 1.5.0; the tick runs 3 s, opens gate smoke-motion-gate, and after a
+#     hitl_reply runs 3 s more, then the run ends with exit 0. Each state (running, gate,
+#     running, done) lasts long enough for the smoke to read the run chip and the cockpit.
+if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*|smoke-motion) true ;; *) false ;; esac; then
   proto=1.5.0
   [ "$model" = smoke-card-old ] && proto=1.4.0
   ev "\"type\":\"run_start\",\"protocol\":\"$proto\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
@@ -177,6 +183,18 @@ if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*) true ;; *) false 
       case "$line" in
         *'"type":"stop"'*) finish 4 null '{"askId":"smoke-card-gate","cause":"driver stop","message":"stop sent by the app","exitCode":4}' 4 "driver stop" ;;
         *) finish 4 null '{"askId":"smoke-card-gate","cause":"protocol error","message":"fixture expected a stop","exitCode":4}' 4 "protocol error" ;;
+      esac ;;
+    smoke-motion)
+      say "Motion fixture: a tick that runs, asks once, then runs again until it ends on its own."
+      sleep 3
+      say "Motion fixture: **one decision** before the tick goes on.\\n\\nHITL_GATE: smoke-motion-gate | Go | Wait"
+      ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-motion-gate\",\"labels\":[\"Go\",\"Wait\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-motion-gate | Go | Wait\",\"usage\":null"
+      line_in
+      case "$line" in
+        *'"type":"hitl_reply"'*)
+          sleep 3
+          finish 0 '{"kind":"continue","line":"LOOP_TICK_RESULT: continue"}' null 0 "max ticks reached" ;;
+        *) finish 4 null '{"askId":"smoke-motion-gate","cause":"protocol error","message":"fixture expected a hitl_reply","exitCode":4}' 4 "protocol error" ;;
       esac ;;
     *)
       say "Card fixture: a tick with no gate, running until the app asks to stop after it."

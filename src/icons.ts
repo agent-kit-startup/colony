@@ -16,7 +16,7 @@
 // icon set does not follow this restyle (Colony-only, the plan's default).
 // Static markup only: never concatenate untrusted text into these strings.
 
-import { enterPlays, phaseDelay, type StateGroup, stateRow } from "./drivermotion";
+import { enterPlays, markMotion, phaseDelay, type StateGroup, stateRow } from "./drivermotion";
 
 const PATHS = {
   // Cockpit: a rocket
@@ -152,7 +152,7 @@ export function stateMark(group: StateGroup, state: string, opts: { key?: string
   // in the same render must not use up the enter of the mark that animates it.
   const key = opts.still ? "" : (opts.key ?? "");
   const changed = key ? stateChanged(key, state) : false;
-  const motion = opts.still || (row.motion === "enter" && !changed) ? "none" : row.motion;
+  const motion = markMotion(row, !!opts.still, changed);
   const el = document.createElement("span");
   el.className = `state-mark motion-${motion}`;
   el.dataset.state = `${group}:${row.known ? state : "idle"}`;

@@ -1,12 +1,14 @@
 // Driver state -> icon and motion (src/drivermotion.ts), the table of the kit ADR
 // 2026-10-29_colony-driver-motion-contract.md, and the CSS that animates it (src/styles.css).
-// V1 of plan colony-driver-motion; V3 widens this to every surface. Run: pnpm test
+// Plan colony-driver-motion: V1 the table, V2 the transitions, V3 the guard rails (the class
+// every mark carries, the states the surfaces draw, the reduced-motion fallback of every
+// animation, the smoke fixture). Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { cardEnters, ENTER_EVENTS, enterPlays, IDLE_ROW, LOOP_MS, missionState, phaseDelay, PULSE_MS, queueCard, queueStatusState, runState, STATE_TABLE, stateRow, STOPPED_REASON } from "../src/drivermotion.ts";
+import { cardEnters, ENTER_EVENTS, enterPlays, IDLE_ROW, LOOP_MS, markMotion, missionState, phaseDelay, PULSE_MS, queueCard, queueStatusState, runState, STATE_TABLE, stateRow, STOPPED_REASON } from "../src/drivermotion.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const css = readFileSync(join(SRC, "styles.css"), "utf8");
@@ -126,4 +128,102 @@ test("CSS (V2): crossfade and card enter are opt-in one-shots; transitions on th
   const reduce = css.match(/@media \(prefers-reduced-motion: reduce\) \{ ([^{]*) \{ transition: none; \} \}/);
   assert.ok(reduce, "a reduce block turns the transitions off");
   for (const sel of [".card", ".chip", ".tr-card", ".tr-gate", ".q-row"]) assert.ok(reduce[1].split(", ").includes(sel), `${sel} keeps a transition under reduce`);
+});
+
+// ---- V3 guard rails ------------------------------------------------------------------------
+
+const ROOT = join(SRC, "..");
+/** Product sources: the smoke modules run only under COLONY_SMOKE. */
+const sources = readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts") && !/smoke/.test(f));
+const read = (f) => readFileSync(join(SRC, f), "utf8");
+
+test("mark motion class (V3): every row on a state change, on a first render and as a still copy", () => {
+  for (const [g, t] of Object.entries(STATE_TABLE)) {
+    for (const [s, r] of Object.entries(t)) {
+      assert.equal(markMotion(r, false, true), r.motion, `${g}:${s} on a state change`);
+      assert.equal(markMotion(r, false, false), r.motion === "enter" ? "none" : r.motion, `${g}:${s} on a first render or a re-render: a one-shot stays still, a loop keeps going`);
+      for (const changed of [true, false]) assert.equal(markMotion(r, true, changed), "none", `${g}:${s} as a still copy`);
+    }
+  }
+  for (const changed of [true, false]) assert.equal(markMotion(IDLE_ROW, false, changed), "none", "a state outside the table never moves");
+  // stateMark writes that motion as the class, and each class animates on its own token.
+  assert.match(icons, /const motion = markMotion\(row, !!opts\.still, changed\);/);
+  assert.match(icons, /el\.className = `state-mark motion-\$\{motion\}`;/);
+  const motions = new Set(Object.values(STATE_TABLE).flatMap((t) => Object.values(t).map((r) => r.motion)));
+  assert.deepEqual([...motions].sort(), ["enter", "loop", "none", "pulse"]);
+  for (const m of ["enter", "loop", "pulse"]) assert.match(css, new RegExp(`\\.state-mark\\.motion-${m} [^{]*\\{[^}]*var\\(--motion-${m}\\)`), `motion-${m} runs on --motion-${m}`);
+  assert.ok(!/\.state-mark\.motion-none[^{]*\{[^}]*animation/.test(css), "motion-none is static");
+});
+
+test("surfaces (V3): the run tab, the cockpit and the driver chat draw state marks, and only states of the table", () => {
+  const drawn = new Map();
+  for (const f of sources) for (const m of read(f).matchAll(/stateMark\("(run|queue|mission)", "([a-z_]+)"(, \{ still: true \})?/g)) drawn.set(`${m[1]}:${m[2]}`, { file: f, still: !!m[3] });
+  assert.ok(drawn.size >= 4, `literal state marks found: ${[...drawn.keys()]}`);
+  for (const [k, d] of drawn) {
+    const [g, s] = k.split(":");
+    // `starting` (a launch that has not reported yet) is the one state drawn outside the table:
+    // the static idle mark, never animated.
+    if (k === "run:starting") assert.equal(d.still, true, `${d.file}: run:starting is a still mark`);
+    else assert.equal(stateRow(g, s).known, true, `${d.file} draws ${k}, which the table does not have`);
+  }
+  for (const f of ["transcript.ts", "cockpit.ts", "driverchat.ts"]) assert.match(read(f), /import \{[^}]*\bstateMark\b[^}]*\} from "\.\/icons";/, `${f} draws state marks`);
+  // The derivations feed the marks whose state is not a literal.
+  assert.match(read("transcript.ts"), /stateMark\("run", state, \{ key: `run:\$\{r\.id\}` \}\)/);
+  assert.match(read("transcript.ts"), /stateMark\("queue", c\.state, \{ still: true \}\)/);
+  assert.match(read("cockpit.ts"), /stateMark\("mission", missionState\(status\), \{ key: "mission" \}\)/);
+  assert.match(read("cockpit.ts"), /stateMark\("queue", stState, \{ key: "queue-hero" \}\)/);
+});
+
+test("reduced motion (V3): every animation is opt-in or has a reduce override, and CSS alone reads the preference", () => {
+  const optIn = /@media \(prefers-reduced-motion: no-preference\) \{\n(?:  .*\n)+\}/g;
+  const override = /@media \(prefers-reduced-motion: reduce\) \{ ([^{]*) \{([^}]*)\} \}/g;
+  let animated = 0;
+  for (const f of readdirSync(SRC).filter((x) => x.endsWith(".css"))) {
+    const text = read(f);
+    const still = new Set();
+    for (const m of text.matchAll(override)) if (/animation: none;/.test(m[2])) for (const sel of m[1].split(", ")) still.add(sel.trim());
+    const outside = text.replace(optIn, "").replace(override, "");
+    for (const m of outside.matchAll(/(?:^|\n)([^{}\n@][^{}\n]*) \{([^{}]*)\}/g)) {
+      if (!/animation: (?!none)/.test(m[2])) continue;
+      animated += 1;
+      for (const sel of m[1].split(", ")) assert.ok(still.has(sel.trim()), `${f}: ${sel.trim()} animates outside no-preference with no reduce override`);
+    }
+    // The fallback adds no motion: a reduce block never declares an animation or a transition.
+    for (const m of text.matchAll(override)) assert.ok(!/(animation|transition): (?!none)/.test(m[2]), `${f}: a reduce block adds motion (${m[1]})`);
+  }
+  assert.ok(animated >= 3, "the unguarded one-shots and the button spinner were found");
+  // Each class of the contract under reduce: loops, the crossfade and the card enter exist only
+  // inside the opt-in blocks; the one-shot enter and the gate flash are overridden.
+  const outside = css.replace(optIn, "");
+  for (const cls of ["motion-loop", "motion-pulse", "state-fade", "tr-enter"]) assert.ok(!new RegExp(`\\.${cls}[^{\\n]*\\{[^}]*(animation|display: block)`).test(outside), `.${cls} shows or animates outside no-preference`);
+  // No script branches on the preference, so emulating it in the stylesheets (src/motionsmoke.ts)
+  // is the whole of what it changes.
+  for (const f of sources) assert.ok(!/prefers-reduced-motion/.test(read(f)), `${f} reads prefers-reduced-motion`);
+});
+
+test("smoke fixture (V3): the card and motion branch of fake-agent-kit.sh writes no file and never falls through", () => {
+  const sh = readFileSync(join(ROOT, "packaging", "smoke", "fake-agent-kit.sh"), "utf8");
+  const start = sh.indexOf('if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*|smoke-motion) true ;;');
+  assert.ok(start > 0, "the branch is picked by --model smoke-card-* or smoke-motion");
+  const block = sh.slice(start, sh.indexOf("\nfi\n", start));
+  const code = block.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.ok(!code.includes(">"), "a redirection in the branch");
+  assert.ok(!/\b(tee|touch|mkdir|cp|mv|rm|git|dd)\b/.test(code), "a command that writes in the branch");
+  // It sits before the stand-ins that edit the workspace, and every path through it exits.
+  for (const w of ["> queue-reply.json", "> run-plan-all-proof.txt", "> fixture-tick.txt", ">> README.md"]) assert.ok(sh.indexOf(w) > start + block.length, `${w} comes after the branch`);
+  assert.match(code, /finish\(\) \{\n(?:.*\n)*?    exit "\$4"\n  \}/);
+  const arms = code.slice(code.indexOf('case "$model" in'));
+  assert.match(arms, /\n    smoke-motion\)\n/);
+  assert.match(arms, /\n    \*\)\n/, "an unknown smoke-card-* model has a default arm");
+  for (const arm of arms.split(/\n    (?=[a-z*][a-z*-]*\)\n)/).slice(1)) assert.match(arm, /\bfinish \d/, `an arm without finish: ${arm.slice(0, 40)}`);
+  // The motion run: a gate between two running stretches, a clean end (run state `done`).
+  const motion = arms.slice(arms.indexOf("smoke-motion)"), arms.indexOf("\n    *)\n"));
+  assert.match(motion, /sleep 3\n(?:.*\n)*.*\\"askId\\":\\"smoke-motion-gate\\"(?:.*\n)*.*line_in\n(?:.*\n)*.*sleep 3\n\s*finish 0 .* null 0 "max ticks reached"/);
+  // The smoke runs it twice, with motion allowed and under emulated reduce, and puts the
+  // stylesheets back whatever happens.
+  const smoke = read("motionsmoke.ts");
+  assert.match(smoke, /playRun\("smoke-motion"\)/);
+  assert.match(smoke, /await pass\(c, "no-preference", "driver-motion"\);\n  await pass\(c, "reduce", "driver-motion-reduced"\);/);
+  assert.match(smoke, /\} finally \{\n(?:.*\n)*?    emu\.restore\(\);/);
+  assert.match(read("main.ts"), /await motionSmoke\(\{ log, wait, until, shot, showTab, view, onMission, playRun, closeTab \}\);/);
 });
