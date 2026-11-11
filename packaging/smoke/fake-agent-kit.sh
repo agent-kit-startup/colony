@@ -141,7 +141,7 @@ ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
 # stand-in that edits the workspace shows up in a later step's review). The stdin line it
 # reads comes back as a `log` event, so the smoke checks the exact request Colony sent.
 #   smoke-card-tick: protocol 1.5.0, a tick with no gate waits for one line;
-#     {"type":"stop_after_tick"} ends the tick, then the run: run_end.reason
+#     {"type":"stop_after_tick"} ends the tick 2 s later, then the run: run_end.reason
 #     "stopped by request after tick 1", exit 0 (kit docs/driver-events-protocol.md).
 #   smoke-card-gate: protocol 1.5.0, gate smoke-card-gate; {"type":"stop"} ends the run at
 #     the gate (driver stop, exit 4).
@@ -182,7 +182,11 @@ if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*) true ;; *) false 
       say "Card fixture: a tick with no gate, running until the app asks to stop after it."
       line_in
       case "$line" in
-        *'"type":"stop_after_tick"'*) finish 0 '{"kind":"continue","line":"LOOP_TICK_RESULT: continue"}' null 0 "stopped by request after tick 1" ;;
+        *'"type":"stop_after_tick"'*)
+          # The tick finishes as it would have (2 s here), then the run ends: the card reads
+          # Stopping… meanwhile.
+          sleep 2
+          finish 0 '{"kind":"continue","line":"LOOP_TICK_RESULT: continue"}' null 0 "stopped by request after tick 1" ;;
         *) finish 4 null '{"askId":null,"cause":"protocol error","message":"fixture expected stop_after_tick","exitCode":4}' 4 "protocol error" ;;
       esac ;;
   esac
