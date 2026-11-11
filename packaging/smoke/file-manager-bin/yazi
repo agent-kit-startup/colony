@@ -1,0 +1,15 @@
+#!/bin/sh
+# COLONY_SMOKE fixture (plan colony-explorer-file-ops e4): a stand-in terminal file manager named
+# like the first one Colony looks for. The smoke passes this folder as the PATH of its smoke-only
+# lookup (smoke_file_manager_launch), so Open in terminal file manager starts this script in a
+# drawer tab. It prints where it runs, waits so the smoke can read the tab's working directory,
+# then leaves one file there and exits, which must refresh the Explorer. It writes only inside
+# the smoke's own folder: anywhere else it does nothing.
+case "${PWD##*/}" in
+  smoke-file-manager) ;;
+  *) echo "fake file manager: $PWD is not the smoke folder, nothing done"; exit 0 ;;
+esac
+echo "fake file manager in $PWD"
+sleep 2
+: > made-by-file-manager.txt
+echo "fake file manager: left made-by-file-manager.txt, exiting"

@@ -346,6 +346,7 @@ pub fn run() {
             chats::chat_sessions,
             pty::pty_spawn,
             filemanager::file_manager_launch,
+            filemanager::smoke_file_manager_launch,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,

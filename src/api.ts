@@ -223,6 +223,8 @@ export const api = {
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
   fileManagerLaunch: () => invoke<FileManagerLaunch>("file_manager_launch"),
+  /** COLONY_SMOKE only: the same lookup with `path` as the PATH (refused when the smoke is off). */
+  smokeFileManagerLaunch: (path: string) => invoke<FileManagerLaunch>("smoke_file_manager_launch", { path }),
   /** A new Colony window on `folder`, or on the welcome screen (newwindow.rs). */
   spawnNewWindow: (folder?: string) => invoke<NewWindowLaunch>("spawn_new_window", { folder: folder ?? null }),
   reviewTicks: () => invoke<TickReview[]>("review_ticks"),
