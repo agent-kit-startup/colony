@@ -13,9 +13,11 @@ import { icon, type IconKind, stateMark } from "./icons";
 import { gateCard, triageChip } from "./inbox";
 import { elapsed, type KitRun, type Launch, kitRuns, launches, mergeRuns } from "./launches";
 import { type Readiness, READINESS_FILE, type ReadinessCheck, readiness } from "./readiness";
-import { liveQueueRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
+import { liveQueueRun, liveRun, type QueueState, queuePosition, type Run, runLabel, runs } from "./runs";
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { planCrudButton } from "./planmenu";
+import { type CardButton, cardButtons, type CardRun } from "./missioncard";
+import { planActions } from "./plancrud";
 import type { DriverChat } from "./driverchat";
 import { inlineMd, plainMd, prose } from "./transcript";
 import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, emptyCta, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
@@ -25,6 +27,9 @@ export interface CockpitHost {
   openRepoFile(rel: string): void;
   /** Driver run of the folder's active plan (opens its agent tab). */
   runPlan(): Promise<unknown>;
+  /** Stop driver run `runId`: at its open gate (`{"type":"stop"}`), after the current tick
+   *  (driver protocol 1.5.0 `stop_after_tick`), or kill it after a confirmation. */
+  stopRun(runId: number, how: "gate" | "after-tick" | "kill"): Promise<unknown>;
   /** `agent-kit run-plan-all` after a confirmation: a driver run (gates in the Inbox) or,
    *  on an engine without its driver mode, a terminal tab. Needs no stored queue. */
   runQueue(): Promise<unknown>;
@@ -253,6 +258,14 @@ function finished(q: J, file: string): boolean {
 function queueRunnable(q: J, queue: string[], cursor: number, held: boolean): boolean {
   if (held || !queue.length || cursor >= queue.length) return false;
   return queue.slice(Math.max(cursor, 0)).some((f) => !q.outcomes?.[f]);
+}
+
+/** Why the active plan cannot be cancelled now: a live driver run, or a terminal tab on a plan, in `root`. */
+function runBusy(root: string): string {
+  const r = liveRun(root);
+  if (r) return `${r.command === "run-plan-all" ? "Queue run" : "Run"} #${r.id} is going in this folder`;
+  const t = launches.list().find((l) => l.root === root && l.state !== "ended" && l.runId === undefined && (l.kind === "queue" || !!l.plan));
+  return t ? `${t.label} is going in a terminal tab` : "";
 }
 
 /** `queue 2/8 · <current plan>` for a driver queue run. */
@@ -539,25 +552,11 @@ export class MissionView extends View {
     const total = Number(pr.total) || 0;
     const done = Number(pr.completed) || 0;
     const planDone = total > 0 && done >= total;
-    // Run plan, Run queue, Open interactive, Start a project and Create plan live in the
-    // top bar (main.ts #top-actions); the hero keeps the plan's own documents and its CRUD
-    // dropdown (Edit only: the plan it shows is the active or the running one).
+    // The card's action row (shell ADR amend 2026-10-29 point 1): Play/Stop, Open, Edit,
+    // Cancel, Plans, and Kill while a driver run is live. Run plan stays in the top bar too
+    // (the global action); Run queue, Open interactive and the Plans dropdown stay there only.
     const heroPlan = pend ? pend.plan : plan;
-    const actions = h(
-      "div",
-      { class: "actions now-actions" },
-      ...(pend
-        ? [btn("Open plan", () => this.host.openRepoFile(pp?.path || `.cursor/plans/${pend.plan}`), { class: "status-bar-btn" })]
-        : plan
-          ? [btn("Open plan", () => this.host.openRepoFile(str(now.planPath) || `.cursor/plans/${plan}`), { class: "status-bar-btn" })]
-          : []),
-      ...(snapshot.data && str(now.sourcePath) ? [btn("Open HANDOFF", () => this.host.openRepoFile(str(now.sourcePath)), { class: "status-bar-btn" })] : []),
-      ...(heroPlan
-        ? [
-            planCrudButton(heroPlan, snapshot.plans().find((x) => x.file === heroPlan) ?? { parked: false, backlog: false }, true, (prompt, why) => this.host.interactive(prompt, why), pend ? "Colony is running this plan: archive, cancel and delete wait until the run ends and HANDOFF names it." : "Archive, cancel and delete stop on the active plan: park or finish it first."),
-          ]
-        : []),
-    );
+    const actions = h("div", { class: "actions now-actions" }, ...this.cardRow(heroPlan, pend, pend ? pp?.path || `.cursor/plans/${pend.plan}` : str(now.planPath) || `.cursor/plans/${plan}`));
     const title = pend ? pp?.id || planName(pend.plan) : plan ? str(now.planId) || plan : snapshot.data ? "No active plan" : "Mission";
     const todo = (t: J | null | undefined): Todo => (t && obj(t).id ? { id: str(t.id), content: str(t.content) } : null);
     const lc = pend ? (pp?.lifecycle ?? "") : str(now.lifecycle);
@@ -592,10 +591,12 @@ export class MissionView extends View {
       !pend ? { icon: "elapsed", text: timing(now), mono: true, title: "Elapsed on this plan" } : null,
     ]);
     const gaps = !pend ? str(now.gaps) : "";
+    // Open HANDOFF is a secondary link in the header line, never back among the buttons (amend point 3).
+    const handoff = snapshot.data && str(now.sourcePath) ? [btn("Open HANDOFF", () => this.host.openRepoFile(str(now.sourcePath)), { class: "link card-handoff", "data-act": "card-handoff", title: `Open ${str(now.sourcePath)} (the rendered preview)`, "aria-label": "Open HANDOFF" })] : [];
     const hero = h(
       "section",
       { class: "hero card" },
-      cardHeader({ title: "Current mission", aside: [...(status ? [pill(stLabel, stTone, stateMark("mission", missionState(status), { key: "mission" }))] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
+      cardHeader({ title: "Current mission", aside: [...handoff, ...(status ? [pill(stLabel, stTone, stateMark("mission", missionState(status), { key: "mission" }))] : []), ...(lc && lc !== status ? [lifecycleChip(lc)] : [])] }),
       h("h2", { class: "now-plan-name" }, title),
       h("div", { class: "hero-file mono" }, pend ? pend.plan : plan || "HANDOFF names no plan: agent-kit run-plan will stop with “no active plan”."),
       ...pending,
@@ -608,6 +609,48 @@ export class MissionView extends View {
     );
     hero.dataset.keepScroll = "hero";
     return hero;
+  }
+
+  /**
+   * The action row of the card for `file` (src/missioncard.ts decides each button). The run it
+   * governs: the Colony launch the card shows when it is a driver run, else the folder's live
+   * driver run (one per folder). A live terminal tab on a plan has no input channel: Stop is
+   * off there and points at the tab.
+   */
+  private cardRow(file: string, pend: Launch | null, path: string): HTMLButtonElement[] {
+    const root = this.host.workspaceRoot();
+    const pendRun = pend?.runId !== undefined ? runs.runs.get(pend.runId) : undefined;
+    const r = pendRun?.running ? pendRun : liveRun(root);
+    const run: CardRun | null = r ? { id: r.id, command: r.command, gate: r.gate?.askId ?? "", protocol: r.protocol, stopRequested: r.stopRequested } : null;
+    const term = launches.list().find((l) => l.root === root && l.state !== "ended" && l.runId === undefined && (l.kind === "queue" || !!l.plan));
+    const terminal = term ? `${term.label}${term.plan ? ` (${planName(term.plan)})` : ""}` : "";
+    const busy = r ? `${r.command === "run-plan-all" ? "Queue run" : "Run"} #${r.id} is going in this folder` : terminal ? `${terminal} is going in a terminal tab` : "";
+    const acts = file ? planActions(file, snapshot.plans().find((x) => x.file === file) ?? { parked: false, backlog: false }, true, busy) : [];
+    const ask = (id: "edit" | "cancel") => {
+      const a = acts.find((x) => x.id === id);
+      if (a && !a.disabled) void this.host.interactive(a.prompt, a.why);
+    };
+    const click = (b: CardButton) => {
+      if (b.id === "toggle") {
+        if (b.face === "play") return void this.host.runPlan();
+        if (r && b.face === "stop-gate") return void this.host.stopRun(r.id, "gate");
+        if (r && b.face === "stop-after-tick") return void this.host.stopRun(r.id, "after-tick");
+        if (r && b.face === "kill") return void this.host.stopRun(r.id, "kill");
+        return;
+      }
+      if (b.id === "kill" && r) return void this.host.stopRun(r.id, "kill");
+      if (b.id === "open") return this.host.openRepoFile(path);
+      if (b.id === "edit" || b.id === "cancel") return ask(b.id);
+      if (b.id === "plans") return this.host.showTab("plans");
+    };
+    return cardButtons({ plan: file, run, terminal, busy }).map((b) => {
+      const attrs = { class: `status-bar-btn card-btn${b.id === "kill" ? " card-kill" : ""}`, "data-act": b.act, title: b.title, "aria-label": b.label.replace(/…$/, "") };
+      const el = b.icon ? iconBtn(b.icon, b.label, () => click(b), attrs) : btn(b.label, () => click(b), attrs);
+      el.dataset.card = b.id;
+      if (b.face) el.dataset.face = b.face;
+      el.disabled = b.disabled;
+      return el;
+    });
   }
 
   /** Every open gate (driver runs and terminal tabs), full prompt and answer controls. */
@@ -883,8 +926,8 @@ export class PlansView extends View {
     }
     if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => void this.host.interactive(`/continue-plan ${p.file}`), { class: "status-bar-btn", title: "/continue-plan in your agent, interactively" }));
     // Edit, then the remove commands its HANDOFF list allows (Archive: parked; Cancel, Delete:
-    // backlog); the HANDOFF plan offers Edit only (src/plancrud.ts).
-    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive, cancel and delete stop on the active plan: park or finish it first."));
+    // backlog); the HANDOFF plan offers Edit and Cancel (/cancel-plan, off during a run; src/plancrud.ts).
+    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive and delete stop on the active plan; Cancel is /cancel-plan.", active ? runBusy(this.host.workspaceRoot()) : ""));
     const inProgress = p.todos.filter((t) => t.status === "in_progress").length;
     const pct = p.progress.total ? Math.round((100 * p.progress.completed) / p.progress.total) : 0;
     const head = h(

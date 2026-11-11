@@ -302,6 +302,14 @@ mod tests {
         }
     }
 
+    /// The stop after the tick is one exact line of driver protocol 1.5.0: never an answer.
+    #[test]
+    fn stop_after_tick_line() {
+        let v = super::stop_after_tick_message();
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#"{"type":"stop_after_tick"}"#);
+        assert!(v.get("askId").is_none() && v.get("reply").is_none());
+    }
+
     #[test]
     fn model_ids() {
         for ok in ["claude-opus-5-5", "gpt-5.1-codex", "sonnet[1m]", "us.anthropic.x:0"] {
@@ -350,7 +358,9 @@ mod tests {
     /// Run queue behaves like `agent-kit run-plan-all`, which needs no stored queue and no
     /// active plan (it proposes a queue and asks queue-confirm): the top bar always offers it
     /// next to Run plan, Open interactive, Start a project and the Plans dropdown (shell ADR
-    /// amend 2026-10-26 point 1), the Mission hero keeps only Open plan and Open HANDOFF, the
+    /// amend 2026-10-26 point 1). The Mission hero's row is the card's (amend 2026-10-29: Play
+    /// is the one deliberate duplicate of the top bar's Run plan, `host.runPlan()`; Run queue
+    /// and Open interactive stay in the top bar only; Open HANDOFF is a header link), the
     /// Queue card adds no second Run queue, and no empty state sends the operator to an
     /// interactive `/run-plan-all` instead.
     #[test]
@@ -364,10 +374,11 @@ mod tests {
         let hero = slice("private hero(): HTMLElement {", "private gateStrip(");
         let button = slice("function runQueueBtn(", "\n}\n");
         assert!(button.contains("host.runQueue()") && button.contains("\"data-act\": \"run-queue\""), "runQueueBtn starts the queue runner");
-        for gone in ["runQueueBtn(", "host.runPlan()", "host.interactive()", "\"data-act\": \"run-plan\"", "\"data-act\": \"interactive\""] {
+        for gone in ["runQueueBtn(", "host.runQueue()", "host.interactive()", "planCrudButton(", "\"data-act\": \"run-plan\"", "\"data-act\": \"interactive\""] {
             assert!(!hero.contains(gone), "Mission hero still has {gone}");
         }
-        assert!(hero.contains("\"Open plan\"") && hero.contains("\"Open HANDOFF\""), "Mission hero keeps Open plan and Open HANDOFF");
+        assert_eq!(hero.matches("host.runPlan()").count(), 1, "Play on the card is the one Run plan in the hero");
+        assert!(hero.contains("cardButtons(") && hero.contains("\"Open HANDOFF\"") && hero.contains("\"data-act\": \"card-handoff\""), "Mission hero has the card row and the Open HANDOFF link");
         let card = slice("private queueCard(): HTMLElement {", "private flightCard(");
         assert!(!card.contains("runQueue()"), "Queue card adds no second Run queue in Mission");
         assert!(!card.contains("queue.length ? [acts]"), "Queue card actions do not depend on a stored queue");
@@ -654,6 +665,20 @@ pub fn agent_reply(state: State<'_, AppState>, run_id: u32, ask_id: String, repl
 #[tauri::command]
 pub fn agent_stop(state: State<'_, AppState>, run_id: u32) -> Result<(), String> {
     send_line(&state, run_id, serde_json::json!({ "type": "stop" }))
+}
+
+/// The driver protocol 1.5.0 request to end the run at the next tick boundary.
+pub(crate) fn stop_after_tick_message() -> serde_json::Value {
+    serde_json::json!({ "type": "stop_after_tick" })
+}
+
+/// `{"type":"stop_after_tick"}` (driver protocol 1.5.0): the current tick finishes, then the
+/// run ends with `run_end.reason` `stopped by request after tick <n>`, exit 0; at an open gate
+/// it is a `driver stop`, exit 4. An older engine takes it as a protocol error, so the page
+/// sends it only when the run's `run_start.protocol` is 1.5.0 or newer (src/missioncard.ts).
+#[tauri::command]
+pub fn agent_stop_after_tick(state: State<'_, AppState>, run_id: u32) -> Result<(), String> {
+    send_line(&state, run_id, stop_after_tick_message())
 }
 
 /// The deferred operator gates of the folder's last `run-plan-all` queue, read by the kit

@@ -26,7 +26,9 @@ use crate::{agent, chats, tools};
 /// there by the user. Colony never answers or auto-applies them. `backlog-edit`,
 /// `archive-plan`, `backlog-cancel` and `backlog-delete` are the plan CRUD dropdown
 /// (src/plancrud.ts; commands-catalog ADR 2026-10-22 point 4, amend 2026-10-26): each asks
-/// its own confirmation before it writes and stops on the active plan.
+/// its own confirmation before it writes and stops on the active plan. `cancel-plan` is the
+/// active plan's Cancel (the Mission card and its Plans row; shell ADR amend 2026-10-29): it
+/// asks its own confirmation and refuses while a run or queue is in flight.
 const PROMPT_SLASH: &[&str] = &[
     "run-plan",
     "continue-plan",
@@ -34,6 +36,7 @@ const PROMPT_SLASH: &[&str] = &[
     "archive-plan",
     "backlog-cancel",
     "backlog-delete",
+    "cancel-plan",
     "plan-review-triage",
     "field-report-resolve",
     "run-plan-all",
@@ -252,7 +255,7 @@ mod tests {
     fn plan_crud_commands_runnable() {
         let src = include_str!("../../src/plancrud.ts");
         let names: Vec<&str> = src.split("prompt: `/").skip(1).map(|r| r.split(' ').next().unwrap()).collect();
-        assert_eq!(names, ["backlog-edit", "archive-plan", "backlog-cancel", "backlog-delete"]);
+        assert_eq!(names, ["backlog-edit", "cancel-plan", "archive-plan", "backlog-cancel", "backlog-delete"]);
         let inbox = regex_names(include_str!("../../src/inbox.ts"), "ASKABLE");
         for name in names {
             assert!(super::runnable(name), "{name}");

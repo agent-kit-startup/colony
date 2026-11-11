@@ -575,6 +575,11 @@ button.empty-state-btn:active { transform: scale(0.98); }
 @keyframes mc-spin { to { transform: rotate(360deg); } }
 .now-meta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .now-actions { margin-top: var(--mc-space-xs); }
+/* Current mission card (src/missioncard.ts): Kill is the secondary action, pushed to the row's
+   end; Open HANDOFF is a link in the header line, centred with the state pill. States change
+   no active look of their own: no left bar, no inset, no tinted fill. */
+.now-actions .card-kill { margin-left: auto; }
+.card-aside button.link { align-self: center; }
 .run-meta { display: inline-flex; gap: var(--mc-space-md); flex: none; font-size: var(--mc-chrome-meta-size); color: var(--text-muted); white-space: nowrap; }
 
 button.link { background: transparent; border-color: transparent; color: var(--blue); padding: 1px 4px; font-size: var(--mc-chrome-subtitle-size); align-self: flex-start; min-height: 0; }
