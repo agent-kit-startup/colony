@@ -103,7 +103,7 @@ export class FileTree {
     await this.refresh();
   }
 
-  /** View → Reveal active file: open its folders, select and focus it, scroll it into view. */
+  /** Go → Reveal active file: open its folders, select and focus it, scroll it into view. */
   async revealActive(): Promise<boolean> {
     if (!this.active.startsWith(`${this.root}/`)) return false;
     this.query = "";

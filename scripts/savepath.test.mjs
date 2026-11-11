@@ -1,7 +1,7 @@
 // Save as… path rules (src/savepath.ts). Node strips the types (Node 22.18 or later). Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SHORTCUTS, saveAsInitial, saveAsTarget } from "../src/savepath.ts";
+import { SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "../src/savepath.ts";
 
 const root = "/home/u/ws";
 const from = "/home/u/ws/docs/a.md";
@@ -39,4 +39,24 @@ test("Save has a shortcut for the palette and no accelerator in the menu", async
   assert.deepEqual(file.filter((i) => i.id === "save" || i.id === "save-as").map((i) => i.label), ["Save", "Save as…"]);
   assert.ok(file.every((i) => !/[&_]/.test(i.label ?? "")), "no mnemonics");
   assert.ok(file.every((i) => !("accelerator" in i)), "no accelerators");
+});
+
+test("Help > Keyboard shortcuts lists every bound key once: the menu actions, Ctrl+1..9, Ctrl+W", async () => {
+  const fs = await import("node:fs/promises");
+  const menu = JSON.parse(await fs.readFile(new URL("../src/menu.json", import.meta.url), "utf8"));
+  const items = menu.menus.flatMap((m) => m.items.filter((i) => i.id));
+  const rail = ["Cockpit", "Queue", "Inbox", "Chats", "Flight Log", "Review", "Ship", "Activity", "Terminals", "Processes"];
+  const rows = shortcutRows(items, rail);
+  // Every SHORTCUTS id is a menu item, so no bound key is missing from the panel.
+  for (const id of Object.keys(SHORTCUTS)) assert.ok(items.some((i) => i.id === id), `${id} is a menu item`);
+  assert.equal(rows.length, Object.keys(SHORTCUTS).length + 9 + 1);
+  assert.equal(new Set(rows.map((r) => r.keys)).size, rows.length, "no key twice");
+  assert.deepEqual(rows.find((r) => r.keys === "Ctrl+P"), { keys: "Ctrl+P", name: "Go to file" });
+  assert.deepEqual(rows.find((r) => r.keys === "Alt+Left"), { keys: "Alt+Left", name: "Back" });
+  assert.deepEqual(rows.find((r) => r.keys === "Ctrl+7"), { keys: "Ctrl+7", name: "Go to Ship" });
+  assert.ok(!rows.some((r) => r.keys === "Ctrl+10"), "the rail's tenth item has no key");
+  assert.deepEqual(rows.at(-1), { keys: "Ctrl+W", name: "Close the active tab" });
+  // The keys the handler binds in src/main.ts are the ones the table names.
+  const main = await fs.readFile(new URL("../src/main.ts", import.meta.url), "utf8");
+  for (const id of ["open-folder", "quick-open", "commands", "open-in-editor", "new-terminal", "new-window"]) assert.ok(main.includes(`runAction("${id}")`), `${id} bound in the keyboard handler`);
 });

@@ -1,12 +1,11 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File, View (the rail items in rail order, Plans, then the panels), Run, Help. `config` is the action rows of Workspace → Config, which holds settings only (src/main.ts renders them after its Skin, Title bar and Rail choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files), View (the rail items in rail order, Plans, then the Explorer and the data reload), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of Workspace → Config, which holds settings only (src/main.ts renders them after its Skin, Title bar and Rail choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
       "items": [
         { "id": "new-window", "label": "New window" },
         { "id": "open-folder", "label": "Open folder…" },
-        { "id": "run-elsewhere", "label": "Run plan in another folder…" },
         { "separator": true },
         { "id": "new-file", "label": "New file" },
         { "id": "new-folder", "label": "New folder" },
@@ -16,6 +15,7 @@
         { "separator": true },
         { "id": "open-in-editor", "label": "Open in editor" },
         { "id": "file-manager", "label": "Open in terminal file manager" },
+        { "separator": true },
         { "id": "settings", "label": "Settings (settings.json)" },
         { "separator": true },
         { "id": "close-window", "label": "Close window" }
@@ -38,21 +38,38 @@
         { "id": "view:colony", "label": "Colony" },
         { "id": "view:plans", "label": "Plans" },
         { "separator": true },
+        { "id": "explorer", "label": "Show or hide the Explorer" },
+        { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },
+        { "id": "explorer-refresh", "label": "Refresh the Explorer" },
+        { "separator": true },
+        { "id": "refresh", "label": "Reload Mission Control data" }
+      ]
+    },
+    {
+      "label": "Go",
+      "items": [
+        { "id": "quick-open", "label": "Go to file…" },
+        { "id": "commands", "label": "Commands…" },
+        { "id": "explorer-reveal", "label": "Reveal active file in the Explorer" },
+        { "separator": true },
+        { "id": "nav-back", "label": "Back" },
+        { "id": "nav-forward", "label": "Forward" }
+      ]
+    },
+    {
+      "label": "Terminal",
+      "items": [
+        { "id": "new-terminal", "label": "New shell terminal" },
+        { "separator": true },
         { "id": "terminal", "label": "Show or hide the terminal" },
+        { "separator": true },
         { "id": "dock:bottom", "label": "Terminal at the bottom" },
         { "id": "dock:top", "label": "Terminal at the top" },
         { "id": "dock:side", "label": "Terminal at the side" },
+        { "separator": true },
         { "id": "term-to-panel", "label": "Move terminal to the panel" },
         { "id": "term-to-editor", "label": "Move terminal to the editor area" },
-        { "id": "term-placement-reset", "label": "Reset terminal placements" },
-        { "id": "explorer", "label": "Show or hide the Explorer" },
-        { "id": "explorer-reveal", "label": "Reveal active file in the Explorer" },
-        { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },
-        { "id": "explorer-refresh", "label": "Refresh the Explorer" },
-        { "id": "quick-open", "label": "Go to file…" },
-        { "id": "commands", "label": "Commands…" },
-        { "separator": true },
-        { "id": "refresh", "label": "Reload Mission Control data" }
+        { "id": "term-placement-reset", "label": "Reset terminal placements" }
       ]
     },
     {
@@ -60,22 +77,26 @@
       "items": [
         { "id": "run-plan", "label": "Run plan…" },
         { "id": "run-queue", "label": "Run queue…" },
-        { "id": "interactive", "label": "Interactive agent" },
-        { "id": "start-project", "label": "Start a project…" },
-        { "id": "backlog-add", "label": "Create plan (backlog)…" },
+        { "id": "run-elsewhere", "label": "Run plan in another folder…" },
         { "separator": true },
-        { "id": "new-terminal", "label": "New shell terminal" },
-        { "id": "engine", "label": "Engine…" }
+        { "id": "interactive", "label": "Interactive agent" },
+        { "separator": true },
+        { "id": "start-project", "label": "Start a project…" },
+        { "id": "backlog-add", "label": "Create plan (backlog)…" }
       ]
     },
     {
       "label": "Help",
       "items": [
-        { "id": "about", "label": "About Colony…" }
+        { "id": "about", "label": "About Colony…" },
+        { "separator": true },
+        { "id": "shortcuts", "label": "Keyboard shortcuts…" },
+        { "id": "check-updates", "label": "Check for updates" }
       ]
     }
   ],
   "config": [
+    { "id": "engine", "label": "Engine…", "title": "The Agent Kit engine Colony runs: version, contracts, Node, install and update" },
     { "id": "omarchy", "label": "Omarchy integration…", "title": "Bar widget and menu entries for omarchy-shell (opt-in, removable)", "omarchyOnly": true }
   ]
 }

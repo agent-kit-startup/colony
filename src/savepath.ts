@@ -13,7 +13,23 @@ export const SHORTCUTS: Readonly<Record<string, string>> = {
   "open-in-editor": "Ctrl+Shift+E",
   "new-terminal": "Ctrl+Shift+T",
   terminal: "Ctrl+`",
+  "nav-back": "Alt+Left",
+  "nav-forward": "Alt+Right",
 };
+
+export interface ShortcutRow { keys: string; name: string }
+
+/** Help → Keyboard shortcuts…: one row per key the window's keyboard handler binds. First the
+ *  menu actions of SHORTCUTS, in the order of `items` (the menu order, each with its menu
+ *  label), then Ctrl+1..9 for the first nine rail items (`rail`: their labels, in rail order)
+ *  and Ctrl+W, which are no menu action. */
+export function shortcutRows(items: readonly { id: string; label: string }[], rail: readonly string[]): ShortcutRow[] {
+  return [
+    ...items.flatMap((i) => (SHORTCUTS[i.id] ? [{ keys: SHORTCUTS[i.id], name: i.label.replace(/…$/, "") }] : [])),
+    ...rail.slice(0, 9).map((label, n) => ({ keys: `Ctrl+${n + 1}`, name: `Go to ${label}` })),
+    { keys: "Ctrl+W", name: "Close the active tab" },
+  ];
+}
 
 export type SaveAsTarget = { path: string } | { error: string };
 

@@ -125,18 +125,22 @@ test("a folder covers what is inside it", () => {
   assert.deepEqual(outermost(["/w/src", "/w/src/a.ts", "/w/srcx", "/w/README.md"]), ["/w/src", "/w/srcx", "/w/README.md"]);
 });
 
-test("the tree wires the map on its own element; the View ids exist with their actions", () => {
+test("the tree wires the map on its own element; the Explorer ids exist with their actions", () => {
   const tree = read("src/filetree.ts");
   assert.match(tree, /el\.addEventListener\("keydown"/);
   assert.match(tree, /closest\("\.tree-input"\)/, "the inline name field keeps its keys");
   const menu = JSON.parse(read("src/menu.json"));
-  const view = menu.menus.find((m) => m.label === "View").items.map((i) => i.id);
+  const ids = (label) => menu.menus.find((m) => m.label === label).items.map((i) => i.id);
+  const view = ids("View");
   const main = read("src/main.ts");
-  for (const id of ["explorer-reveal", "explorer-collapse", "explorer-refresh"]) {
+  // Collapse and Refresh sit in View after Show or hide the Explorer; Reveal active file is
+  // a Go item (kit ADR 2026-10-24 amend 2026-11-11).
+  for (const id of ["explorer-collapse", "explorer-refresh"]) {
     assert.ok(view.includes(id), `${id} in View`);
-    assert.ok(main.includes(`"${id}": () =>`), `${id} in ACTIONS`);
+    assert.ok(view.indexOf("explorer") < view.indexOf(id), `${id} after Show or hide the Explorer`);
   }
-  assert.ok(view.indexOf("explorer") < view.indexOf("explorer-reveal"), "after Show or hide the Explorer");
+  assert.ok(ids("Go").includes("explorer-reveal"), "explorer-reveal in Go");
+  for (const id of ["explorer-reveal", "explorer-collapse", "explorer-refresh"]) assert.ok(main.includes(`"${id}": () =>`), `${id} in ACTIONS`);
 });
 
 test("focus and selection change only the 1px border colour", () => {

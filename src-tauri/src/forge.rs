@@ -277,7 +277,7 @@ pub fn kit_promote_wait(state: State<'_, AppState>, number: u64) -> Result<Value
 
 /// The kit's JSON, or a clear note when the engine predates `agent-kit promote`.
 fn promote_json(out: std::process::Output) -> Result<Value, String> {
-    crate::conflicts::kit_json(&out).map_err(|e| if e.contains("agent-kit conflicts") { "This engine has no `agent-kit promote` (kit #1417/#1418): update it in Run → Engine…, or check the base branch rules on the forge".into() } else { e })
+    crate::conflicts::kit_json(&out).map_err(|e| if e.contains("agent-kit conflicts") { "This engine has no `agent-kit promote` (kit #1417/#1418): update it in Workspace → Config → Engine…, or check the base branch rules on the forge".into() } else { e })
 }
 
 /// Recent workflow runs, optionally only those of `branch`.

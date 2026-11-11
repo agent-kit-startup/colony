@@ -1,4 +1,5 @@
-//! Native menu bar (File, View, Run, Help). The items come from `src/menu.json`, the one
+//! Native menu bar (File, View, Go, Terminal, Run, Help; kit ADR 2026-10-24 amend 2026-11-11).
+//! The items come from `src/menu.json`, the one
 //! command source: its `menus` are this bar, its `config` the action rows of Workspace →
 //! Config (settings only; the window renders those, never here). Every id sits in exactly one
 //! of the two and is a key of the window's action map (src/main.ts `runAction`); the tests
@@ -123,7 +124,7 @@ pub fn build<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
 }
 
 /// Custom title bar: no GTK menu bar above the webview (it would sit over Colony's own
-/// title bar); the title bar's File / View / Run / Help buttons open the same menu, by
+/// title bar); the title bar's File / View / Go / Terminal / Run / Help buttons open the same menu, by
 /// index, as a native popup under the button (logical coordinates in the window).
 #[tauri::command]
 pub fn menu_popup(window: tauri::WebviewWindow, index: usize, x: f64, y: f64) -> Result<(), String> {
@@ -176,7 +177,7 @@ mod tests {
     fn spec_parses_with_unique_plain_ids() {
         let spec = parse().unwrap();
         let labels: Vec<&str> = spec.menus.iter().map(|m| m.label.as_str()).collect();
-        assert_eq!(labels, ["File", "View", "Run", "Help"]);
+        assert_eq!(labels, ["File", "View", "Go", "Terminal", "Run", "Help"]);
         let ids = ids();
         assert!(ids.len() >= 20, "{ids:?}");
         for want in ["open-folder", "close-window", "terminal", "quick-open", "commands", "run-plan", "interactive", "about"] {
@@ -184,15 +185,47 @@ mod tests {
         }
     }
 
-    /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
-    /// 2026-11-07): the two move actions live in View, after the dock items, so the palette
-    /// lists them (its keyboard path; no accelerator).
-    #[test]
-    fn terminal_move_actions_are_in_view() {
+    /// The ids of one menu of the bar, in order (separators left out).
+    fn menu_ids(label: &str) -> Vec<String> {
         let spec = parse().unwrap();
-        let view: Vec<&str> = spec.menus.iter().find(|m| m.label == "View").unwrap().items.iter().map(|i| i.id.as_str()).collect();
-        let at = |id: &str| view.iter().position(|i| *i == id).unwrap_or_else(|| panic!("{id} not in View: {view:?}"));
-        assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{view:?}");
+        let m = spec.menus.iter().find(|m| m.label == label).unwrap_or_else(|| panic!("no {label} menu"));
+        m.items.iter().filter(|i| !i.separator).map(|i| i.id.clone()).collect()
+    }
+
+    /// The six-menu tree (kit ADR 2026-10-24 amend 2026-11-11, point 1): each id in the menu
+    /// its name suggests, in this order. Moving an id to another menu is a decision.
+    #[test]
+    fn the_six_menus_hold_their_ids() {
+        assert_eq!(menu_ids("File"), ["new-window", "open-folder", "new-file", "new-folder", "save", "save-as", "open-in-editor", "file-manager", "settings", "close-window"]);
+        let view = menu_ids("View");
+        assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 13, "{view:?}");
+        assert_eq!(view[..13].iter().filter(|i| i.starts_with("view:")).count(), 13, "the views come first: {view:?}");
+        assert_eq!(view[12], "view:plans", "Plans after the rail items: {view:?}");
+        assert_eq!(view[13..], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
+        assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
+        assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
+        assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
+        assert_eq!(menu_ids("Help"), ["about", "shortcuts", "check-updates"]);
+        // Engine… is a setting: a Config row, not a Run item.
+        assert!(config_ids().iter().any(|i| i == "engine") && !ids().iter().any(|i| i == "engine"));
+    }
+
+    /// The rail items of the View menu follow the rail's own order (main.ts RAIL).
+    #[test]
+    fn view_lists_the_rail_in_rail_order() {
+        let rail: Vec<String> = main_ts_block("const RAIL: RailItem[] = [", "\n];").lines().filter_map(|l| l.trim_start().strip_prefix("{ id: \"")?.split('"').next().map(|id| format!("view:{id}"))).collect();
+        assert_eq!(rail.len(), 12, "{rail:?}");
+        assert_eq!(menu_ids("View")[..12], rail[..]);
+    }
+
+    /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
+    /// 2026-11-07): the two move actions live in the Terminal menu, after the dock items, so
+    /// the palette lists them (its keyboard path; no accelerator).
+    #[test]
+    fn terminal_move_actions_are_in_terminal() {
+        let term = menu_ids("Terminal");
+        let at = |id: &str| term.iter().position(|i| i == id).unwrap_or_else(|| panic!("{id} not in Terminal: {term:?}"));
+        assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{term:?}");
     }
 
     const MAIN_TS: &str = include_str!("../../src/main.ts");
@@ -252,9 +285,10 @@ mod tests {
     }
 
     /// The settings Workspace → Config may hold as action rows (Skin, Title bar and Rail are
-    /// markup in main.ts). Views, commands, About and Engine live in the menu bar: a new id
-    /// here is a decision.
-    const CONFIG_SETTINGS: &[&str] = &["omarchy"];
+    /// markup in main.ts): the Engine panel (kit ADR 2026-10-24 amend 2026-11-11, point 2) and
+    /// the Omarchy integration. Views, commands and About live in the menu bar: a new id here
+    /// is a decision.
+    const CONFIG_SETTINGS: &[&str] = &["engine", "omarchy"];
 
     #[test]
     fn config_holds_settings_only() {
