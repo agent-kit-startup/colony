@@ -92,7 +92,7 @@ export class TermView {
   private offSkin: () => void;
 
   /** Spawn the shell, or `command` (argv), in the opened folder (or `cwd`, a folder in it). */
-  async spawn(command?: string[], cwd?: string): Promise<boolean> {
+  async spawn(command?: string[], cwd?: string, hostEnv?: boolean): Promise<boolean> {
     const channel = new Channel<PtyEvent>();
     channel.onmessage = (m) => {
       if (m.kind === "data") {
@@ -108,7 +108,7 @@ export class TermView {
     };
     this.fit();
     try {
-      this.id = await api.ptySpawn(this.term.cols, this.term.rows, channel, command, cwd);
+      this.id = await api.ptySpawn(this.term.cols, this.term.rows, channel, command, cwd, hostEnv);
     } catch (e) {
       this.term.write(`\x1b[31m${errText(e)}\x1b[0m\r\n`);
       this.exited = true;

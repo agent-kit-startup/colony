@@ -93,6 +93,12 @@ fn inside(entry: &[u8], roots: &[&[u8]]) -> bool {
         .any(|root| entry.starts_with(root) && (entry.len() == root.len() || entry[root.len()] == b'/'))
 }
 
+/// The changes for a host program started by this process (its own environment and `APPDIR`);
+/// empty outside an AppImage.
+pub fn process_host_env_changes() -> Vec<EnvChange> {
+    host_env_changes(std::env::vars_os(), &appdir_roots(std::env::var_os("APPDIR").as_deref()))
+}
+
 /// A command for a host program, with `changes` applied over the inherited environment. The
 /// program is looked up in the changed `PATH`.
 pub fn host_command(program: impl AsRef<OsStr>, changes: &[EnvChange]) -> Command {

@@ -15,6 +15,7 @@
         { "id": "save-as", "label": "Save as…" },
         { "separator": true },
         { "id": "open-in-editor", "label": "Open in editor" },
+        { "id": "file-manager", "label": "Open in terminal file manager" },
         { "id": "settings", "label": "Settings (settings.json)" },
         { "separator": true },
         { "id": "close-window", "label": "Close window" }

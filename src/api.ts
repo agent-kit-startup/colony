@@ -96,6 +96,8 @@ export interface TickReview {
 }
 export interface FileVersions { before: string | null; after: string | null; note: string | null }
 export interface EditorLaunch { mode: "terminal" | "detached"; argv: string[]; source: string; label: string }
+/** Open in terminal file manager (filemanager.rs): `argv` empty means none on PATH, `hint` says what to install. */
+export interface FileManagerLaunch { argv: string[]; label: string; source: "settings" | "PATH" | ""; hint: string }
 /** Per folder. `chatModel`: the driver chat agent's model ("" or unset = small tier);
  *  `offerRelaunch`: offer a relaunch when a deferred gate moves in HANDOFF (default on);
  *  `tokenBudget`: per-run token budget the run views compare usage with (unset = none).
@@ -181,8 +183,9 @@ export const api = {
     invoke<TermLaunch>("term_launch", { kind: o.kind, engine: o.engine, model: o.model || null, prompt: o.prompt || null, resume: o.resume || null, dryRun: o.dryRun ?? null }),
   commandsCatalog: () => invoke<CommandsCatalog>("commands_catalog"),
   chatSessions: (vendor = "claude") => invoke<ChatList>("chat_sessions", { vendor }),
-  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[], cwd?: string) =>
-    invoke<number>("pty_spawn", { cols, rows, command: command ?? null, cwd: cwd ?? null, onEvent }),
+  /** `hostEnv`: start `command` with the environment it would have outside an AppImage. */
+  ptySpawn: (cols: number, rows: number, onEvent: Channel<PtyEvent>, command?: string[], cwd?: string, hostEnv?: boolean) =>
+    invoke<number>("pty_spawn", { cols, rows, command: command ?? null, cwd: cwd ?? null, hostEnv: hostEnv ?? null, onEvent }),
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
   ptyResize: (id: number, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
@@ -219,6 +222,7 @@ export const api = {
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),
   openInEditor: (path: string) => invoke<EditorLaunch>("open_in_editor", { path }),
+  fileManagerLaunch: () => invoke<FileManagerLaunch>("file_manager_launch"),
   /** A new Colony window on `folder`, or on the welcome screen (newwindow.rs). */
   spawnNewWindow: (folder?: string) => invoke<NewWindowLaunch>("spawn_new_window", { folder: folder ?? null }),
   reviewTicks: () => invoke<TickReview[]>("review_ticks"),

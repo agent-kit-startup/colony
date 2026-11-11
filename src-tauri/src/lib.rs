@@ -13,6 +13,7 @@ mod dashboard;
 mod deeplink;
 mod dragdrop;
 mod engine;
+mod filemanager;
 mod forge;
 mod gitops;
 mod hostreq;
@@ -344,6 +345,7 @@ pub fn run() {
             catalog::commands_catalog,
             chats::chat_sessions,
             pty::pty_spawn,
+            filemanager::file_manager_launch,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,

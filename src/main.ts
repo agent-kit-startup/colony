@@ -820,6 +820,23 @@ async function terminalHere(dir: string) {
   await made;
 }
 
+/** Open in terminal file manager (File menu, the Explorer's menu, the palette; shell ADR amend
+ *  2026-10-29 points 1 and 4): the `fileManager` setting or the first of yazi, lf, nnn, ranger
+ *  and broot on PATH, as a drawer tab in `dir` (default: the Explorer's selected folder, else
+ *  the root), with the host environment (no AppImage libraries). The Explorer refreshes when
+ *  that tab loses the focus or exits. None installed: the status line names what to install. */
+async function fileManagerHere(dir?: string) {
+  if (!workspace) return status("Open a folder first");
+  const into = dir ?? tree.targetDir();
+  const launch = await api.fileManagerLaunch();
+  if (!launch.argv.length) return status(launch.hint);
+  const where = into === workspace.root ? workspace.name : relPath(into);
+  const made = terminals.create(launch.argv, `${launch.label} ${where.slice(where.lastIndexOf("/") + 1)}`, into, { hostEnv: true, onLeave: () => void tree.refresh() });
+  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  await made;
+  status(`Opened ${launch.label} in ${where} (${launch.source === "settings" ? "settings.json fileManager" : "found on PATH"}); the Explorer refreshes when you leave it`);
+}
+
 /** The Explorer's own menu (right-click on a row or on the empty Explorer): contextual rows
  *  bound to the clicked path. New file / New folder are the File menu's actions with the row's
  *  folder as the target; the other rows need a path, so they have no menu-bar entry. */
@@ -873,6 +890,7 @@ function openTreeMenu(ctx: TreeContext) {
   }
   rows.push(
     row("tree-terminal", "Open terminal here", `New shell in ${where}`, () => terminalHere(dir)),
+    row("tree-file-manager", "Open in terminal file manager", `Your terminal file manager (yazi, lf, nnn, ranger or broot, or settings.json fileManager) in ${where}`, () => fileManagerHere(dir)),
     row("tree-editor", "Open in editor", `Open ${path ? relPath(path) : workspace.name} in your editor`, () => openInEditor(path ?? root)),
   );
   treeMenu.replaceChildren(...rows);
@@ -884,7 +902,7 @@ function openTreeMenu(ctx: TreeContext) {
 async function openSettings() {
   try {
     await openFile(await api.settingsEnsure());
-    status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the engine picker");
+    status("Colony settings: editor.command / editor.terminal; fileManager (Open in terminal file manager); workspaces.<folder>.backend is remembered by the engine picker");
   } catch (e) {
     status(`Settings: ${errText(e)}`);
   }
@@ -2191,6 +2209,7 @@ const ACTIONS: Record<string, () => unknown> = {
   save: () => saveActive(),
   "save-as": () => saveAs(),
   "open-in-editor": () => openInEditor(),
+  "file-manager": () => fileManagerHere(),
   settings: () => openSettings(),
   "close-window": () => closeWindow(),
   terminal: () => toggleTerminal(),
