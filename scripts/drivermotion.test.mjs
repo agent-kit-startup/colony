@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { enterPlays, IDLE_ROW, LOOP_MS, missionState, phaseDelay, PULSE_MS, queueStatusState, runState, STATE_TABLE, stateRow, STOPPED_REASON } from "../src/drivermotion.ts";
+import { cardEnters, ENTER_EVENTS, enterPlays, IDLE_ROW, LOOP_MS, missionState, phaseDelay, PULSE_MS, queueCard, queueStatusState, runState, STATE_TABLE, stateRow, STOPPED_REASON } from "../src/drivermotion.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const css = readFileSync(join(SRC, "styles.css"), "utf8");
@@ -85,4 +85,45 @@ test("CSS: tokens match, loops opt-in, reduced motion static, transform and opac
   assert.ok(!/will-change:/.test(css), "no will-change");
   // The Mode meta icon no longer spins next to the status ring (ADR point 2).
   assert.ok(!/now-meta-icon-executing/.test(css));
+});
+
+test("queue_state card: the event's own queue row, its tone and label (V2, ADR point 6)", () => {
+  assert.deepEqual(queueCard("running"), { state: "running", tone: "executing", label: "running" });
+  assert.deepEqual(queueCard("held: waiting for plan x"), { state: "held", tone: "awaiting", label: "held" });
+  assert.deepEqual(queueCard("stopped"), { state: "stopped", tone: "idle", label: "stopped" });
+  assert.deepEqual(queueCard("exhausted (deferred: colony-landing)"), { state: "exhausted", tone: "completed", label: "exhausted" });
+  // Outside the table: the static idle row, never the raw value as a state.
+  assert.deepEqual(queueCard("confirming"), { state: "idle", tone: "idle", label: "queue" });
+  assert.deepEqual(queueCard(null), { state: "idle", tone: "idle", label: "no status" });
+});
+
+test("transcript cards enter on a live, visible append only (V2, ADR point 5)", () => {
+  assert.deepEqual([...ENTER_EVENTS].sort(), ["hitl_gate", "queue_state", "run_end", "run_start", "tick_end", "tick_start"]);
+  for (const t of ENTER_EVENTS) {
+    assert.equal(cardEnters(t, true, true), true, t);
+    assert.equal(cardEnters(t, false, true), false, `${t}: a stored transcript or backfill never animates`);
+    assert.equal(cardEnters(t, true, false), false, `${t}: a hidden tab never animates`);
+  }
+  for (const t of ["agent_event", "log", "agent_text", "usage"]) assert.equal(cardEnters(t, true, true), false, t);
+});
+
+test("CSS (V2): crossfade and card enter are opt-in one-shots; transitions on the fast token, off under reduce", () => {
+  const noPref = (css.match(/@media \(prefers-reduced-motion: no-preference\) \{\n((?:  .*\n)+)\}/g) ?? []).join("\n");
+  assert.match(noPref, /\.state-fade \{ animation: state-fade var\(--motion-fast\) ease-out both; \}/);
+  assert.match(noPref, /\.tr-enter \{ animation: tr-enter var\(--motion-fast\) ease-out both; \}/);
+  const outside = css.split(/@media \(prefers-reduced-motion: no-preference\) \{\n(?:  .*\n)+\}/).join("");
+  assert.ok(!/\.(state-fade|tr-enter) \{[^}]*animation/.test(outside), "a crossfade or card enter outside no-preference");
+  for (const k of ["state-fade", "tr-enter", "gate-flash"]) {
+    const body = css.match(new RegExp(`@keyframes ${k} \\{(.*)\\}`))[1];
+    for (const prop of body.matchAll(/([a-z-]+):/g)) assert.ok(["opacity", "transform"].includes(prop[1]), `${k} animates ${prop[1]}`);
+  }
+  // The revealed gate card: once, no box-shadow; reduced motion keeps the static outline.
+  assert.match(css, /\.gate\.flash \{ animation: gate-flash var\(--motion-enter\) ease-out; \}/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.gate\.flash \{ animation: none; outline: 2px solid var\(--yellow\); \} \}/);
+  // No 0.2s card transitions left: every border-colour transition is on --motion-fast.
+  assert.ok(!/transition: [^;]*0\.2s/.test(css), "a 0.2s transition left");
+  assert.match(css, /\.chip, \.tr-card, \.tr-gate \{ transition: border-color var\(--motion-fast\) ease-out; \}/);
+  const reduce = css.match(/@media \(prefers-reduced-motion: reduce\) \{ ([^{]*) \{ transition: none; \} \}/);
+  assert.ok(reduce, "a reduce block turns the transitions off");
+  for (const sel of [".card", ".chip", ".tr-card", ".tr-gate", ".q-row"]) assert.ok(reduce[1].split(", ").includes(sel), `${sel} keeps a transition under reduce`);
 });

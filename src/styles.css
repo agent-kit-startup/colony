@@ -409,8 +409,11 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .inbox-line { font-family: var(--mc-font-mono); font-size: 12px; color: var(--text-secondary); word-break: break-word; }
 /* The question before a gate line, in full (untrusted text, rendered as text only). */
 .gate-prompt { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.45; color: var(--text-primary); max-height: 18em; overflow: auto; }
-.gate.flash { animation: gate-flash 1.2s ease-out 2; }
-@keyframes gate-flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px var(--yellow); } }
+/* A revealed card (notification click, a card a button just created): one opacity step back to
+   full, once. Motion ADR point 6: no box-shadow and no second flash; the gate's own attention is
+   the pulse on its state mark. Reduced motion keeps the static outline. */
+.gate.flash { animation: gate-flash var(--motion-enter) ease-out; }
+@keyframes gate-flash { from { opacity: 0.4; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .gate.flash { animation: none; outline: 2px solid var(--yellow); } }
 /* Mission: open gates pinned above the hero. No scroller of its own (the view is the one
    scroller): each card shows its answer controls first and the question clamped to three
@@ -446,7 +449,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 /* No max-width: a cap left a wide empty gutter at 1920px while text truncated inside. */
 .cv-body { padding: var(--mc-space-xl) var(--mc-space-xl) var(--mc-space-2xl); display: flex; flex-direction: column; gap: var(--mc-space-xl); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
-.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color 0.2s, box-shadow 0.2s; }
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color var(--motion-fast) ease-out, box-shadow var(--motion-fast) ease-out; }
 .card:hover { border-color: var(--border-active); box-shadow: var(--mc-shadow-card-hover); }
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: var(--mc-space-md); margin-bottom: var(--mc-space-sm); min-height: 22px; }
 .card-title { white-space: nowrap; display: inline-flex; align-items: center; gap: var(--mc-chrome-label-gap); min-width: 0; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); line-height: 1.2; color: var(--text-primary); }
@@ -509,8 +512,21 @@ button.empty-state-btn:active { transform: scale(0.98); }
   .state-mark.motion-loop .state-ring { display: block; animation: mc-spin var(--motion-loop) linear infinite; }
   .state-mark.motion-loop .state-icon { transform: scale(0.75); }
   .state-mark.motion-pulse .state-icon { animation: state-pulse var(--motion-pulse) ease-in-out infinite; }
+  .state-fade { animation: state-fade var(--motion-fast) ease-out both; }
+  .tr-enter { animation: tr-enter var(--motion-fast) ease-out both; }
 }
 @media (prefers-reduced-motion: reduce) { .state-mark.motion-enter .state-icon { animation: none; } }
+/* State changes (motion ADR point 5). A state pill, chip or line crossfades in when its state
+   changed (src/icons.ts crossfade; a re-render in the same state stays still); a transcript
+   card or tick row enters once on a live append (src/transcript.ts card). Both are one-shots and
+   opt-in above, so reduced motion has neither. The 1px border colour of a chip, transcript card
+   or row transitions over --motion-fast where the element is kept across the change (the run
+   chip, a gate card being answered); the cockpit rebuilds its nodes, so there the crossfade is
+   the transition. Reduced motion: the colour changes at once. */
+@keyframes state-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tr-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.chip, .tr-card, .tr-gate { transition: border-color var(--motion-fast) ease-out; }
+@media (prefers-reduced-motion: reduce) { .card, .chip, .tr-card, .tr-gate, .plan-list > .plan-row, .plan-wrap, .q-row { transition: none; } }
 .pill-executing { background: var(--blue-bg); color: var(--blue); }
 .pill-running { background: var(--green-bg); color: var(--green); }
 .pill-awaiting { background: var(--yellow-bg); color: var(--yellow); }
@@ -665,7 +681,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 
 /* Plans (dashboard .plan-accordion-item) and Queue rows. */
 .plan-list, .q-list { display: flex; flex-direction: column; gap: var(--mc-space-md); }
-.plan-list > .plan-row, .plan-wrap, .q-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius); transition: border-color 0.2s; }
+.plan-list > .plan-row, .plan-wrap, .q-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius); transition: border-color var(--motion-fast) ease-out; }
 .plan-list > .plan-row:hover, .plan-wrap:hover, .q-row:hover { border-color: var(--border-active); }
 .plan-row, .q-row { display: flex; align-items: flex-start; gap: 10px; padding: var(--mc-card-padding-dense); min-width: 0; cursor: pointer; }
 .plan-list > .plan-row.active, .plan-wrap:has(.plan-row.active) { border-color: var(--blue); }
@@ -805,6 +821,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-start { border-color: var(--border-active); }
 .tr-end.ok { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
 .tr-end.bad { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.tr-queue { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; }
 .tr-tick { display: flex; align-items: center; gap: 2px; margin-top: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--blue); font-size: 12px; flex-wrap: wrap; }
 .tr-tick .link { font-family: var(--mc-font-mono); font-weight: 400; }
 .tr-line { font-size: 12px; white-space: pre-wrap; word-break: break-word; }

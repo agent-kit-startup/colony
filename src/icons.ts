@@ -101,8 +101,44 @@ export function icon(kind: IconKind, cls = "space-icon"): SVGSVGElement {
  *  coordinates), clear of every glyph, which styles.css scales inside it while it turns. */
 const RING = '<path d="M8 0.5A7.5 7.5 0 1 1 0.5 8"/>';
 
-/** Last state drawn per mark key, so the one-shot enter plays on a change only. */
+/** Last state drawn per key, so a one-shot (the mark's enter, a pill's crossfade) plays on a
+ *  change only. */
 const markState = new Map<string, string>();
+
+/** Records `state` for `key` and says whether it changed since the key was last drawn (never on
+ *  a first sighting: a first render or a stored transcript stays still). */
+export function stateChanged(key: string, state: string): boolean {
+  const prev = markState.get(key);
+  markState.set(key, state);
+  return enterPlays(prev, state);
+}
+
+/**
+ * Adds a one-shot animation class and drops it once the animation ends or is cancelled. A
+ * hidden view shown again re-attaches its old nodes, and CSS restarts every animation of a node
+ * that comes back from display: none: without this a state change would replay on each visit.
+ * `on`: the element that runs the animation (default `el`); `after`: the class left in its place.
+ */
+export function oneShot<T extends Element>(el: T, cls: string, on: Element = el, after = ""): T {
+  el.classList.add(cls);
+  const done = (e: Event) => {
+    if (e.target !== on) return;
+    if (after) el.classList.replace(cls, after);
+    else el.classList.remove(cls);
+    on.removeEventListener("animationend", done);
+    on.removeEventListener("animationcancel", done);
+  };
+  on.addEventListener("animationend", done);
+  on.addEventListener("animationcancel", done);
+  return el;
+}
+
+/** The state-change crossfade of a pill, chip or line (ADR point 5): `el` fades in over
+ *  --motion-fast when the thing `key` names changed state since it was last drawn. Keys are
+ *  per surface (the same launch in two cards has two keys), so each copy plays its own fade. */
+export function crossfade<T extends Element>(el: T, key: string, state: string): T {
+  return stateChanged(`fade:${key}`, state) ? oneShot(el, "state-fade") : el;
+}
 
 /**
  * A driver state mark (12px, inline in a pill or chip): the state's icon with its motion
@@ -115,9 +151,8 @@ export function stateMark(group: StateGroup, state: string, opts: { key?: string
   // A still mark neither reads nor records the key: a still copy of a run's state drawn earlier
   // in the same render must not use up the enter of the mark that animates it.
   const key = opts.still ? "" : (opts.key ?? "");
-  const prev = key ? markState.get(key) : undefined;
-  if (key) markState.set(key, state);
-  const motion = opts.still || (row.motion === "enter" && !enterPlays(prev, state)) ? "none" : row.motion;
+  const changed = key ? stateChanged(key, state) : false;
+  const motion = opts.still || (row.motion === "enter" && !changed) ? "none" : row.motion;
   const el = document.createElement("span");
   el.className = `state-mark motion-${motion}`;
   el.dataset.state = `${group}:${row.known ? state : "idle"}`;
@@ -125,6 +160,9 @@ export function stateMark(group: StateGroup, state: string, opts: { key?: string
   el.setAttribute("aria-hidden", "true");
   const glyph = icon(row.icon, "state-icon");
   el.append(glyph);
+  // The enter is the icon's animation: once it ends the mark is static, so a view shown again
+  // does not replay it.
+  if (motion === "enter") oneShot(el, "motion-enter", glyph, "motion-none");
   const delay = phaseDelay(motion, performance.now());
   if (motion === "pulse") glyph.style.animationDelay = delay;
   if (motion === "loop") {
