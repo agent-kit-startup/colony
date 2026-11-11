@@ -49,6 +49,7 @@ import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { runState } from "./drivermotion";
+import { motionSmoke } from "./motionsmoke";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
 import { workbenchSmoke } from "./worksmoke";
@@ -4490,6 +4491,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       }
       await log("card-pre-1.5", !!o.dialog && old.protocol === "1.4.0" && old.running === true && old.face === "kill" && old.row === "toggle,open,edit,cancel,plans" && String(old.tip).includes("1.4.0") && old.exit === 0 && old.sent === "", old);
       if (o.r && !o.r.running) await closeTab(`run:${o.r.id}`);
+      // Driver motion (src/motionsmoke.ts): one fake run through running, gate, running and done,
+      // read on the run chip, the transcript and the cockpit, with motion allowed and under reduce.
+      await motionSmoke({ log, wait, until, shot, showTab, view, onMission, playRun, closeTab });
       pick(controls.model, "smoke-model");
       await wait(300);
     }

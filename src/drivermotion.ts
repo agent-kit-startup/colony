@@ -86,6 +86,13 @@ export function enterPlays(prev: string | undefined, state: string): boolean {
   return prev !== undefined && prev !== state;
 }
 
+/** The motion a mark draws, i.e. its `motion-<m>` class (src/icons.ts stateMark): a `still` copy
+ *  never moves (one loop per card, ADR point 2) and the one-shot enter plays on a state change
+ *  only; a loop or a pulse belongs to the state itself, so it does not wait for a change. */
+export function markMotion(row: StateRow, still: boolean, changed: boolean): Motion {
+  return still || (row.motion === "enter" && !changed) ? "none" : row.motion;
+}
+
 /** Pill tone of a queue state (a subset of ui.ts Tone; the Queue hero's tones): `running` is executing. */
 export type QueueTone = "executing" | "awaiting" | "idle" | "completed";
 const QUEUE_TONE: Record<string, QueueTone> = { running: "executing", held: "awaiting", stopped: "idle", exhausted: "completed" };
