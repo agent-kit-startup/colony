@@ -72,6 +72,7 @@ pub fn pty_spawn(
     rows: u16,
     command: Option<Vec<String>>,
     cwd: Option<String>,
+    host_env: Option<bool>,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32, String> {
     // `cwd`: a folder of the workspace (Explorer → Open terminal here); else the root.
@@ -95,6 +96,11 @@ pub fn pty_spawn(
         _ => CommandBuilder::new(tools::user_shell()),
     };
     cmd.cwd(&cwd);
+    // `host_env`: the program gets the environment it would have outside an AppImage (the
+    // terminal file manager: a host TUI must not load the AppImage's bundled libraries).
+    if host_env.unwrap_or(false) {
+        apply_host_env(&mut cmd);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "colony");
@@ -136,6 +142,25 @@ pub fn pty_spawn(
         let _ = on_event.send(PtyEvent::Exit { code });
     });
     Ok(id)
+}
+
+/// The AppImage's own environment off a PTY command (appimage.rs); outside an AppImage nothing
+/// changes.
+fn apply_host_env(cmd: &mut CommandBuilder) {
+    #[cfg(target_os = "linux")]
+    apply_env_changes(cmd, &crate::appimage::process_host_env_changes());
+    #[cfg(not(target_os = "linux"))]
+    let _ = cmd;
+}
+
+#[cfg(target_os = "linux")]
+fn apply_env_changes(cmd: &mut CommandBuilder, changes: &[crate::appimage::EnvChange]) {
+    for (name, value) in changes {
+        match value {
+            Some(value) => cmd.env(name, value),
+            None => cmd.env_remove(name),
+        }
+    }
 }
 
 #[tauri::command]
@@ -180,6 +205,29 @@ fn proc_cwd(pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{proc_cwd, take_utf8};
+
+    /// A PTY started with the host environment: the AppImage's library entries and its runtime
+    /// variables are gone, the host's own entries stay.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn host_env_drops_the_appimage_entries() {
+        use std::ffi::{OsStr, OsString};
+        let m = "/tmp/.mount_ColonyXYZ";
+        let vars: Vec<(OsString, OsString)> = [("APPDIR", m.to_string()), ("APPIMAGE", "/home/me/Colony.AppImage".into()), ("LD_LIBRARY_PATH", format!("{m}/usr/lib/:{m}/lib64/:/opt/host/lib")), ("PATH", format!("{m}/usr/bin/:/usr/bin")), ("HOME", "/home/me".into())]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        let changes = crate::appimage::host_env_changes(vars, &[std::path::PathBuf::from(m)]);
+        let mut cmd = portable_pty::CommandBuilder::new("yazi");
+        cmd.env("APPDIR", m);
+        cmd.env("APPIMAGE", "/home/me/Colony.AppImage");
+        cmd.env("LD_LIBRARY_PATH", format!("{m}/usr/lib/:/opt/host/lib"));
+        super::apply_env_changes(&mut cmd, &changes);
+        assert_eq!(cmd.get_env("APPDIR"), None);
+        assert_eq!(cmd.get_env("APPIMAGE"), None);
+        assert_eq!(cmd.get_env("LD_LIBRARY_PATH"), Some(OsStr::new("/opt/host/lib")));
+        assert_eq!(cmd.get_env("PATH"), Some(OsStr::new("/usr/bin")));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

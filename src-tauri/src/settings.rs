@@ -211,6 +211,10 @@ pub fn title_bar_mode(path: &Path, tiling: bool) -> &'static str {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub editor: EditorSettings,
+    /// Open in terminal file manager: a string (split on whitespace) or an argv array; unset =
+    /// the first of yazi, lf, nnn, ranger and broot on PATH (filemanager.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_manager: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "is_default_ui")]
     pub ui: UiSettings,
     pub workspaces: BTreeMap<String, WorkspaceSettings>,
