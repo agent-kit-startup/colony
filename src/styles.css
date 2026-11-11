@@ -938,11 +938,12 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 @media (max-width: 900px) { #btn-quick, #btn-editor { display: none; } }
 
 /* Engine panel (src/engine.ts) */
-#engine-panel, #about-panel, #omarchy-panel { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+#engine-panel, #about-panel, #omarchy-panel, #shortcuts-panel { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
 .engine-box { width: min(680px, 92vw); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; max-height: 80vh; overflow: auto; }
 .engine-row { display: grid; grid-template-columns: 130px 1fr; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
 .engine-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .engine-msg { font-size: 12px; overflow-wrap: anywhere; }
+.shortcut-row kbd { justify-self: start; }
 .engine-box .warn, #st-engine.warn { color: var(--yellow); }
 .engine-box .bad, #st-engine.bad { color: var(--red); }
 #st-engine { cursor: pointer; margin-right: 10px; }

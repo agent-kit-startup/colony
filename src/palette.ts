@@ -1,4 +1,4 @@
-// Command palette (Ctrl+Shift+P, View → Commands): the opened folder's slash commands from
+// Command palette (Ctrl+Shift+P, Go → Commands): the opened folder's slash commands from
 // the kit's versioned catalog (`agent-kit commands --json`, read by src-tauri catalog.rs).
 // Colony keeps no list: an engine without the catalog shows "Update the engine".
 //  - Run: the row's name is in vendor.rs PROMPT_SLASH (decided on the Rust side, `run`);
@@ -6,7 +6,7 @@
 //    checks it again.
 //  - Copy: every other row (factory, project, /git-prod, ...): `/<name>` to the clipboard,
 //    to paste in the agent's chat input.
-// Then a "Colony" section: every menu action of src/menu.json (menu bar and More), run
+// Then a "Colony" section: every menu action of src/menu.json (menu bar and Workspace → Config), run
 // through the window's action map, so the palette reaches what the menus reach.
 // Below them, a "Claude Code" section lists the vendor's built-in commands from the static,
 // cited claude-builtins.ts list: always copy, plus "Open Claude tab" (the unmodified

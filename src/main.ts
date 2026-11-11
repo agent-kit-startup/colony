@@ -26,7 +26,7 @@ import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { Editors, editorStatus } from "./editor";
-import { openAboutPanel } from "./about";
+import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
 import { type Move, outermost } from "./treenav";
@@ -44,7 +44,8 @@ import { launches, promptPlan } from "./launches";
 import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
-import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
+import { SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
+import { closeShortcutsPanel, openShortcutsPanel } from "./shortcuts";
 import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
@@ -436,10 +437,18 @@ function renderNav() {
   }
 }
 
-function navigate(step: "back" | "forward") {
-  if (!workspace) return;
+function navigate(step: "back" | "forward"): boolean {
+  if (!workspace) return false;
   const id = step === "back" ? nav.back(navOpen) : nav.forward(navOpen);
   if (id) showTab(id);
+  return !!id;
+}
+
+/** Go → Back / Forward (also in the palette): the same move as the strip's buttons and
+ *  Alt+Left / Alt+Right, with a notice when there is nowhere to go. */
+function navAction(step: "back" | "forward") {
+  if (!workspace) return status("Open a folder first");
+  if (!navigate(step)) status(step === "back" ? "Nothing to go back to" : "Nothing to go forward to");
 }
 
 // ---- editor ----------------------------------------------------------------------------
@@ -1017,7 +1026,7 @@ function toggleExplorer(force?: boolean) {
   layoutChanged();
 }
 
-/** View → Reveal active file in the Explorer: show the Explorer, open the file's folders,
+/** Go → Reveal active file in the Explorer: show the Explorer, open the file's folders,
  *  select it and give the tree the keyboard focus. */
 async function revealInExplorer() {
   if (!workspace) return status("Reveal: open a folder first");
@@ -1112,7 +1121,7 @@ $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
   if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
-// Show / hide, next to the dock buttons: the same action as View > Show or hide the terminal,
+// Show / hide, next to the dock buttons: the same action as Terminal > Show or hide the terminal,
 // and Ctrl+` (the title bar stays native under Hyprland).
 $("term-tabs").querySelector(".term-toggle")!.addEventListener("click", () => runAction("terminal"));
 
@@ -1278,7 +1287,7 @@ async function newShell() {
 
 // ---- terminal tabs move between the editor area and the panel ------------------------------
 // Kit ADR 2026-10-24 amend 2026-11-07: a drawer shell or a centre PTY moves to the other bar
-// by drag, by its context-menu row, or by View → Move terminal to … (also in the palette).
+// by drag, by its context-menu row, or by Terminal → Move terminal to … (also in the palette).
 // The session is reparented, never restarted: same process, scrollback and tab id. A centre
 // PTY keeps its element (context strip included), its gate badge and border, and its own
 // close; a drawer shell keeps its last-folder close. A moved tab stays until it closes, and
@@ -1363,7 +1372,7 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
         id,
         label: r.label,
         icon: "terminals",
-        tip: `${r.label} (a drawer shell; View → Move terminal to the panel puts it back)`,
+        tip: `${r.label} (a drawer shell; Terminal → Move terminal to the panel puts it back)`,
         pinned: false,
         el,
         cls: () => (view.exited ? "exited" : ""),
@@ -1383,7 +1392,7 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
   ttys.update(id, { place: to === "panel" ? "drawer" : "tab" });
   relayout();
   const where = to === "panel" ? "panel" : "editor area";
-  if (opts.auto) status(`${tabLabelOf(id)} opened in the ${where}, where this kind of terminal was last moved (View → Reset terminal placements)`);
+  if (opts.auto) status(`${tabLabelOf(id)} opened in the ${where}, where this kind of terminal was last moved (Terminal → Reset terminal placements)`);
   else {
     recordPlacement(id, to);
     status(`${tabLabelOf(id)} moved to the ${where}; new ones of this kind open there`);
@@ -1499,11 +1508,11 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
   });
 }
 
-/** View → Move terminal to the panel: the active centre tab, when it is a terminal. */
+/** Terminal → Move terminal to the panel: the active centre tab, when it is a terminal. */
 function moveActiveToPanel() {
   if (!movePty(activeTab, "panel")) status("Move terminal to the panel: the active tab is not a terminal in the editor area");
 }
-/** View → Move terminal to the editor area: the drawer's active terminal. */
+/** Terminal → Move terminal to the editor area: the drawer's active terminal. */
 function moveActiveToEditor() {
   const key = terminals.activeKey();
   if (!key || !movePty(key, "editor")) status("Move terminal to the editor area: the panel has no terminal");
@@ -2204,7 +2213,6 @@ function applyTitleBar(info: StartupInfo) {
 const ACTIONS: Record<string, () => unknown> = {
   "new-window": () => newWindow(),
   "open-folder": () => pickFolder(),
-  "run-elsewhere": () => controls.startElsewhere(),
   "new-file": () => newItem("file"),
   "new-folder": () => newItem("folder"),
   save: () => saveActive(),
@@ -2213,6 +2221,16 @@ const ACTIONS: Record<string, () => unknown> = {
   "file-manager": () => fileManagerHere(),
   settings: () => openSettings(),
   "close-window": () => closeWindow(),
+  explorer: () => toggleExplorer(),
+  "explorer-collapse": () => tree.collapseAll(),
+  "explorer-refresh": () => tree.refresh(),
+  refresh: () => snapshot.refresh(),
+  "quick-open": () => showQuick(),
+  commands: () => palette.show(),
+  "explorer-reveal": () => revealInExplorer(),
+  "nav-back": () => navAction("back"),
+  "nav-forward": () => navAction("forward"),
+  "new-terminal": () => newShell(),
   terminal: () => toggleTerminal(),
   "dock:bottom": () => setDock("bottom"),
   "dock:top": () => setDock("top"),
@@ -2220,21 +2238,16 @@ const ACTIONS: Record<string, () => unknown> = {
   "term-to-panel": () => moveActiveToPanel(),
   "term-to-editor": () => moveActiveToEditor(),
   "term-placement-reset": () => resetPlacement(),
-  explorer: () => toggleExplorer(),
-  "explorer-reveal": () => revealInExplorer(),
-  "explorer-collapse": () => tree.collapseAll(),
-  "explorer-refresh": () => tree.refresh(),
-  "quick-open": () => showQuick(),
-  commands: () => palette.show(),
-  refresh: () => snapshot.refresh(),
   "run-plan": () => host.runPlan(),
   "run-queue": () => host.runQueue(),
+  "run-elsewhere": () => controls.startElsewhere(),
   interactive: () => host.interactive(),
   "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
   "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
-  "new-terminal": () => newShell(),
-  engine: () => showEngine(),
   about: () => openAboutPanel(status),
+  shortcuts: () => openShortcutsPanel(shortcutRows(menuItems(), CTRL_DIGITS.map((id) => RAIL.find((r) => r.id === id)!.label))),
+  "check-updates": () => checkForUpdates(status),
+  engine: () => showEngine(),
   omarchy: () => openOmarchyPanel(status),
 };
 
@@ -2295,7 +2308,7 @@ function showEngine() {
 }
 $("st-engine").addEventListener("click", showEngine);
 
-// ---- command palette (Ctrl+Shift+P, View → Commands) -----------------------------------
+// ---- command palette (Ctrl+Shift+P, Go → Commands) -------------------------------------
 /** Every menu action the menus show here (menu bar, then Workspace → Config) as a palette row,
  *  a view row as `Go to <item>`, then `Go to Workspace → <section>` for every Workspace section
  *  the View menu does not list; not Commands… itself. */
@@ -2885,15 +2898,16 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
     // click) runs the action; Workspace → Config holds only its menu.json `config` rows (settings).
-    // A custom title bar has no GTK menu bar: its own File / View / Run / Help buttons open
-    // the same menus as popups (menu_popup, by index; a popup needs a real click).
+    // A custom title bar has no GTK menu bar: its own File / View / Go / Terminal / Run / Help
+    // buttons open the same menus as popups (menu_popup, by index; a popup needs a real click).
+    const MENU_LABELS = "File,View,Go,Terminal,Run,Help";
     const bar = await api.menuState();
     const barIds = bar.flatMap((m) => m.items.map((i) => i.id));
     const topMenus = [...$("top-menus").querySelectorAll("button")].map((b) => b.textContent).join();
     const menuOk =
       info.titleBar === "custom"
-        ? !bar.length && topMenus === "File,View,Run,Help" && !$("top-menus").hidden
-        : JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === "File,View,Run,Help" && bar.every((m) => m.items.every((i) => i.enabled)) && $("top-menus").hidden;
+        ? !bar.length && topMenus === MENU_LABELS && !$("top-menus").hidden
+        : JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === MENU_LABELS && bar.every((m) => m.items.every((i) => i.enabled)) && $("top-menus").hidden;
     await log("menu-installed", menuOk && !unbound.length, { titleBar: info.titleBar, menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), topMenus, unbound });
     const fire = (id: string) => api.smokeMenuClick(id);
     const termOn = () => !shell.classList.contains("no-bottom");
@@ -2920,14 +2934,31 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await fire("about");
     m.about = await until(() => !!document.getElementById("about-panel"), 2000);
     document.getElementById("about-panel")?.click();
-    await fire("engine");
+    // Engine… is a Config row, not a menu bar item: the bar refuses its id, the row runs it.
+    m.engineNotInBar = await fire("engine").then(() => false, (e) => errText(e).startsWith("Unknown menu item"));
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="engine"]')?.click();
     m.engine = await until(() => !!document.getElementById("engine-panel"), 2000);
     closeEnginePanel();
+    // Help → Keyboard shortcuts…: one row per key of the window handler (SHORTCUTS, then
+    // Ctrl+1..9 and Ctrl+W), then closed.
+    await fire("shortcuts");
+    m.shortcuts = await until(() => !!document.getElementById("shortcuts-panel"), 2000);
+    const keyRows = [...document.querySelectorAll("#shortcuts-panel .shortcut-row kbd")].map((k) => k.textContent ?? "");
+    m.shortcutRows = keyRows.length === Object.keys(SHORTCUTS).length + 10 && Object.values(SHORTCUTS).every((k) => keyRows.includes(k)) && keyRows.includes("Ctrl+9") && keyRows.includes("Ctrl+W");
+    closeShortcutsPanel();
+    m.shortcutsClosed = !document.getElementById("shortcuts-panel");
+    // Go → Back / Forward: the strip's history, from the menu (Plans, Inbox, Ship were shown).
+    showTab("mission");
+    showTab("inbox");
+    await fire("nav-back");
+    m.navBack = await until(() => activeTab === "mission", 2000);
+    await fire("nav-forward");
+    m.navForward = await until(() => activeTab === "inbox", 2000);
     await fire("run-plan");
     m.runPlan = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
     document.getElementById("run-dialog")?.remove();
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
-    await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
+    await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, keyRows, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views), check-updates (asks GitHub Releases)" });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
     // and the Config choice is saved for the next start (then put back). On a tiling
     // window manager: always native, the choice hidden, a saved custom ignored.
@@ -3748,7 +3779,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const tabRows = ttys.list().filter((s) => s.place === "tab").length;
     await log("native-terminals", drawerStaysClosed && closedListed && reopened && focusShows, { drawerStaysClosed, closed: lastOpen?.key ?? null, closedListed, reopened, focusShows, rows: ttys.list().length, tabRows });
     // Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
-    // 2026-11-07), in each dock position: a drawer shell to the editor area (View menu id)
+    // 2026-11-07), in each dock position: a drawer shell to the editor area (Terminal menu id)
     // and back (its tab menu), a centre agent PTY with its context strip to the panel and back
     // the same two ways. After each move the session still echoes, fitted to its new pane, and
     // a focus by its id finds it in the drawer.
@@ -4706,7 +4737,7 @@ api
     // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
     $("st-env").textContent = `v${info.version}`;
     $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("No Agent Kit engine: install one from Run → Engine… (Mission Control and agent runs need it)");
+    if (!info.agentKit) status("No Agent Kit engine: click the engine in the status bar to install one (also Workspace → Config → Engine…; Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {
       focusPolicy.enabled = false;
