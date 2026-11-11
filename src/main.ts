@@ -48,6 +48,7 @@ import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
 import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
+import { runState } from "./drivermotion";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
 import { workbenchSmoke } from "./worksmoke";
@@ -1542,6 +1543,26 @@ const host: DriverChatHost = {
     // The engine form is a dialog now (not in the Mission hero); Start in it runs the plan.
     controls.openDialog({ plan: snapshot.activePlanFile });
   },
+  stopRun: async (runId, how) => {
+    const run = runs.runs.get(runId);
+    if (!run?.running) return status("That run is no longer active");
+    try {
+      if (how === "gate") {
+        await runs.stop(runId);
+        return status(`Run #${runId}: stop sent at gate ${run.gate?.askId ?? ""} (the run ends there, exit 4)`);
+      }
+      if (how === "after-tick") {
+        await runs.stopAfterTick(runId);
+        return status(run.command === "run-plan-all" ? `Queue run #${runId}: it ends at its next gate` : `Run #${runId}: it ends after the current tick`);
+      }
+      const ok = await confirmAction(`Kill run #${runId} (${run.backend}) now? The agent stops mid-tick: whatever the tick already wrote stays on disk, unfinished, and the driver sends no run_end. Stop at a gate or after the tick ends it cleanly.`, "Kill run");
+      if (!ok) return status("Run not killed");
+      await runs.kill(runId);
+      return status(`Run #${runId} killed`);
+    } catch (e) {
+      status(`Stop run #${runId}: ${errText(e)}`);
+    }
+  },
   runQueue: async () => {
     if (!workspace) return status("Open a folder first");
     const engine = controls.backend.value;
@@ -2732,7 +2753,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // (and no active plan) opens on the First run card instead of the hero.
     const firstRun = view("mission").querySelector<HTMLElement>(".first-run");
     const firstRunOk = !!firstRun && !!firstRun.querySelector('[data-act="onboard"], [data-act="install-kit"]');
-    // The hero keeps Open plan and Open HANDOFF; Run plan, Run queue and Open interactive sit in the top bar.
+    // The hero's own row is Play/Stop, Open, Edit, Cancel, Plans (card-* acts, the card-* steps);
+    // Run plan, Run queue and Open interactive keep their ids in the top bar only.
     const heroActs = view("mission").querySelector(".hero:not(.first-run)")?.querySelectorAll('[data-act="run-plan"], [data-act="run-queue"], [data-act="interactive"]').length ?? 0;
     const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && heroActs === 0;
     await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), heroActs, firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
@@ -2824,15 +2846,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         ok &&= m.hidden;
       }
+      // The dropdown left the Mission hero (shell ADR amend 2026-10-29 point 1): Edit and
+      // Cancel are the card's own buttons there (checked in card-idle).
       showTab("mission");
       await wait(100);
-      const heroCrud = view("mission").querySelector<HTMLButtonElement>('.hero [data-act="plan-crud"]');
-      heroCrud?.click();
-      const heroItems = [...(document.getElementById("plan-crud-menu")?.querySelectorAll<HTMLElement>("[data-crud]") ?? [])].map((x) => x.dataset.crud).join(",");
-      await shot("plan-crud-hero");
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-      const heroOk = !snapshot.activePlanFile || (!!heroCrud && heroItems === "edit");
-      await log("plan-crud", ok && heroOk && Object.keys(crud).length === rowsBefore, { rows: crud, hero: heroItems });
+      const heroCrud = !!view("mission").querySelector('.hero [data-act="plan-crud"]');
+      await log("plan-crud", ok && !heroCrud && Object.keys(crud).length === rowsBefore, { rows: crud, heroDropdown: heroCrud });
       showTab("plans");
     }
     const rendered: Record<string, number> = {};
@@ -4305,6 +4324,98 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await log("terminal-drawer-queue", !qListed.named.length && qListed.shells === terminals.count && !!qCentre?.classList.contains("exited"), { ...qListed, centreTab: qCentre?.className ?? null });
     }
     smokeDryRun = false;
+    // Current mission card (src/missioncard.ts; shell ADR amend 2026-10-29 point 1): the row in
+    // each run state, through the fake's `--model smoke-card-*` branch (driver protocol 1.5.0
+    // stop_after_tick, writes no files). Kill is never clicked here: the operator runs that step.
+    if (fixture) {
+      const heroRow = () => view("mission").querySelector<HTMLElement>(".hero:not(.first-run) .now-actions");
+      const cardBtn = (id: string) => heroRow()?.querySelector<HTMLButtonElement>(`[data-card="${id}"]`) ?? null;
+      const face = () => cardBtn("toggle")?.dataset.face ?? "";
+      const rowIds = () => [...(heroRow()?.querySelectorAll<HTMLElement>("[data-card]") ?? [])].map((b) => b.dataset.card).join(",");
+      const onMission = async () => {
+        showTab("mission");
+        mission.flush();
+        await wait(250);
+      };
+      const evs = (r: Run, type: string) => r.items.filter((i) => i.kind === "ev" && i.ev.type === type).length;
+      const stdinLine = (r: Run) => r.rows.find((x) => x.text.startsWith("fixture card stdin: "))?.text.slice("fixture card stdin: ".length) ?? "";
+      // Play: the card's toggle opens the run dialog (host.runPlan), whose Start runs the plan.
+      const playRun = async (model: string) => {
+        pick(controls.model, model);
+        await onMission();
+        const before = new Set(runs.runs.keys());
+        cardBtn("toggle")?.click();
+        const dialog = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
+        document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-start"]')?.click();
+        await until(() => runs.list().some((r) => !before.has(r.id)), 10000);
+        const r = runs.list().find((x) => !before.has(x.id));
+        if (r) await until(() => evs(r, "tick_start") > 0 || !r.running, 10000);
+        return { dialog, r };
+      };
+      await onMission();
+      const idleRow = rowIds();
+      const idleFace = face();
+      const labelled = [...(heroRow()?.querySelectorAll<HTMLButtonElement>("[data-card]") ?? [])].every((b) => b.title.length > 10 && !!b.getAttribute("aria-label") && !b.disabled);
+      const heroLinks = { handoff: !!view("mission").querySelector('.hero .card-header [data-act="card-handoff"]'), dropdown: !!view("mission").querySelector('.hero [data-act="plan-crud"]'), topIds: view("mission").querySelectorAll('.hero [data-act="run-plan"], .hero [data-act="run-queue"]').length };
+      await shot("card-idle");
+      await log("card-idle", !!snapshot.activePlanFile && idleRow === "toggle,open,edit,cancel,plans" && idleFace === "play" && labelled && heroLinks.handoff && !heroLinks.dropdown && !heroLinks.topIds, { row: idleRow, face: idleFace, labelled, ...heroLinks });
+      cardBtn("plans")?.click();
+      await log("card-plans", await until(() => activeTab === "plans", 2000), { activeTab });
+      // Stop after the tick (1.5.0, no gate): the toggle sends stop_after_tick, shows Stopping…
+      // until the run ends with the documented run_end, then is Play again.
+      const t = await playRun("smoke-card-tick");
+      let tick: Record<string, unknown> = { dialog: t.dialog, run: t.r?.id ?? null };
+      if (t.r) {
+        const r = t.r;
+        await onMission();
+        tick = { ...tick, protocol: r.protocol, face: face(), row: rowIds(), cancelOff: !!cardBtn("cancel")?.disabled, cancelTip: cardBtn("cancel")?.title ?? "" };
+        await shot("card-running");
+        cardBtn("toggle")?.click();
+        await until(() => face() === "stopping" || !r.running, 3000);
+        tick.stopping = face();
+        await until(() => !r.running, 10000);
+        await onMission();
+        tick = { ...tick, sent: stdinLine(r), exit: r.exitCode, reason: r.reason, state: runState(r), chip: view(`run:${r.id}`).querySelector(".run-head .chip")?.textContent ?? null, after: face() };
+      }
+      await log(
+        "card-stop-after-tick",
+        !!t.dialog && tick.protocol === "1.5.0" && tick.face === "stop-after-tick" && tick.row === "toggle,open,edit,cancel,plans,kill" && tick.cancelOff === true && tick.stopping === "stopping" && tick.sent === '{"type":"stop_after_tick"}' && tick.exit === 0 && tick.reason === "stopped by request after tick 1" && tick.state === "stopped" && String(tick.chip).startsWith("stopped · exit 0") && tick.after === "play",
+        tick,
+      );
+      // Only an ended run: closing a live one asks to kill it (a native dialog the smoke never answers).
+      if (t.r && !t.r.running) await closeTab(`run:${t.r.id}`);
+      // Stop at the gate (any engine): {"type":"stop"}, the run ends there, exit 4.
+      const g = await playRun("smoke-card-gate");
+      let gate: Record<string, unknown> = { dialog: g.dialog, run: g.r?.id ?? null };
+      if (g.r) {
+        const r = g.r;
+        await until(() => !!r.gate || !r.running, 10000);
+        await onMission();
+        gate = { ...gate, face: face(), tip: cardBtn("toggle")?.title ?? "" };
+        await shot("card-gate");
+        cardBtn("toggle")?.click();
+        await until(() => !r.running, 10000);
+        gate = { ...gate, sent: stdinLine(r), exit: r.exitCode, reason: r.reason, gateLeft: !!r.gate };
+      }
+      await log("card-stop-gate", !!g.dialog && gate.face === "stop-gate" && String(gate.tip).includes("smoke-card-gate") && gate.sent === '{"type":"stop"}' && gate.exit === 4 && gate.reason === "driver stop" && gate.gateLeft === false, gate);
+      if (g.r && !g.r.running) await closeTab(`run:${g.r.id}`);
+      // An engine below 1.5.0 with no gate: the toggle is Kill… (asks first) and no second Kill
+      // shows. Not clicked: the run ends on its own after 4 s.
+      const o = await playRun("smoke-card-old");
+      let old: Record<string, unknown> = { dialog: o.dialog, run: o.r?.id ?? null };
+      if (o.r) {
+        const r = o.r;
+        await onMission();
+        old = { ...old, protocol: r.protocol, running: r.running, face: face(), row: rowIds(), tip: cardBtn("toggle")?.title ?? "" };
+        await shot("card-pre-1.5");
+        await until(() => !r.running, 15000);
+        old = { ...old, exit: r.exitCode, sent: stdinLine(r) };
+      }
+      await log("card-pre-1.5", !!o.dialog && old.protocol === "1.4.0" && old.running === true && old.face === "kill" && old.row === "toggle,open,edit,cancel,plans" && String(old.tip).includes("1.4.0") && old.exit === 0 && old.sent === "", old);
+      if (o.r && !o.r.running) await closeTab(`run:${o.r.id}`);
+      pick(controls.model, "smoke-model");
+      await wait(300);
+    }
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
     // real: the argv is resolved, the real vendor CLI is not started by the smoke).
     pick(controls.backend, "claude");

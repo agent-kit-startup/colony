@@ -40,15 +40,16 @@ function anchorNow(): HTMLButtonElement | undefined {
 
 /** The items of `spec`, keeping the focused item's place. */
 function fill(m: HTMLElement, spec: Spec) {
-  const sig = `${spec.file}|${spec.acts.map((a) => a.id).join()}|${spec.note}`;
+  const sig = `${spec.file}|${spec.acts.map((a) => `${a.id}${a.disabled ? "-off" : ""}`).join()}|${spec.note}`;
   if (m.dataset.sig === sig) return;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.crud;
   m.dataset.sig = sig;
   m.dataset.plan = spec.file;
   m.replaceChildren(
     ...spec.acts.map((a) => {
-      const item = h("button", { role: "menuitem", "data-crud": a.id, title: a.title }, a.label);
+      const item = h("button", { role: "menuitem", "data-crud": a.id, title: a.title, ...(a.disabled ? { disabled: "", "aria-disabled": "true" } : {}) }, a.label);
       item.addEventListener("click", () => {
+        if (a.disabled) return;
         closePlanMenu();
         void spec.ask(a.prompt, a.why);
       });
@@ -87,7 +88,8 @@ function popover(): HTMLElement {
   const m = h("div", { id: "plan-crud-menu", class: "menu", role: "menu", "aria-label": "Plan actions", hidden: "" });
   m.addEventListener("click", (ev) => ev.stopPropagation());
   m.addEventListener("keydown", (ev) => {
-    const items = [...m.querySelectorAll<HTMLButtonElement>("button")];
+    // A disabled item (Cancel during a run) keeps its tooltip but takes no focus.
+    const items = [...m.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
     if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
       ev.preventDefault();
@@ -114,13 +116,13 @@ function popover(): HTMLElement {
 
 /**
  * The dropdown of plan `file`. `lists`: where HANDOFF lists it. `active`: the HANDOFF plan
- * or the one Colony is running (Edit only); `note` says why the remove actions are missing.
+ * (Edit and Cancel); `note` says why the remove actions are missing; `busy` why Cancel is off.
  */
-export function planCrudButton(file: string, lists: PlanLists, active: boolean, ask: (prompt: string, why: string) => unknown, note = ""): HTMLButtonElement {
-  const spec: Spec = { file, acts: planActions(file, lists, active), note: active ? note : "", ask };
+export function planCrudButton(file: string, lists: PlanLists, active: boolean, ask: (prompt: string, why: string) => unknown, note = "", busy = ""): HTMLButtonElement {
+  const spec: Spec = { file, acts: planActions(file, lists, active, busy), note: active ? note : "", ask };
   const b = h(
     "button",
-    { class: "status-bar-btn plan-crud-btn", "data-act": "plan-crud", "aria-haspopup": "menu", "aria-expanded": "false", title: `Edit${active ? "" : ", archive, cancel or delete"} this plan: each opens your agent with the kit command, which asks before it changes anything` },
+    { class: "status-bar-btn plan-crud-btn", "data-act": "plan-crud", "aria-haspopup": "menu", "aria-expanded": "false", title: `${active ? "Edit or cancel" : "Edit, archive, cancel or delete"} this plan: each opens your agent with the kit command, which asks before it changes anything` },
     "Plan",
     chevron(),
   );

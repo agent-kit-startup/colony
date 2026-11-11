@@ -16,7 +16,7 @@ import { type J, obj, snapshot, str } from "./snapshot";
 import { ago, btn, card, chip, empty, pill, rerender } from "./ui";
 
 /** Kit commands the Inbox may hand to an interactive agent: a subset of src-tauri vendor.rs PROMPT_SLASH (pinned by its tests). */
-const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit|archive-plan|backlog-cancel|backlog-delete|agent-kit-onboard|start-project|backlog-add)( [A-Za-z0-9._:/-]{1,240})?$/;
+const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit|archive-plan|backlog-cancel|backlog-delete|cancel-plan|agent-kit-onboard|start-project|backlog-add)( [A-Za-z0-9._:/-]{1,240})?$/;
 
 /** The plan remove commands (also in the plan CRUD dropdown): they archive or drop a plan. */
 const REMOVES = /^\/(archive-plan|backlog-cancel|backlog-delete) /;

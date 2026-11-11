@@ -16,6 +16,8 @@
 # marker lines, so a canned listing would drift. `conflicts propose` is stubbed (no model,
 # no session): one accepted proposal per hunk, theirs then ours, built from that listing.
 # `promote rules|wait --json` print the kit's JSON shapes and write nothing.
+# `run-plan --model smoke-card-*` is the Current mission card branch (driver protocol 1.5.0
+# stop_after_tick; see below): it writes no files.
 # Use it with COLONY_AGENT_KIT_BIN=<this file> on a scratch clone only (it edits files).
 set -u
 if [ "${1:-}" = conflicts ]; then
@@ -134,6 +136,57 @@ qusage='{"inputTokens":5000,"cachedInputTokens":3000,"outputTokens":700,"totalTo
 tgate='{"inputTokens":900,"cachedInputTokens":600,"outputTokens":200,"totalTokens":1100}'
 qgate='{"inputTokens":4000,"cachedInputTokens":2500,"outputTokens":500,"totalTokens":4500}'
 ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
+# Current mission card (COLONY_SMOKE card-* steps), picked by `--model smoke-card-*`: plan
+# smoke-fixture.plan.md, and NO file is written (the 2026-10-27 tick-review fixture gap: a
+# stand-in that edits the workspace shows up in a later step's review). The stdin line it
+# reads comes back as a `log` event, so the smoke checks the exact request Colony sent.
+#   smoke-card-tick: protocol 1.5.0, a tick with no gate waits for one line;
+#     {"type":"stop_after_tick"} ends the tick, then the run: run_end.reason
+#     "stopped by request after tick 1", exit 0 (kit docs/driver-events-protocol.md).
+#   smoke-card-gate: protocol 1.5.0, gate smoke-card-gate; {"type":"stop"} ends the run at
+#     the gate (driver stop, exit 4).
+#   smoke-card-old: protocol 1.4.0 (below stop_after_tick), no gate: the tick runs 4 s and
+#     the run ends on its own. Colony offers Kill there, which the smoke never clicks.
+if [ "$cmd" = run-plan ] && case "${model:-}" in smoke-card-*) true ;; *) false ;; esac; then
+  proto=1.5.0
+  [ "$model" = smoke-card-old ] && proto=1.4.0
+  ev "\"type\":\"run_start\",\"protocol\":\"$proto\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
+  ev "\"type\":\"tick_start\",\"tick\":1,\"maxTicks\":$max,\"pending\":1,\"log\":\".cursor/loop-logs/tick-card.log\",\"prompt\":\"TICK_PROMPT card fixture\",\"backend\":\"$backend\""
+  say() { ev "\"type\":\"agent_event\",\"tick\":1,\"event\":{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]}}"; }
+  # One stdin line (EOF reads as "EOF"), echoed as a log event.
+  line_in() {
+    IFS= read -r line || line=EOF
+    esc=$(printf '%s' "$line" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture card stdin: $esc\""
+  }
+  # $1 tick exit, $2 tick result or null, $3 stop object or null, $4 run exit, $5 run_end.reason
+  finish() {
+    ev "\"type\":\"tick_end\",\"tick\":1,\"backend\":\"$backend\",\"limit\":null,\"exitCode\":$1,\"pendingBefore\":1,\"pendingAfter\":1,\"result\":$2,\"replies\":[],\"stop\":$3,\"usage\":null"
+    ev "\"type\":\"run_end\",\"exitCode\":$4,\"ticks\":1,\"pending\":1,\"reason\":\"$5\",\"planExhausted\":false,\"usage\":null"
+    exit "$4"
+  }
+  case "$model" in
+    smoke-card-old)
+      say "Card fixture (driver protocol 1.4.0): a tick with no gate that ends on its own."
+      sleep 4
+      finish 0 '{"kind":"continue","line":"LOOP_TICK_RESULT: continue"}' null 0 "max ticks reached" ;;
+    smoke-card-gate)
+      say "Card fixture: **one decision** before the tick goes on.\\n\\nHITL_GATE: smoke-card-gate | Go | Wait"
+      ev "\"type\":\"hitl_gate\",\"tick\":1,\"askId\":\"smoke-card-gate\",\"labels\":[\"Go\",\"Wait\"],\"detection\":\"sentinel\",\"line\":\"HITL_GATE: smoke-card-gate | Go | Wait\",\"usage\":null"
+      line_in
+      case "$line" in
+        *'"type":"stop"'*) finish 4 null '{"askId":"smoke-card-gate","cause":"driver stop","message":"stop sent by the app","exitCode":4}' 4 "driver stop" ;;
+        *) finish 4 null '{"askId":"smoke-card-gate","cause":"protocol error","message":"fixture expected a stop","exitCode":4}' 4 "protocol error" ;;
+      esac ;;
+    *)
+      say "Card fixture: a tick with no gate, running until the app asks to stop after it."
+      line_in
+      case "$line" in
+        *'"type":"stop_after_tick"'*) finish 0 '{"kind":"continue","line":"LOOP_TICK_RESULT: continue"}' null 0 "stopped by request after tick 1" ;;
+        *) finish 4 null '{"askId":null,"cause":"protocol error","message":"fixture expected stop_after_tick","exitCode":4}' 4 "protocol error" ;;
+      esac ;;
+  esac
+fi
 if [ "$cmd" = run-plan-all ] && [ "${events:-}" = ndjson ]; then
   # Queue runner in driver mode: one session (no ticks), queue_state at start and after the
   # cursor moves, one gate answered on stdin. The HANDOFF itself is not touched.

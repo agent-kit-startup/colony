@@ -77,6 +77,8 @@ export interface Run {
   protocol: string;
   /** `run_end.reason` ("" until the run ends): a stop by request is keyed on it, not on the exit code. */
   reason: string;
+  /** A stop after the current tick was sent (driver protocol 1.5.0): the run ends at its next boundary. */
+  stopRequested: boolean;
   /** The run reports token usage: its protocol is 1.3.0 or newer (usage.ts). */
   usageSupported: boolean;
   /** Tokens so far: the sum of `tick_end.usage`, replaced by `run_end.usage` when it
@@ -197,6 +199,7 @@ class RunStore {
       note: opts.note?.trim() ?? "",
       protocol: "",
       reason: "",
+      stopRequested: false,
       usageSupported: false,
       usage: null,
     };
@@ -233,6 +236,17 @@ class RunStore {
 
   async stop(runId: number) {
     await api.agentStop(runId);
+  }
+
+  /** Driver protocol 1.5.0: end the run at the next tick boundary (the caller checks the
+   *  run's protocol first; an older engine reads it as a protocol error). */
+  async stopAfterTick(runId: number) {
+    const run = this.runs.get(runId);
+    if (!run?.running) throw new Error("That run is no longer active");
+    await api.agentStopAfterTick(runId);
+    run.stopRequested = true;
+    this.row(run, run.command === "run-plan-all" ? "stop requested: the queue run ends at its next gate" : "stop requested: the run ends after the current tick", "ag-warn");
+    this.emit({ kind: "state", run });
   }
 
   async kill(runId: number) {
@@ -403,6 +417,12 @@ class RunStore {
 }
 
 export const runs = new RunStore();
+
+/** The newest live driver run in `root` (one per folder: agent_start refuses a second), or null. */
+export function liveRun(root: string): Run | null {
+  const live = runs.list().filter((r) => r.running && r.root === root);
+  return live.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
+}
 
 /** The newest live `run-plan-all` driver run in `root`, or null. */
 export function liveQueueRun(root: string): Run | null {

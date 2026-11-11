@@ -352,6 +352,7 @@ pub fn run() {
             agent::agent_backends,
             agent::agent_reply,
             agent::agent_stop,
+            agent::agent_stop_after_tick,
             agent::agent_kill,
             gitops::git_status,
             gitops::git_marks,

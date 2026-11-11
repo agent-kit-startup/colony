@@ -205,6 +205,8 @@ export const api = {
   /** `source: "policy"`: a pre-answer from the folder setting (driver protocol 1.4.0), never the operator's. */
   agentReply: (runId: number, askId: string, reply: number | string, source?: "policy") => invoke<void>("agent_reply", { runId, askId, reply, source: source ?? null }),
   agentStop: (runId: number) => invoke<void>("agent_stop", { runId }),
+  /** Driver protocol 1.5.0: end the run after the current tick (send only to a 1.5.0+ run). */
+  agentStopAfterTick: (runId: number) => invoke<void>("agent_stop_after_tick", { runId }),
   agentKill: (runId: number) => invoke<void>("agent_kill", { runId }),
   settingsGet: () => invoke<SettingsInfo>("settings_get"),
   settingsEnsure: () => invoke<string>("settings_ensure"),
