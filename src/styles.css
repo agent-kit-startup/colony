@@ -183,10 +183,6 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active .rail-icon { color: var(--blue); }
 .rail-icon-wrap .badge { position: absolute; top: -6px; left: 12px; font-size: 10px; line-height: 14px; min-width: 14px; padding: 0 4px; }
 .rail-icon-wrap .badge + .badge { left: auto; right: 12px; top: 10px; }
-/* A rail group with more than one view (Ship): its switch heads the tab strip. */
-.view-switch { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 6px; }
-.view-switch-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--mc-radius-chrome); background: transparent; border-color: transparent; }
-.view-switch-btn.active { background: var(--bg-card); border-color: var(--border-active); color: var(--text-primary); }
 .tab-svg { width: 16px; height: 16px; flex: none; }
 button.toggle.on { border-color: var(--blue); color: #fff; background: var(--blue-bg); }
 button.icon { padding: 0 6px; background: transparent; border-color: transparent; }

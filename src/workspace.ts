@@ -1,7 +1,9 @@
 // Workspace: the kit's workspace items under one rail item (ADR 2026-10-24 amend 2026-10-28).
 // Its sections switch with an inner navigation at the head of the view, never in the tab
 // strip. Each section is its own pinned view (src/main.ts WORKSPACE_SECTIONS), so Back /
-// Forward, `view:<section>` and the palette reach it like any other view.
+// Forward, `view:<section>` and the palette reach it like any other view. Every rail group
+// with several views switches this way (groupSection): Ship's Git | CI/CD too (amend
+// 2026-11-11, point 3), so the tab strip holds documents only.
 import { h } from "./api";
 import { icon, type IconKind } from "./icons";
 
@@ -24,20 +26,26 @@ export function sectionInfo(id: string): WorkspaceSection {
 }
 
 /**
- * One section's view: the inner navigation over `order`, this section marked (only its 1px
- * border colour changes), then `body`. `open` shows another section.
+ * One member view of a rail group (`group`: its name): the inner navigation over `members`,
+ * this member marked (only its 1px border colour changes), then `body`. `open` shows another
+ * member.
  */
-export function workspaceSection(id: string, order: string[], body: HTMLElement, open: (id: string) => void): HTMLElement {
+export function groupSection(group: string, members: WorkspaceSection[], id: string, body: HTMLElement, open: (id: string) => void): HTMLElement {
   const nav = h(
     "nav",
-    { class: "ws-nav", role: "tablist", "aria-label": "Workspace" },
-    ...order.map((s) => {
-      const info = sectionInfo(s);
-      const b = h("button", { class: `ws-nav-btn${s === id ? " active" : ""}`, role: "tab", "aria-selected": String(s === id), title: info.tip }, icon(info.icon, "tab-svg"), info.label);
-      b.dataset.section = s;
-      b.addEventListener("click", () => open(s));
+    { class: "ws-nav", role: "tablist", "aria-label": group },
+    ...members.map((info) => {
+      const on = info.id === id;
+      const b = h("button", { class: `ws-nav-btn${on ? " active" : ""}`, role: "tab", "aria-selected": String(on), title: info.tip }, icon(info.icon, "tab-svg"), info.label);
+      b.dataset.section = info.id;
+      b.addEventListener("click", () => open(info.id));
       return b;
     }),
   );
   return h("div", { class: "ws-view" }, nav, h("div", { class: "ws-body" }, body));
+}
+
+/** One Workspace section's view: the inner navigation over `order`, then `body`. */
+export function workspaceSection(id: string, order: string[], body: HTMLElement, open: (id: string) => void): HTMLElement {
+  return groupSection("Workspace", order.map(sectionInfo), id, body, open);
 }
