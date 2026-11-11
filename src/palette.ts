@@ -6,7 +6,7 @@
 //    checks it again.
 //  - Copy: every other row (factory, project, /git-prod, ...): `/<name>` to the clipboard,
 //    to paste in the agent's chat input.
-// Then a "Colony" section: every menu action of src/menu.json (menu bar and Workspace → Config), run
+// Then a "Colony" section: every menu action of src/menu.json (menu bar and the Settings view), run
 // through the window's action map, so the palette reaches what the menus reach.
 // Below them, a "Claude Code" section lists the vendor's built-in commands from the static,
 // cited claude-builtins.ts list: always copy, plus "Open Claude tab" (the unmodified

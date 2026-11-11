@@ -17,7 +17,6 @@ export const SECTION_INFO: Record<string, WorkspaceSection> = {
   skills: { id: "skills", label: "Skills", icon: "checklist", tip: "Skills: the skills of this folder" },
   rules: { id: "rules", label: "Rules", icon: "shield", tip: "Rules: the rules of this folder" },
   commands: { id: "commands", label: "Commands", icon: "commands", tip: "Commands: the slash commands of this folder" },
-  config: { id: "config", label: "Config", icon: "config", tip: "Config: Colony's settings (skin, title bar, rail, Omarchy integration)" },
   plans: { id: "plans", label: "Plans", icon: "plans", tip: "Plans: the active plan, the backlog and the parked plans" },
 };
 

@@ -1,7 +1,8 @@
 // Colony window: the cockpit. A vertical rail holds every kit item at first level (Cockpit,
 // Queue, Inbox, Chats, Flight Log, Review, Ship, Activity, Terminals, Processes, Workspace,
 // Colony; ADR 2026-10-24 amend 2026-10-28): it scrolls at any window height, and the
-// settings live in Workspace → Config. Every command lives in the menu bar (src/menu.json).
+// settings live in the Settings view (the top bar gear and File → Settings…; amend 2026-11-11,
+// point 2). Every command lives in the menu bar (src/menu.json).
 // The top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a
 // project, a Plans dropdown) next to Go to file and Open in editor; Cockpit keeps the plan's
 // own documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
@@ -97,7 +98,7 @@ document.getElementById("app")!.innerHTML = `
     </span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
-    <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+    <button id="btn-settings" class="icon" title="Settings: skin, title bar, rail, engine, integrations, settings.json" aria-label="Settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
     <span id="win-controls" hidden>
       <button class="win-min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 8h10"/></svg></button>
       <button class="win-max" title="Maximize" aria-label="Maximize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button>
@@ -135,20 +136,22 @@ document.getElementById("app")!.innerHTML = `
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="settings-pane" class="settings-pane" role="group" aria-label="Colony settings">
-  <div class="menu-label">Skin</div>
-  <button data-setting="skin" data-skin="bare-metal">Bare Metal</button>
-  <button data-setting="skin" data-skin="legacy">Legacy</button>
-  <button data-setting="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
-  <div class="menu-sep" data-title-bar-menu></div>
-  <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
-  <button data-setting="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
-  <button data-setting="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
-  <div class="menu-sep"></div>
-  <div class="menu-label">Rail</div>
-  <button data-setting="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
-  <button data-setting="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
-  <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
-  <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+  <section class="settings-group" data-group="Appearance" aria-label="Appearance">
+    <h3 class="settings-group-title">Appearance</h3>
+    <div class="menu-label">Skin</div>
+    <button data-setting="skin" data-skin="bare-metal">Bare Metal</button>
+    <button data-setting="skin" data-skin="legacy">Legacy</button>
+    <button data-setting="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
+    <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
+    <button data-setting="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
+    <button data-setting="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
+    <div class="menu-label">Rail position</div>
+    <button data-setting="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
+    <button data-setting="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
+    <div class="menu-label">Rail labels</div>
+    <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
+    <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+  </section>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>
 <div id="prompt" hidden><div class="quick-box"><label id="prompt-label" for="prompt-input"></label><input id="prompt-input" autocomplete="off" spellcheck="false" /><div id="prompt-hint" class="dim small">Enter saves, Escape cancels</div></div></div>`;
@@ -210,7 +213,7 @@ const nav = new NavHistory();
  */
 interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string }
 /** Workspace's sections, in order: each one a view, switched inside the Workspace view. */
-const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "config", "plans"];
+const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "plans"];
 const RAIL: RailItem[] = [
   { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
   { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
@@ -222,7 +225,7 @@ const RAIL: RailItem[] = [
   { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
-  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, home: "plans" },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, plans", views: WORKSPACE_SECTIONS, home: "plans" },
   { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
 ];
 /** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
@@ -332,6 +335,54 @@ $("rail").addEventListener("keydown", (ev) => {
   el.scrollIntoView({ block: "nearest" });
 });
 
+// ---- Settings: Colony's settings, one view ---------------------------------------------
+// The one Settings surface (ADR 2026-10-24 amend 2026-11-11, point 2): the top bar gear and
+// File → Settings… show this view, and Back returns from it. Its rows sit under plain group
+// labels: Appearance (Skin, Title bar, Rail position, Rail labels: the pane's markup), then
+// the action rows of src/menu.json `config`, each under its `group` (Engine, Integrations,
+// Files; never in the menu bar; menu.rs tests). `omarchyOnly` rows stay hidden until
+// renderSkinMenu() knows Omarchy is there, and a group with no row on screen hides with them.
+// (Declared before renderTabs, which marks the gear: the Inbox view reports its counts while
+// this module loads, and that already renders the tabs.)
+const settingsPane = $("settings-pane");
+for (const group of [...new Set(menuSpec.config.map((i) => i.group))]) {
+  settingsPane.append(
+    h(
+      "section",
+      { class: "settings-group", "data-group": group, "aria-label": group },
+      h("h3", { class: "settings-group-title" }, group),
+      ...menuSpec.config.filter((i) => i.group === group).map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)),
+    ),
+  );
+}
+/** With no folder open the strip (and its Back) is not on screen: this button returns to the
+ *  welcome screen instead. */
+const settingsBack = h("button", { "data-act": "welcome", title: "Back to the welcome screen", hidden: "" }, "Back");
+settingsBack.addEventListener("click", () => showWelcome());
+const settingsView = h("div", { id: "view-settings", class: "settings-view", hidden: "" }, h("div", { class: "settings-head" }, h("h2", {}, "Settings"), settingsBack), settingsPane);
+
+/** The gear shows where the window is: marked while the Settings view is on screen (only its
+ *  1px border colour changes). */
+function markSettings() {
+  const on = !settingsView.hidden;
+  const gear = $("btn-settings");
+  if (on) gear.setAttribute("aria-current", "page");
+  else gear.removeAttribute("aria-current");
+  settingsBack.hidden = !!workspace;
+}
+
+/** The top bar gear and File → Settings…: the Settings view. Its settings belong to Colony,
+ *  not to a folder, so it shows with no folder open too (then over the welcome screen, with
+ *  its own Back). */
+function showSettings() {
+  if (workspace) return showTab("settings");
+  colonyView.hide();
+  for (const t of tabs.values()) t.el.hidden = true;
+  $("welcome").hidden = true;
+  settingsView.hidden = false;
+  markSettings();
+}
+
 /** The tab strip: Back / Forward (in the markup), then documents only (runs, terminals,
  *  files). It has the same children whether a view or a document is active: a rail group with
  *  more than one view (Ship, Workspace) switches inside its view (workspace.ts groupSection). */
@@ -339,6 +390,7 @@ function renderTabs() {
   renderRail();
   renderTopActions();
   refreshDrawer();
+  markSettings();
   const bar = $("tabs");
   const rest = $("tabs-rest");
   // No folder: no strip. With one, the strip stays (Back / Forward head it).
@@ -597,7 +649,7 @@ async function openFile(path: string, mode?: DocMode) {
 /** File → Save, the palette row and Ctrl+S: the one save path. Every outcome is reported in
  *  the status bar; nothing returns silently (ADR 2026-10-24 amend 2026-10-29 point 2). */
 async function saveActive() {
-  // The settings file opens without a folder (File → Settings), so no workspace is required.
+  // The settings file is no file of the folder (Settings → Open settings.json), so no workspace is required.
   if (!isFile(activeTab)) return status(workspace ? "Nothing to save: no file is active (open one from the Explorer or with Ctrl+P)" : "Nothing to save: open a folder first");
   try {
     const p = await editors.save(activeTab);
@@ -898,15 +950,19 @@ function openTreeMenu(ctx: TreeContext) {
   treeMenu.style.left = `${Math.max(4, Math.min(ctx.x, window.innerWidth - r.width - 4))}px`;
   treeMenu.style.top = `${Math.max(4, Math.min(ctx.y, window.innerHeight - r.height - 4))}px`;
 }
+/** Settings → Open settings.json: the raw settings file in an editor tab. Editor tabs belong
+ *  to a folder (showTab), so with no folder open the row names the file instead. */
 async function openSettings() {
   try {
-    await openFile(await api.settingsEnsure());
+    const path = await api.settingsEnsure();
+    if (!workspace) return status(`Open a folder to edit settings.json here; the file is ${path}`);
+    await openFile(path);
     status("Colony settings: editor.command / editor.terminal; fileManager (Open in terminal file manager); workspaces.<folder>.backend is remembered by the engine picker");
   } catch (e) {
     status(`Settings: ${errText(e)}`);
   }
 }
-$("btn-settings").addEventListener("click", () => void openSettings());
+$("btn-settings").addEventListener("click", () => showSettings());
 
 // ---- terminals (the drawer) -----------------------------------------------------------
 // The drawer holds the user's shells, plus any centre terminal tab moved there (kit ADR
@@ -1024,7 +1080,8 @@ async function revealInExplorer() {
   $("tree").focus({ preventScroll: true });
 }
 
-// The rail (Workspace → Config → Rail): its side of the window and labels or icons only.
+// The rail (Settings → Appearance → Rail position, Rail labels): its side of the window and
+// labels or icons only.
 type RailPosition = "left" | "right";
 const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
 const railLabels = () => !shell.classList.contains("rail-icons");
@@ -1897,8 +1954,9 @@ function pinViews() {
   section("skills", skillsView.el, skillsView);
   section("rules", rulesView.el, rulesView);
   section("commands", commandsView.el, commandsView);
-  section("config", settingsPane, { show: () => {}, hide: () => {} });
   section("plans", plans.el, plans);
+  // Settings: a view of its own, on no rail item (the top bar gear and File → Settings… show it).
+  pin("settings", "Settings", "config", "Settings: skin, title bar, rail, engine, integrations, settings.json", settingsView, { show: () => {}, hide: () => {} });
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -1951,14 +2009,8 @@ runs.on((c) => {
   }
 });
 
-// ---- Workspace → Config: Colony's settings ---------------------------------------------
-// The settings the rail's More menu used to hold (ADR 2026-10-24 amend 2026-10-28 point 1):
-// Skin, Title bar, Rail side and labels, then the action rows of src/menu.json `config`
-// (never in the menu bar; menu.rs tests); `omarchyOnly` rows stay hidden until
-// renderSkinMenu() knows Omarchy is there.
-const settingsPane = $("settings-pane");
-const configActionsSep = h("div", { class: "menu-sep", hidden: "" });
-settingsPane.append(configActionsSep, ...menuSpec.config.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
+// The Settings view's rows: a setting changes at once, an action row (src/menu.json `config`)
+// runs its action.
 settingsPane.addEventListener("click", (ev) => {
   const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
   if (!el) return;
@@ -2199,7 +2251,7 @@ function applyTitleBar(info: StartupInfo) {
   fitTopActions();
 }
 
-// ---- actions: the native menu bar and Workspace → Config (src/menu.json), and the palette -
+// ---- actions: the native menu bar and the Settings view (src/menu.json), and the palette --
 const ACTIONS: Record<string, () => unknown> = {
   "new-window": () => newWindow(),
   "open-folder": () => pickFolder(),
@@ -2209,7 +2261,7 @@ const ACTIONS: Record<string, () => unknown> = {
   "save-as": () => saveAs(),
   "open-in-editor": () => openInEditor(),
   "file-manager": () => fileManagerHere(),
-  settings: () => openSettings(),
+  settings: () => showSettings(),
   "close-window": () => closeWindow(),
   explorer: () => toggleExplorer(),
   "explorer-collapse": () => tree.collapseAll(),
@@ -2239,10 +2291,11 @@ const ACTIONS: Record<string, () => unknown> = {
   "check-updates": () => checkForUpdates(status),
   engine: () => showEngine(),
   omarchy: () => openOmarchyPanel(status),
+  "settings-json": () => openSettings(),
 };
 
 /** `view:<rail item or Workspace section>`: the rail item's own behaviour (a group opens its
- *  last view); a Workspace section (`view:plans`, `view:config`, ...) opens that section. */
+ *  last view); a Workspace section (`view:plans`, `view:memory`, ...) opens that section. */
 function viewAction(id: string): (() => unknown) | null {
   const v = id.slice("view:".length);
   const r = RAIL.find((x) => x.id === v && x.views.length);
@@ -2276,10 +2329,10 @@ async function closeWindow() {
   await getCurrentWindow().close();
 }
 
-/** Every action item of src/menu.json: the menu bar in menu order, then Workspace → Config. */
+/** Every action item of src/menu.json: the menu bar in menu order, then the Settings view. */
 const menuItems = () => [
   ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
-  ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Workspace → Config", bar: false, omarchyOnly: !!i.omarchyOnly })),
+  ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Settings", bar: false, omarchyOnly: !!i.omarchyOnly })),
 ];
 /** Every item id of the native menu bar, in menu order. */
 const menuIds = () => menuItems().flatMap((i) => (i.bar ? [i.id] : []));
@@ -2299,7 +2352,7 @@ function showEngine() {
 $("st-engine").addEventListener("click", showEngine);
 
 // ---- command palette (Ctrl+Shift+P, Go → Commands) -------------------------------------
-/** Every menu action the menus show here (menu bar, then Workspace → Config) as a palette row,
+/** Every menu action the menus show here (menu bar, then the Settings view) as a palette row,
  *  a view row as `Go to <item>`, then `Go to Workspace → <section>` for every Workspace section
  *  the View menu does not list; not Commands… itself. */
 const paletteActions = (): ColonyAction[] => {
@@ -2333,7 +2386,7 @@ document.body.append(palette.el);
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
   for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
-  configActionsSep.hidden = ![...settingsPane.querySelectorAll<HTMLElement>("button[data-cmd]")].some((b) => !b.hidden);
+  for (const g of settingsPane.querySelectorAll<HTMLElement>(".settings-group")) g.hidden = ![...g.querySelectorAll<HTMLElement>("button")].some((b) => !b.hidden);
   for (const b of settingsPane.querySelectorAll<HTMLElement>('button[data-setting="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
@@ -2887,7 +2940,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
-    // click) runs the action; Workspace → Config holds only its menu.json `config` rows (settings).
+    // click) runs the action; the Settings view holds only its menu.json `config` rows as actions.
     // A custom title bar has no GTK menu bar: its own File / View / Go / Terminal / Run / Help
     // buttons open the same menus as popups (menu_popup, by index; a popup needs a real click).
     const MENU_LABELS = "File,View,Go,Terminal,Run,Help";
@@ -2924,7 +2977,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await fire("about");
     m.about = await until(() => !!document.getElementById("about-panel"), 2000);
     document.getElementById("about-panel")?.click();
-    // Engine… is a Config row, not a menu bar item: the bar refuses its id, the row runs it.
+    // Engine… is a Settings row, not a menu bar item: the bar refuses its id, the row runs it.
     m.engineNotInBar = await fire("engine").then(() => false, (e) => errText(e).startsWith("Unknown menu item"));
     settingsPane.querySelector<HTMLElement>('button[data-cmd="engine"]')?.click();
     m.engine = await until(() => !!document.getElementById("engine-panel"), 2000);
@@ -2949,8 +3002,61 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     document.getElementById("run-dialog")?.remove();
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
     await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, keyRows, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views), check-updates (asks GitHub Releases)" });
+    // Settings (kit ADR 2026-10-24 amend 2026-11-11, point 2): one view. The top bar gear and
+    // File → Settings… show the same view and Back returns from each; its rows sit under
+    // Appearance, Engine, Integrations (Omarchy only) and Files; Workspace has no Config
+    // section; settings.json opens from its one row; the palette names the place Settings.
+    // The gear is marked while the view is on screen, by its border colour alone.
+    const st: Record<string, unknown> = {};
+    const stView = view("settings");
+    const gear = $("btn-settings");
+    const stOn = () => activeTab === "settings" && !stView.hidden && stView.contains(settingsPane) && settingsPane.getClientRects().length > 0;
+    const gearLook = () => {
+      const c = getComputedStyle(gear);
+      return { border: c.borderTopColor, bars: [c.borderTopWidth, c.borderRightWidth, c.borderBottomWidth, c.borderLeftWidth].join(), bg: c.backgroundColor, shadow: c.boxShadow };
+    };
+    showTab("mission");
+    const gearOff = gearLook();
+    gear.click();
+    st.gear = stOn();
+    // The border colour is a 0.15s transition: read it settled.
+    await wait(300);
+    const gearOn = gearLook();
+    st.gearMarked = gear.getAttribute("aria-current") === "page" && gearOn.border !== gearOff.border;
+    st.gearBorderOnly = gearOn.bars === gearOff.bars && new Set(gearOn.bars.split(",")).size === 1 && gearOn.bg === gearOff.bg && gearOn.shadow === gearOff.shadow ? true : { gearOff, gearOn };
+    st.noRailItem = !$("rail").querySelector(".rail-item.active");
+    st.heading = stView.querySelector(".settings-head h2")?.textContent === "Settings" && stView.querySelector<HTMLElement>('.settings-head [data-act="welcome"]')?.hidden === true;
+    $("tabs").querySelector<HTMLButtonElement>(".nav-back")!.click();
+    st.gearBack = activeTab === "mission" && stView.hidden && !gear.hasAttribute("aria-current") ? true : activeTab;
+    showTab("inbox");
+    await fire("settings");
+    st.menu = await until(stOn, 2000);
+    st.menuLabel = menuItems().find((i) => i.id === "settings")?.label === "Settings…" && (!bar.length || bar.some((b) => b.label === "File" && b.items.some((i) => i.id === "settings" && i.label === "Settings…")));
+    await fire("nav-back");
+    st.menuBack = await until(() => activeTab === "inbox", 2000);
+    const stGroups = [...settingsPane.querySelectorAll<HTMLElement>(".settings-group")];
+    const groupRows = Object.fromEntries(stGroups.map((g) => [g.dataset.group ?? "", { title: g.querySelector(".settings-group-title")?.textContent ?? "", hidden: g.hidden, labels: [...g.querySelectorAll(".menu-label")].map((l) => l.textContent ?? ""), cmds: [...g.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd ?? "") }]));
+    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
+    st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"]) && !groupRows.Appearance?.cmds.length;
+    st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
+    st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 8 && !tabs.has("config") && view("plans").querySelectorAll(".ws-nav-btn").length === 8 && !view("plans").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
+    const stPalette = paletteActions();
+    st.paletteWhere = menuSpec.config.every((c) => !!c.omarchyOnly && !omarchyDetected() ? !stPalette.some((a) => a.id === c.id) : stPalette.find((a) => a.id === c.id)?.description === "Settings") && stPalette.find((a) => a.id === "settings")?.description === "File menu" && !stPalette.some((a) => a.id === "view:config");
+    // Files → Open settings.json: the raw file in an editor tab; closing it returns to Settings.
+    showTab("mission");
+    gear.click();
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
+    st.settingsJson = await until(() => activeTab.endsWith("/settings.json") && !activeTab.startsWith(`${root}/`), 3000);
+    const stFile = activeTab;
+    if (st.settingsJson === true) await closeTab(stFile);
+    st.jsonCloseReturns = activeTab === "settings" ? true : activeTab;
+    await wait(200);
+    await shot("settings");
+    $("tabs").querySelector<HTMLButtonElement>(".nav-back")!.click();
+    st.back = activeTab === "mission" ? true : activeTab;
+    await log("settings-view", Object.values(st).every((v) => v === true), { ...st, groups: st.groups === true ? true : groupRows, gearOff, gearOn });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
-    // and the Config choice is saved for the next start (then put back). On a tiling
+    // and the Settings choice is saved for the next start (then put back). On a tiling
     // window manager: always native, the choice hidden, a saved custom ignored.
     const win = getCurrentWindow();
     const decorated = await win.isDecorated();
@@ -2959,12 +3065,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const drag = $("top").getAttribute("data-tauri-drag-region");
     await log("title-bar-applied", decorated === !custom && controlsShown === custom && (custom ? drag === "deep" : drag === null) && document.documentElement.dataset.titleBar === info.titleBar, { titleBar: info.titleBar, decorated, controlsShown, drag, tiling: info.tilingWm });
     if (info.tilingWm) {
-      // Tiling window manager: always native. The choice is hidden from Workspace → Config, and
+      // Tiling window manager: always native. The choice is hidden from the Settings view, and
       // a saved `custom` (written here, as a settings.json shared with a GNOME machine
       // would have it) still opens native on the next start (settings_title_bar asks the
       // same decision the startup uses). Then the saved value is put back.
       const hidden = [...settingsPane.querySelectorAll<HTMLElement>("[data-title-bar-menu]")];
-      const menuHidden = hidden.length === 4 && hidden.every((el) => el.hidden);
+      const menuHidden = hidden.length === 3 && hidden.every((el) => el.hidden);
       const before = await api.settingsTitleBar();
       await api.settingsSetTitleBar("custom");
       const withCustom = await api.settingsTitleBar();
@@ -3389,7 +3495,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await until(() => dock() === "bottom", 2000);
     await wait(600);
     await layoutSaved;
-    // Rail (Workspace → Config → Rail): left and right × labels and icons only, in every dock. The rail
+    // Rail (Settings → Appearance): left and right × labels and icons only, in every dock. The rail
     // sits at its window edge, the centre beside it; icons only hides the labels and keeps
     // each item's tooltip and aria-label; the choice is in settings.json.
     const settingRow = (sel: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting=${sel}]`)!.click();
@@ -3577,7 +3683,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       found[0] === "compact" &&
       palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));
     await log("claude-builtins", builtinsOk, { rendered: builtins.length, listed: palette.builtins().length, section, compactSearch: found });
-    // Colony section: every menu action (menu bar and Workspace → Config, not Commands… itself), Run.
+    // Colony section: every menu action (menu bar and the Settings view, not Commands… itself), Run.
     pInput.value = "";
     pInput.dispatchEvent(new Event("input"));
     const actionRows = [...palette.el.querySelectorAll<HTMLElement>(".palette-action")].map((el) => el.dataset.action);
@@ -4145,7 +4251,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await log("tab-placement", Object.values(r).every((v) => v === true), { a: a?.id ?? null, b: b?.id ?? null, c: c?.id ?? null, shells: [s1, s2, s3, s4], ...r });
     }
     showTab("mission");
-    // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
+    // Skins: Legacy from Settings → Appearance (same handler as the operator's click), saved in
     // settings.json and applied to the chrome and the native views; then back to Bare Metal.
     const pickSkin = (id: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting="skin"][data-skin="${id}"]`)?.click();
     // On Omarchy with no saved skin the window starts on the system theme: start from Bare Metal.
@@ -4190,7 +4296,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
-      // The Config row (menu.json `config`) opens the same panel; it only lists, nothing runs.
+      // The Settings row (menu.json `config`) opens the same panel; it only lists, nothing runs.
       settingsPane.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
       const panelOpen = await until(() => !!document.getElementById("omarchy-panel"), 2000);
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -4707,6 +4813,26 @@ async function runPlaySmoke(info: StartupInfo) {
     cv.querySelector<HTMLElement>('[data-act="welcome"]')?.click();
     await wait(200);
     await log("play-back", !$("welcome").hidden && cv.hidden && !colonyView.visible, { welcome: !$("welcome").hidden, gameHidden: cv.hidden });
+    // Settings with no folder (kit ADR 2026-10-24 amend 2026-11-11, point 2): the gear shows
+    // the view over the welcome screen with its own Back (the strip is not on screen), the
+    // settings.json row names the file instead of opening a tab, and Back returns to welcome.
+    const gear = $("btn-settings");
+    gear.click();
+    await wait(150);
+    const sn: Record<string, unknown> = {
+      shown: !settingsView.hidden && settingsView.contains(settingsPane) && settingsPane.getClientRects().length > 0,
+      welcomeHidden: $("welcome").hidden,
+      ownBack: !settingsBack.hidden,
+      gearMarked: gear.getAttribute("aria-current") === "page",
+      noStrip: $("tabs").classList.contains("tabbar-empty"),
+    };
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
+    await wait(400);
+    sn.jsonNamed = /settings\.json/.test($("st-msg").textContent ?? "") && !settingsView.hidden && ![...tabs.keys()].some((id) => id.endsWith("/settings.json")) ? true : ($("st-msg").textContent ?? "");
+    settingsBack.click();
+    await wait(150);
+    sn.back = !$("welcome").hidden && settingsView.hidden && !gear.hasAttribute("aria-current");
+    await log("settings-no-folder", Object.values(sn).every((v) => v === true), sn);
     await log("done", true);
   } catch (e) {
     await log("error", false, errText(e));
@@ -4735,14 +4861,17 @@ function showPlayWithoutFolder() {
   colonyView.el.hidden = false;
   colonyView.invalidate();
   colonyView.show();
+  markSettings();
 }
 
-/** Back to the welcome screen from the game with no folder. */
+/** Back to the welcome screen from the game or the Settings view with no folder. */
 function showWelcome() {
   if (workspace) return;
   colonyView.hide();
   colonyView.el.hidden = true;
+  settingsView.hidden = true;
   $("welcome").hidden = false;
+  markSettings();
 }
 
 // ---- boot ------------------------------------------------------------------------------
@@ -4758,7 +4887,7 @@ api
     // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
     $("st-env").textContent = `v${info.version}`;
     $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("No Agent Kit engine: click the engine in the status bar to install one (also Workspace → Config → Engine…; Mission Control and agent runs need it)");
+    if (!info.agentKit) status("No Agent Kit engine: click the engine in the status bar to install one (also Settings → Engine…; Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {
       focusPolicy.enabled = false;

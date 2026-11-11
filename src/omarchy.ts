@@ -1,4 +1,4 @@
-// Omarchy shell integration (More → Omarchy integration…, Omarchy only): the bar widget
+// Omarchy shell integration (Settings → Omarchy integration…, Omarchy only): the bar widget
 // and menu entries of src-tauri/src/omarchy_shell.rs, installed or removed only after
 // this panel has listed every file and command the step touches (kit ADR 2026-10-23,
 // point 4). Also keeps this window's status for the bar widget (open gates, live runs).

@@ -1,6 +1,6 @@
 //! omarchy-shell integration (kit ADR 2026-10-23 Omarchy reference platform, o3): a bar
 //! widget, menu entries, and the status they read. Everything here is opt-in from
-//! `More → Omarchy integration…`, which shows the plan (every file and command) before it
+//! `Settings → Omarchy integration…`, which shows the plan (every file and command) before it
 //! runs, and has a matching Remove.
 //!
 //! - **Status:** each Colony window on Omarchy keeps `$XDG_RUNTIME_DIR/colony/<pid>/status.json`
@@ -50,7 +50,7 @@ pub fn menu_block() -> String {
         format!(r#""colony.inbox": {{"icon":"{}","label":"Colony Inbox","description":"Open HITL gates of the running windows",{when},"action":"colony --inbox"}},"#, '\u{f009a}'),
         format!(r#""colony.folder": {{"icon":"{}","label":"Open folder in Colony","description":"Pick a folder in the running window",{when},"action":"colony --open-folder"}},"#, '\u{f07b}'),
     ];
-    let mut out = format!("  {BEGIN} (written by Colony: More → Omarchy integration…; its Remove deletes this block)\n");
+    let mut out = format!("  {BEGIN} (written by Colony: Settings → Omarchy integration…; its Remove deletes this block)\n");
     for r in rows {
         out.push_str("  ");
         out.push_str(&r);

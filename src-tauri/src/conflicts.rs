@@ -44,7 +44,7 @@ pub(crate) fn kit(root: &Path, args: &[&str]) -> Result<std::process::Output, St
         .map_err(|e| format!("agent-kit {} failed to start: {e}", args.join(" ")))
 }
 
-const NO_COMMAND: &str = "This engine has no `agent-kit conflicts`: update it in Workspace → Config → Engine… (the command ships after Agent Kit 6.14.0), or resolve in the editor";
+const NO_COMMAND: &str = "This engine has no `agent-kit conflicts`: update it in Settings → Engine… (the command ships after Agent Kit 6.14.0), or resolve in the editor";
 
 /// The kit's JSON on stdout when there is one (propose prints its result with a non-zero
 /// exit when hunks stay unresolved or verification fails); otherwise the error it printed.
