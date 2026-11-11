@@ -102,6 +102,20 @@ pub fn file_manager_launch(state: State<'_, AppState>) -> Result<FileManagerLaun
     plan(setting.as_ref(), &|name| find_on(&path, name))
 }
 
+/// COLONY_SMOKE only (refused when the smoke is off): what Open in terminal file manager would
+/// run if the host PATH were `path`. One process has one PATH, so the smoke checks the
+/// detection with a fixture folder holding a fake file manager, and the not-installed hint with
+/// an empty PATH, through the same `plan` and lookup as `file_manager_launch`.
+#[tauri::command]
+pub fn smoke_file_manager_launch(state: State<'_, AppState>, path: String) -> Result<FileManagerLaunch, String> {
+    if state.startup.lock().ok().and_then(|s| s.smoke.clone()).is_none() {
+        return Err("not a smoke run".into());
+    }
+    let setting = settings::current(&state)?.file_manager;
+    let path = OsString::from(path);
+    plan(setting.as_ref(), &|name| find_on(&path, name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

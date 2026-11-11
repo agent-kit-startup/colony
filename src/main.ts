@@ -17,7 +17,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, errText, type FileManagerLaunch, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { DriverChat, type DriverChatHost } from "./driverchat";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
@@ -824,11 +824,12 @@ async function terminalHere(dir: string) {
  *  2026-10-29 points 1 and 4): the `fileManager` setting or the first of yazi, lf, nnn, ranger
  *  and broot on PATH, as a drawer tab in `dir` (default: the Explorer's selected folder, else
  *  the root), with the host environment (no AppImage libraries). The Explorer refreshes when
- *  that tab loses the focus or exits. None installed: the status line names what to install. */
-async function fileManagerHere(dir?: string) {
+ *  that tab loses the focus or exits. None installed: the status line names what to install.
+ *  `lookup`: the code-path smoke's own PATH (api.smokeFileManagerLaunch); never set otherwise. */
+async function fileManagerHere(dir?: string, lookup: () => Promise<FileManagerLaunch> = api.fileManagerLaunch) {
   if (!workspace) return status("Open a folder first");
   const into = dir ?? tree.targetDir();
-  const launch = await api.fileManagerLaunch();
+  const launch = await lookup();
   if (!launch.argv.length) return status(launch.hint);
   const where = into === workspace.root ? workspace.name : relPath(into);
   const made = terminals.create(launch.argv, `${launch.label} ${where.slice(where.lastIndexOf("/") + 1)}`, into, { hostEnv: true, onLeave: () => void tree.refresh() });
@@ -3191,6 +3192,63 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       r.escapeRefused = await api.renamePath(`${root}/README.md`, `${root}/../escaped.md`).then(() => false, () => true);
       r.overwriteRefused = await api.createDir(`${root}/README.md`).then(() => false, () => true);
       await log("explorer-ops", !!(r.newFolder && r.newFile && r.rename && r.terminalHere && r.terminalCwd === dir && r.trash && r.escapeRefused && r.overwriteRefused), r);
+      // File → Save (plan colony-explorer-file-ops e4): File → New file in a new folder, text
+      // typed through Monaco's own type command, File → Save through the native menu's click
+      // path; the text is on disk, the tab is clean and the status line says so.
+      const sdir = `${root}/smoke-file-save`;
+      const saved = `${sdir}/saved.md`;
+      const text = "typed in the code-path smoke, saved with File > Save\n";
+      const s: Record<string, unknown> = {};
+      s.folder = (await menuAt($("tree"), "tree-new-folder")) && (await typeName("smoke-file-save")) && (await until(() => !!rowOf(sdir), 4000));
+      await api.smokeMenuClick("new-file");
+      s.opened = (await typeName("saved.md")) && (await until(() => editors.active === saved && activeTab === saved, 4000));
+      editors.editor.trigger("colony-smoke", "type", { text });
+      s.dirty = editors.isDirty(saved);
+      await api.smokeMenuClick("save");
+      let disk = "";
+      for (let i = 0; i < 20 && disk !== text; i++) {
+        await wait(200);
+        disk = await api.readTextFile(saved).catch((e) => `error: ${errText(e)}`);
+      }
+      s.onDisk = disk === text;
+      s.clean = await until(() => !editors.isDirty(saved), 2000);
+      s.notice = $("st-msg").textContent ?? "";
+      await log("file-save", !!(s.folder && s.opened && s.dirty && s.onDisk && s.clean && s.notice === "Saved smoke-file-save/saved.md"), { ...s, disk: disk.slice(0, 80) });
+      await closeTab(saved);
+      await api.trashPath(sdir).catch(() => undefined);
+      // Open in terminal file manager (plan colony-explorer-file-ops e3, smoke e4). One process
+      // has one PATH, so the lookup takes the smoke's own: the fixture folder with a fake
+      // `yazi` (packaging/smoke/file-manager-bin, copied into the scratch clone by the runner),
+      // then an empty PATH for the not-installed hint. The fake runs in the picked folder,
+      // leaves a file there and exits, which must refresh the Explorer.
+      const fmBin = `${root}/packaging/smoke/file-manager-bin`;
+      if ((await api.listDir(fmBin).catch(() => [])).some((e) => e.path === `${fmBin}/yazi`)) {
+        const fdir = `${root}/smoke-file-manager`;
+        const f: Record<string, unknown> = {};
+        const made = `${fdir}/made-by-file-manager.txt`;
+        await api.createDir(fdir);
+        await tree.reveal(fdir, true); // expanded, so the file the fake leaves shows once the tree re-reads it
+        const prevKey = terminals.activeKey();
+        await fileManagerHere(fdir, () => api.smokeFileManagerLaunch(fmBin));
+        const key = terminals.activeKey();
+        f.tab = key !== prevKey && terminals.has(key) && !!$("term-tabs").querySelector(`.tab[data-key="${key}"]`)?.textContent?.includes("yazi smoke-file-manager");
+        const fm = terminals.view(key);
+        f.cwd = fm && fm.id >= 0 ? await api.ptyCwd(fm.id).catch((e) => `error: ${errText(e)}`) : null;
+        f.notice = $("st-msg").textContent ?? "";
+        f.exited = await until(() => !!terminals.view(key)?.exited, 8000);
+        f.made = (await api.listDir(fdir).catch(() => [])).some((e) => e.path === made);
+        // The tab's exit refreshes the Explorer: the row of the file the fake left appears.
+        f.refreshed = await until(() => !!rowOf(made), 3000);
+        $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"] .tab-close`)?.click();
+        if (prevKey) terminals.focusKey(prevKey);
+        await log("file-manager-tab", !!(f.tab && f.cwd === fdir && f.exited && f.made && f.refreshed && String(f.notice).startsWith("Opened yazi in smoke-file-manager (found on PATH)")), f);
+        const panesBefore = $("terms").querySelectorAll(".term-pane").length;
+        await fileManagerHere(fdir, () => api.smokeFileManagerLaunch(""));
+        const hint = $("st-msg").textContent ?? "";
+        const noTab = $("terms").querySelectorAll(".term-pane").length === panesBefore;
+        await log("file-manager-hint", hint.startsWith("No terminal file manager on PATH (yazi, lf, nnn, ranger or broot).") && hint.includes("Colony installs nothing") && noTab, { hint, noTab });
+        await api.trashPath(fdir).catch(() => undefined);
+      } else await log("file-manager-tab", false, `fixture missing: ${fmBin}/yazi (the runner copies packaging/smoke into the scratch clone)`);
     }
     // Panels: the terminal docks at the top, the side and back at the bottom (the menu's
     // path), refitting its xterm each time; the Explorer hides and comes back; both
