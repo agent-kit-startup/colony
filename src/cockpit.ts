@@ -735,7 +735,7 @@ export class MissionView extends View {
     const { q, queue, cursor, hold, live } = queueNow(this.host.workspaceRoot());
     const mark = (i: number) => (i !== cursor ? String(i + 1) : hold ? "⏸" : "▶");
     const rows = queue.map((p, i) => h("div", { class: `row q-mini ${i < cursor ? (finished(q, p) ? "past" : "past-open") : i === cursor ? (hold ? "held" : "current") : ""}`, title: q.outcomes?.[p] ? `${p} · ${String(q.outcomes[p])}` : p }, h("span", { class: "q-mark" }, mark(i)), h("span", { class: "grow ellipsis" }, planName(p)), ...(q.outcomes?.[p] ? [chip(String(q.outcomes[p]))] : [])));
-    const held = hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", "⏸"), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
+    const held = hold ? [h("div", { class: "queue-held" }, pill("Held", "awaiting", stateMark("queue", "held")), h("span", { class: "grow" }, holdText(hold, queue[cursor])))] : [];
     // Run queue lives in the hero; the card only links to the Queue view.
     const acts = h("div", { class: "actions" }, btn("Open Queue", () => this.host.showTab("queue"), { class: "link" }));
     const pos = queue.length && cursor >= 0 ? [h("span", { class: "card-count mono", title: "Queue cursor: the plan the queue runs now" }, `plan ${Math.min(cursor + 1, queue.length)} of ${queue.length}`)] : [];

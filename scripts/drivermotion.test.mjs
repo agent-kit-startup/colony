@@ -172,6 +172,11 @@ test("surfaces (V3): the run tab, the cockpit and the driver chat draw state mar
   assert.match(read("transcript.ts"), /stateMark\("queue", c\.state, \{ still: true \}\)/);
   assert.match(read("cockpit.ts"), /stateMark\("mission", missionState\(status\), \{ key: "mission" \}\)/);
   assert.match(read("cockpit.ts"), /stateMark\("queue", stState, \{ key: "queue-hero" \}\)/);
+  // A held queue reads the same in the Queue view and on the Cockpit's Queue card: the table's
+  // pause mark, never a unicode glyph.
+  const heldPills = [...read("cockpit.ts").matchAll(/pill\("Held", "awaiting", ([^)]*\)?)\)/g)].map((m) => m[1]);
+  assert.ok(heldPills.length >= 2, `Held pills found: ${heldPills.length}`);
+  for (const mark of heldPills) assert.equal(mark, 'stateMark("queue", "held")');
 });
 
 test("reduced motion (V3): every animation is opt-in or has a reduce override, and CSS alone reads the preference", () => {
