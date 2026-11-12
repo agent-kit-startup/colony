@@ -53,11 +53,14 @@ pub const DASHBOARD_DATA_MAJOR: u64 = 1;
 /// Where kit releases (and their engine artifacts) are published.
 pub const DEFAULT_RELEASE_REPO: &str = "agent-kit-startup/agent-kit";
 /// Public key for engine signatures: the base64 line of the kit's minisign public key
-/// (`RW...`, the second line of `minisign.pub`). None until the operator creates the engine
-/// signing key (kit secret ENGINE_SIGNING_KEY, ADR Consequence 4); until then only
-/// SHA256SUMS is checked and the install says so. Once set, every install needs
-/// `SHA256SUMS.minisig` on the release and a valid signature over SHA256SUMS by this key.
-const ENGINE_SIGNING_PUBKEY: Option<&str> = None;
+/// (`RW...`, the second line of the `.pub` file; key id `EE66495404D7ADCF`). Its secret half
+/// is the kit's CI secret ENGINE_SIGNING_KEY (ADR Consequence 4), and the kit's repository
+/// variable ENGINE_SIGNING_PUBKEY holds this same line. Every install needs
+/// `SHA256SUMS.minisig` on the release and a valid signature over SHA256SUMS by this key:
+/// a kit release published without that file (every release up to v6.16.1) is refused.
+/// Engines already on disk are not checked again. `None` turns the check off (only
+/// SHA256SUMS is checked and the install says so).
+const ENGINE_SIGNING_PUBKEY: Option<&str> = Some("RWTPrdcEVElm7jdZHU3c9Ip6T60lpU81sWNPLTkZmUIFqmI/cUeMwSv3");
 
 /// Pinned official Node build (nodejs.org, LTS), with the sha256 values of its
 /// SHASUMS256.txt. The downloaded SHASUMS256.txt must list the same value.
@@ -1156,9 +1159,9 @@ mod tests {
         }
     }
 
-    /// Package an engine the way the kit does (flat tar.gz + SHA256SUMS) under
-    /// `<base>/v<version>/`, served over file://.
-    fn publish(base: &Path, m: &Manifest) {
+    /// Package an engine the way the kit did up to v6.16.1 (flat tar.gz + SHA256SUMS, no
+    /// signature) under `<base>/v<version>/`, served over file://.
+    fn publish_unsigned(base: &Path, m: &Manifest) {
         let src = base.join(format!("src-{}", m.version));
         engine_dir(&src, m);
         let rel = base.join(format!("v{}", m.version));
@@ -1168,6 +1171,38 @@ mod tests {
         assert!(st.success());
         let sha = sha256_file(&rel.join(&name)).unwrap();
         fs::write(rel.join("SHA256SUMS"), format!("{sha}  {name}\n")).unwrap();
+    }
+
+    /// A throwaway minisign key pair, made once per test run and never written to disk.
+    /// It stands in for the kit's engine signing key, whose secret half no test can hold.
+    fn test_key() -> &'static minisign::KeyPair {
+        static KEY: std::sync::OnceLock<minisign::KeyPair> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| minisign::KeyPair::generate_unencrypted_keypair().unwrap())
+    }
+
+    fn test_pubkey() -> String {
+        test_key().pk.to_base64()
+    }
+
+    /// Write `SHA256SUMS.minisig` for the release at `<base>/v<version>/` the way the kit's
+    /// `scripts/sign-engine-artifact.mjs` does (prehashed, trusted comment naming the file).
+    fn sign_release(base: &Path, version: &str, key: &minisign::KeyPair) {
+        let rel = base.join(format!("v{version}"));
+        let sums = fs::read(rel.join("SHA256SUMS")).unwrap();
+        let comment = format!("agent-kit-engine {version} file:SHA256SUMS");
+        let sig = minisign::sign(Some(&key.pk), &key.sk, &sums[..], Some(&comment), None).unwrap();
+        fs::write(rel.join("SHA256SUMS.minisig"), sig.into_string()).unwrap();
+    }
+
+    /// A signed release: `publish_unsigned` plus `SHA256SUMS.minisig` by the throwaway key.
+    fn publish(base: &Path, m: &Manifest) {
+        publish_unsigned(base, m);
+        sign_release(base, &m.version, test_key());
+    }
+
+    /// Install with the throwaway key pinned, as `install_engine` does with the real one.
+    fn install(engines: &Path, base: &str, version: &str) -> Result<InstallReport, String> {
+        install_engine_with(engines, base, version, Some(&test_pubkey()))
     }
 
     #[test]
@@ -1182,29 +1217,36 @@ mod tests {
         let url = format!("file://{}", base.display());
         let engines = root.join("data/engine");
 
-        let r = install_engine(&engines, &url, "6.3.0").unwrap();
+        let r = install(&engines, &url, "6.3.0").unwrap();
         assert_eq!((r.version.as_str(), r.previous.as_deref()), ("6.3.0", None));
-        assert!(r.signature.contains("not verified"));
-        let r = install_engine(&engines, &url, "v6.4.0").unwrap();
+        assert_eq!(r.signature, "signature ok (agent-kit-engine 6.3.0 file:SHA256SUMS)");
+        let r = install(&engines, &url, "v6.4.0").unwrap();
         assert_eq!(r.previous.as_deref(), Some("6.3.0"));
         assert_eq!(resolve_with(|_| None, Some(&root.join("data"))).unwrap().unwrap().version(), "6.4.0");
 
         // Out of range: refused before anything moves.
-        assert!(install_engine(&engines, &url, "7.0.0").unwrap_err().contains("update Colony"));
+        assert!(install(&engines, &url, "7.0.0").unwrap_err().contains("update Colony"));
         assert!(!engines.join("7.0.0").exists());
         // Same major, outside the updater range: refused with what to do instead.
-        let e = install_engine(&engines, &url, "6.5.0").unwrap_err();
+        let e = install(&engines, &url, "6.5.0").unwrap_err();
         assert!(e.contains("driver protocol 1.6.0") && e.contains("1.2.x-1.5.x") && e.contains("update Colony first"), "{e}");
-        let e = install_engine(&engines, &url, "6.1.0").unwrap_err();
+        let e = install(&engines, &url, "6.1.0").unwrap_err();
         assert!(e.contains("install a newer engine version"), "{e}");
         assert!(!engines.join("6.5.0").exists() && !engines.join("6.1.0").exists());
-        // Tampered artifact: refused on the checksum.
-        let tampered = base.join("v6.4.0/SHA256SUMS");
-        fs::write(&tampered, format!("{}  agent-kit-engine-6.4.0.tar.gz\n", "0".repeat(64))).unwrap();
-        assert!(install_engine(&engines, &url, "6.4.0").unwrap_err().contains("does not match"));
+        // Tampered tarball under a validly signed SHA256SUMS: refused on the checksum.
+        let tarball = base.join("v6.4.0/agent-kit-engine-6.4.0.tar.gz");
+        let good = fs::read(&tarball).unwrap();
+        fs::write(&tarball, b"not the engine").unwrap();
+        assert!(install(&engines, &url, "6.4.0").unwrap_err().contains("does not match"));
         assert!(engines.join("6.4.0/engine.json").is_file(), "a failed reinstall keeps the installed engine");
+        // Tampered SHA256SUMS (rewritten to list the swapped tarball): refused on the signature.
+        let sums = base.join("v6.4.0/SHA256SUMS");
+        fs::write(&sums, format!("{}  agent-kit-engine-6.4.0.tar.gz\n", sha256_file(&tarball).unwrap())).unwrap();
+        assert!(install(&engines, &url, "6.4.0").unwrap_err().contains("signature check of SHA256SUMS failed"));
+        assert!(engines.join("6.4.0/engine.json").is_file());
+        fs::write(&tarball, good).unwrap();
         // Missing release: a download error.
-        assert!(install_engine(&engines, &url, "6.9.9").is_err());
+        assert!(install(&engines, &url, "6.9.9").is_err());
 
         assert_eq!(rollback(&engines).unwrap(), "6.3.0");
         assert_eq!(resolve_with(|_| None, Some(&root.join("data"))).unwrap().unwrap().version(), "6.3.0");
@@ -1218,9 +1260,10 @@ mod tests {
 
     /// The real kit artifact (kit `scripts/build-engine-artifact.mjs`), served from a folder
     /// laid out like a release: `COLONY_TEST_ENGINE_RELEASES=<dir>` holding
-    /// `v<ver>/agent-kit-engine-<ver>.tar.gz` and `v<ver>/SHA256SUMS`,
-    /// `COLONY_TEST_ENGINE_VERSION=<ver>`, `COLONY_TEST_DATA=<data dir to install into>`.
-    /// Run: `cargo test -- --ignored installs_a_real_kit_artifact`.
+    /// `v<ver>/agent-kit-engine-<ver>.tar.gz`, `v<ver>/SHA256SUMS` and
+    /// `v<ver>/SHA256SUMS.minisig` (signed by the pinned key: a kit release tagged after the
+    /// key existed), `COLONY_TEST_ENGINE_VERSION=<ver>`, `COLONY_TEST_DATA=<data dir to
+    /// install into>`. Run: `cargo test -- --ignored installs_a_real_kit_artifact`.
     #[test]
     #[ignore]
     fn installs_a_real_kit_artifact() {
@@ -1277,7 +1320,7 @@ mod tests {
     fn a_configured_key_needs_a_valid_signature_on_the_release() {
         let root = scratch("signed");
         let base = root.join("releases");
-        publish(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
+        publish_unsigned(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
         let url = format!("file://{}", base.display());
         let engines = root.join("engine");
         // No SHA256SUMS.minisig on the release: refused before anything is unpacked.
@@ -1287,11 +1330,72 @@ mod tests {
         fs::write(base.join("v6.3.0/SHA256SUMS.minisig"), FIX_SIG).unwrap();
         let e = install_engine_with(&engines, &url, "6.3.0", Some(FIX_PUB)).unwrap_err();
         assert!(e.contains("signature check of SHA256SUMS failed"), "{e}");
+        // A valid signature over this SHA256SUMS, by a key that is not the configured one: refused.
+        let other = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        sign_release(&base, "6.3.0", &other);
+        let e = install(&engines, &url, "6.3.0").unwrap_err();
+        assert!(e.contains("signature check of SHA256SUMS failed"), "{e}");
         assert!(!engines.join("6.3.0").exists());
+        // Signed by the configured key: installs and reports the trusted comment.
+        sign_release(&base, "6.3.0", test_key());
+        let r = install(&engines, &url, "6.3.0").unwrap();
+        assert_eq!(r.signature, "signature ok (agent-kit-engine 6.3.0 file:SHA256SUMS)");
         // No key configured: installs on the checksum and says the signature was not checked.
         let r = install_engine_with(&engines, &url, "6.3.0", None).unwrap();
         assert!(r.signature.contains("not verified"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The key pair the tests sign with is a real minisign pair: what it signs verifies with
+    /// its own public half and with nothing else, and never with the pinned key.
+    #[test]
+    fn a_throwaway_key_signs_what_the_verifier_accepts() {
+        let key = test_key();
+        let sums = FIX_SUMS.as_bytes();
+        let sig = minisign::sign(Some(&key.pk), &key.sk, sums, Some("file:SHA256SUMS"), None).unwrap().into_string();
+        assert_eq!(verify_sums_signature(sums, &sig, &test_pubkey()).unwrap(), "file:SHA256SUMS");
+        assert!(verify_sums_signature(b"other bytes", &sig, &test_pubkey()).unwrap_err().contains("failed"));
+        assert!(verify_sums_signature(sums, &sig, FIX_PUB).is_err());
+        assert!(verify_sums_signature(sums, &sig, ENGINE_SIGNING_PUBKEY.unwrap()).is_err());
+    }
+
+    /// The shipped build pins the kit's engine signing key and enforces it: a release with
+    /// no signature (every kit release up to v6.16.1) and a release signed by any other key
+    /// are refused, and nothing is installed.
+    #[test]
+    fn the_pinned_key_is_set_and_enforced() {
+        let pinned = ENGINE_SIGNING_PUBKEY.expect("the engine signing public key is pinned");
+        assert_eq!(pinned, pinned.trim());
+        minisign_verify::PublicKey::from_base64(pinned).expect("the pinned key is a minisign public key");
+        assert_ne!(pinned, FIX_PUB);
+        assert_ne!(pinned, test_pubkey());
+
+        let root = scratch("pinned");
+        let base = root.join("releases");
+        publish_unsigned(&base, &manifest("6.3.0", "1.2.0", Some("1.6.0")));
+        let url = format!("file://{}", base.display());
+        let engines = root.join("engine");
+        let e = install_engine(&engines, &url, "6.3.0").unwrap_err();
+        assert!(e.contains("no engine signature") && e.contains("refusing to install"), "{e}");
+        sign_release(&base, "6.3.0", test_key());
+        let e = install_engine(&engines, &url, "6.3.0").unwrap_err();
+        assert!(e.contains("signature check of SHA256SUMS failed"), "{e}");
+        assert!(!engines.join("6.3.0").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The pinned key against a signature the kit's CI published. Download `SHA256SUMS` and
+    /// `SHA256SUMS.minisig` of a kit release tagged after the key existed into one folder and
+    /// point `COLONY_TEST_ENGINE_SUMS` at that `SHA256SUMS`.
+    /// Run: `cargo test -- --ignored the_pinned_key_verifies_a_kit_release`.
+    #[test]
+    #[ignore]
+    fn the_pinned_key_verifies_a_kit_release() {
+        let sums_path = PathBuf::from(std::env::var("COLONY_TEST_ENGINE_SUMS").expect("set COLONY_TEST_ENGINE_SUMS"));
+        let sums = fs::read(&sums_path).unwrap();
+        let sig = fs::read_to_string(sums_path.with_file_name("SHA256SUMS.minisig")).unwrap();
+        let comment = verify_sums_signature(&sums, &sig, ENGINE_SIGNING_PUBKEY.unwrap()).unwrap();
+        assert!(comment.contains("file:SHA256SUMS"), "{comment}");
     }
 
     #[test]
@@ -1337,7 +1441,7 @@ mod tests {
         let url = format!("file://{}", base.display());
         let engines = root.join("engine");
         for v in ["6.3.0", "6.4.0", "6.5.0"] {
-            install_engine(&engines, &url, v).unwrap();
+            install(&engines, &url, v).unwrap();
         }
         assert!(!engines.join("6.3.0").exists());
         assert!(engines.join("6.4.0").is_dir() && engines.join("6.5.0").is_dir());

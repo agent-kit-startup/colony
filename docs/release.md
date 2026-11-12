@@ -91,8 +91,16 @@ Environment: `COLONY_DOWNLOAD_BASE` (`https://` or `file://`; default `https://g
 
 `packaging/smoke/install-smoke.sh` runs offline: it signs a fake release (stub binary, built with `packaging/make-release.sh`) with a throwaway key, serves it over `file://` and installs it into a scratch `HOME` with a `PATH` without `minisign`. Checks: the install with the OpenSSL verifier (and with `minisign` when installed), refusal of a changed `SHA256SUMS`, of a signature by another key, of a changed trusted comment, of a changed tarball and of a non-https base, an upgrade that keeps exactly the previous version, the uninstall (engine kept), and that a foreign launcher is not overwritten.
 
+## Engine signature
+
+The engine Colony installs is a kit release, not part of the Colony release, and it has its own key. `ENGINE_SIGNING_PUBKEY` in `src-tauri/src/engine.rs` pins the kit's engine signing public key (minisign key id `EE66495404D7ADCF`). The kit's tag CI signs the engine's `SHA256SUMS` with the secret `ENGINE_SIGNING_KEY` and publishes `SHA256SUMS.minisig` next to it. `Install engine` and `Update engine` download that file, check it over `SHA256SUMS` before the sha256 is trusted, and refuse a release without a valid one.
+
+- Kit releases up to v6.16.1 have no `SHA256SUMS.minisig`, so a Colony built with the key does not install them, by version or as the newest one. An engine that is already installed keeps running and stays available to `Roll back`: the check runs when an engine is installed, not when it starts.
+- The updater installs the newest kit release inside `ENGINE_PROTOCOL_RANGE` and does not fall back to an older signed one: when that newest release is unsigned, the install fails with `this release has no engine signature`.
+- Before cutting a Colony release, check that the newest kit release inside the range is signed by the pinned key, or a fresh install has no engine to install. Download its `SHA256SUMS` and `SHA256SUMS.minisig` into one folder, then `minisign -Vm SHA256SUMS -P <the RW... line>`, or `COLONY_TEST_ENGINE_SUMS=<folder>/SHA256SUMS cargo test --manifest-path src-tauri/Cargo.toml -- --ignored the_pinned_key_verifies_a_kit_release`.
+- A new key means a new Colony release: the key is a constant in the binary.
+
 ## Not yet
 
 - `install.sh` installing the AppImage (so the curl install updates itself too): the AppImage needs FUSE (`fuse2`) on the host, which Omarchy and Arch do not install by default.
 - macOS and Windows builds, arm64.
-- The managed engine's signature check is implemented (`verify_sums_signature` in `src-tauri/src/engine.rs`: minisign over `SHA256SUMS`, fails closed without `SHA256SUMS.minisig`) but off: `ENGINE_SIGNING_PUBKEY` stays `None` until the kit's engine signing key exists; then its `RW...` public key line goes there.
