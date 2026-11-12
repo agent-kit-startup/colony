@@ -29,6 +29,10 @@ const PLUGIN_ICON_FILE: &str = "colony-icon.svg";
 /// closest to the Colony mark. The menu JSONC takes a font glyph only (no image path), so the
 /// menu cannot show the mark itself; the bar widget does.
 const MENU_GLYPH: char = '\u{e22e}';
+/// The line of `Colony.qml` that names the command the widget runs (`widget_qml` rewrites it).
+const QML_COMMAND_LINE: &str = "  readonly property string colonyCommand: \"colony\"\n";
+/// The command name when this binary's own name cannot be used.
+const DEFAULT_COMMAND: &str = "colony";
 const BEGIN: &str = "// colony:begin";
 const END: &str = "// colony:end";
 const OMARCHY_BIN: &str = "/usr/share/omarchy/bin";
@@ -41,14 +45,33 @@ fn menu_file(home: &Path) -> PathBuf {
     home.join(".config/omarchy/extensions/omarchy-menu.jsonc")
 }
 
-/// The menu block, markers included, one line per entry.
-pub fn menu_block() -> String {
-    let when = r#""when":"command -v colony""#;
+/// The command the menu entries and the bar widget run: the file name of this binary
+/// (`exe`), so an install under another name gets entries that start it and not whatever
+/// else is called `colony` on PATH. The AUR package `missionkit-colony-bin` installs
+/// `/usr/bin/colony-hde`, because `/usr/bin/colony` belongs to another project's package.
+/// A name that is not a plain command word falls back to `colony`.
+pub fn command_name(exe: Option<&Path>) -> String {
+    let name = exe.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // Linux appends this to the path of a binary that was replaced while it runs.
+    let name = name.strip_suffix(" (deleted)").unwrap_or(&name);
+    let plain = !name.is_empty() && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if plain { name.to_string() } else { DEFAULT_COMMAND.into() }
+}
+
+/// `Colony.qml` with `command` as the command the widget polls and starts.
+fn widget_qml(command: &str) -> String {
+    PLUGIN_QML.replacen(QML_COMMAND_LINE, &format!("  readonly property string colonyCommand: \"{command}\"\n"), 1)
+}
+
+/// The menu block, markers included, one line per entry. The entries run `command`; their
+/// keys stay `colony` and `colony.*` under any command name.
+pub fn menu_block(command: &str) -> String {
+    let when = format!(r#""when":"command -v {command}""#);
     let rows = [
         format!(r#""colony": {{"icon":"{MENU_GLYPH}","label":"Colony","description":"Mission Kit cockpit",{when}}},"#),
-        format!(r#""colony.open": {{"icon":"{MENU_GLYPH}","label":"Open Colony","description":"Focus the Colony window, or start it",{when},"action":"colony"}},"#),
-        format!(r#""colony.inbox": {{"icon":"{}","label":"Colony Inbox","description":"Open HITL gates of the running windows",{when},"action":"colony --inbox"}},"#, '\u{f009a}'),
-        format!(r#""colony.folder": {{"icon":"{}","label":"Open folder in Colony","description":"Pick a folder in the running window",{when},"action":"colony --open-folder"}},"#, '\u{f07b}'),
+        format!(r#""colony.open": {{"icon":"{MENU_GLYPH}","label":"Open Colony","description":"Focus the Colony window, or start it",{when},"action":"{command}"}},"#),
+        format!(r#""colony.inbox": {{"icon":"{}","label":"Colony Inbox","description":"Open HITL gates of the running windows",{when},"action":"{command} --inbox"}},"#, '\u{f009a}'),
+        format!(r#""colony.folder": {{"icon":"{}","label":"Open folder in Colony","description":"Pick a folder in the running window",{when},"action":"{command} --open-folder"}},"#, '\u{f07b}'),
     ];
     let mut out = format!("  {BEGIN} (written by Colony: Settings → Omarchy integration…; its Remove deletes this block)\n");
     for r in rows {
@@ -90,8 +113,8 @@ fn has_own_colony_key(text: &str) -> bool {
 }
 
 /// The menu file with Colony's block (replacing an older one); `Err` when it cannot be placed.
-pub fn menu_with_block(current: Option<&str>) -> Result<String, String> {
-    let Some(text) = current else { return Ok(format!("{{\n{}}}\n", menu_block())) };
+pub fn menu_with_block(current: Option<&str>, command: &str) -> Result<String, String> {
+    let Some(text) = current else { return Ok(format!("{{\n{}}}\n", menu_block(command))) };
     let (rest, _) = strip_block(text);
     if has_own_colony_key(&rest) {
         return Err("the menu file already has a \"colony\" entry of its own; Colony leaves it alone".into());
@@ -105,7 +128,7 @@ pub fn menu_with_block(current: Option<&str>) -> Result<String, String> {
                 let nl = if rest[at..].starts_with('\n') { 1 } else { 0 };
                 let split = at + nl;
                 let lead = if nl == 1 { "" } else { "\n" };
-                return Ok(format!("{}{lead}{}{}", &rest[..split], menu_block(), &rest[split..]));
+                return Ok(format!("{}{lead}{}{}", &rest[..split], menu_block(command), &rest[split..]));
             }
         }
         offset += line.len();
@@ -191,8 +214,9 @@ fn menu_state(home: &Path) -> (String, Option<String>) {
     }
 }
 
-/// What Install would do under `home` (also an update: our files are rewritten).
-pub fn install_plan(home: &Path) -> Plan {
+/// What Install would do under `home` (also an update: our files are rewritten). The widget
+/// and the menu entries run `command` (`command_name`).
+pub fn install_plan(home: &Path, command: &str) -> Plan {
     let widget = widget_state(home);
     let (menu, text) = menu_state(home);
     let mut steps = Vec::new();
@@ -201,10 +225,10 @@ pub fn install_plan(home: &Path) -> Plan {
         steps.push(Step::write(dir.join("manifest.json"), PLUGIN_MANIFEST.into()));
         // The icon before the QML that loads it: the shell reloads the plugin on a QML change.
         steps.push(Step::write(dir.join(PLUGIN_ICON_FILE), PLUGIN_ICON.into()));
-        steps.push(Step::write(dir.join("Colony.qml"), PLUGIN_QML.into()));
+        steps.push(Step::write(dir.join("Colony.qml"), widget_qml(command)));
     }
     if !menu.starts_with("conflict") {
-        if let Ok(next) = menu_with_block(text.as_deref()) {
+        if let Ok(next) = menu_with_block(text.as_deref(), command) {
             steps.push(Step::write(menu_file(home), next));
         }
     }
@@ -297,7 +321,7 @@ pub fn omarchy_integration_plan(action: String) -> Result<Plan, String> {
     omarchy_only()?;
     let home = home()?;
     match action.as_str() {
-        "install" => Ok(install_plan(&home)),
+        "install" => Ok(install_plan(&home, &command_name(std::env::current_exe().ok().as_deref()))),
         "remove" => Ok(remove_plan(&home)),
         _ => Err(format!("unknown action {action}")),
     }
@@ -431,7 +455,7 @@ mod tests {
     #[test]
     fn block_parses_in_the_template_an_empty_file_and_after_user_entries() {
         for current in [Some(OMARCHY_TEMPLATE), None, Some("{\n  \"mine\": {\"label\":\"Mine\",\"action\":\"x\"}\n}\n"), Some("{ \"mine\": {\"label\":\"Mine\"} }")] {
-            let text = menu_with_block(current).unwrap();
+            let text = menu_with_block(current, "colony").unwrap();
             let v: serde_json::Value = serde_json::from_str(&strip_jsonc(&text)).unwrap_or_else(|e| panic!("{e}\n{text}"));
             assert_eq!(v["colony.inbox"]["action"], "colony --inbox");
             assert_eq!(v["colony"]["when"], "command -v colony");
@@ -445,8 +469,8 @@ mod tests {
 
     #[test]
     fn install_twice_keeps_one_block_and_remove_restores_the_file() {
-        let once = menu_with_block(Some(OMARCHY_TEMPLATE)).unwrap();
-        let twice = menu_with_block(Some(&once)).unwrap();
+        let once = menu_with_block(Some(OMARCHY_TEMPLATE), "colony").unwrap();
+        let twice = menu_with_block(Some(&once), "colony").unwrap();
         assert_eq!(once, twice);
         assert_eq!(strip_block(&twice).0, OMARCHY_TEMPLATE);
     }
@@ -454,16 +478,72 @@ mod tests {
     #[test]
     fn a_colony_entry_of_the_users_own_blocks_the_menu() {
         let own = "{\n  \"colony\": {\"label\":\"My Colony\"},\n}\n";
-        assert!(menu_with_block(Some(own)).is_err());
+        assert!(menu_with_block(Some(own), "colony").is_err());
         // Commented out it is not an entry.
-        assert!(menu_with_block(Some("{\n  // \"colony\": {},\n}\n")).is_ok());
-        assert!(menu_with_block(Some("// only a comment\n")).is_err());
+        assert!(menu_with_block(Some("{\n  // \"colony\": {},\n}\n"), "colony").is_ok());
+        assert!(menu_with_block(Some("// only a comment\n"), "colony").is_err());
+    }
+
+    #[test]
+    fn the_command_is_this_binarys_own_name() {
+        for (exe, want) in [
+            ("/usr/bin/colony", "colony"),
+            ("/usr/bin/colony-hde", "colony-hde"),
+            ("/home/u/.local/share/colony/app/current/colony", "colony"),
+            ("/tmp/.mount_ColonyAbC123/usr/bin/colony", "colony"),
+            ("/usr/bin/colony-hde (deleted)", "colony-hde"),
+            // Not a plain command word: never written into a menu action or the widget.
+            ("/opt/x/my colony", "colony"),
+            ("/opt/x/colony\";rm", "colony"),
+            ("/opt/x/-colony", "colony"),
+            ("/", "colony"),
+        ] {
+            assert_eq!(command_name(Some(Path::new(exe))), want, "{exe}");
+        }
+        assert_eq!(command_name(None), "colony");
+    }
+
+    /// Installed under another name (the AUR package's `/usr/bin/colony-hde`), the menu
+    /// entries and the bar widget run that name, and nothing is left that runs `colony`.
+    #[test]
+    fn a_renamed_binary_gets_entries_and_a_widget_that_run_it() {
+        let v: serde_json::Value = serde_json::from_str(&strip_jsonc(&menu_with_block(Some(OMARCHY_TEMPLATE), "colony-hde").unwrap())).unwrap();
+        assert_eq!(v["colony"]["when"], "command -v colony-hde");
+        assert_eq!(v["colony.open"]["action"], "colony-hde");
+        assert_eq!(v["colony.inbox"]["action"], "colony-hde --inbox");
+        assert_eq!(v["colony.folder"]["action"], "colony-hde --open-folder");
+        for key in ["colony", "colony.open", "colony.inbox", "colony.folder"] {
+            assert_eq!(v[key]["when"], "command -v colony-hde", "{key}");
+        }
+
+        // The shipped file names the default once, and every command the widget runs reads it.
+        assert_eq!(PLUGIN_QML.matches(QML_COMMAND_LINE).count(), 1);
+        assert_eq!(widget_qml("colony"), PLUGIN_QML);
+        assert!(PLUGIN_QML.contains("command: [root.colonyCommand, \"status\", \"--bar\"]"));
+        assert!(PLUGIN_QML.contains("root.bar.run(root.colonyCommand + \" --inbox\")"));
+        assert!(PLUGIN_QML.contains("else root.bar.run(root.colonyCommand)"));
+        let code: String = PLUGIN_QML.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        assert!(!code.contains("\"colony\", ") && !code.contains("run(\"colony"), "a command in Colony.qml does not read colonyCommand");
+        let qml = widget_qml("colony-hde");
+        assert!(qml.contains("  readonly property string colonyCommand: \"colony-hde\"\n"));
+        assert!(!qml.contains("colonyCommand: \"colony\""));
+
+        let home = tmp("renamed");
+        let p = install_plan(&home, "colony-hde");
+        apply(&p, |_| Ok(String::new()));
+        assert_eq!(std::fs::read_to_string(plugin_dir(&home).join("Colony.qml")).unwrap(), qml);
+        assert!(std::fs::read_to_string(menu_file(&home)).unwrap().contains("\"action\":\"colony-hde --inbox\""));
+        // Remove undoes it whatever name wrote it.
+        apply(&remove_plan(&home), |_| Ok(String::new()));
+        assert!(!plugin_dir(&home).exists());
+        assert!(!std::fs::read_to_string(menu_file(&home)).unwrap().contains("colony"));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn plans_on_a_scratch_home_list_every_file_and_command() {
         let home = tmp("plan");
-        let p = install_plan(&home);
+        let p = install_plan(&home, "colony");
         assert_eq!((p.widget.as_str(), p.menu.as_str()), ("absent", "absent"));
         let targets: Vec<_> = p.steps.iter().map(|s| (s.kind.as_str(), s.target.replace(&home.display().to_string(), "~"))).collect();
         assert_eq!(targets[0], ("write", "~/.config/omarchy/plugins/missionkit.colony/manifest.json".into()));
@@ -484,8 +564,8 @@ mod tests {
         assert_eq!(ran.lock().unwrap().len(), 2);
         assert_eq!(std::fs::read_to_string(plugin_dir(&home).join("Colony.qml")).unwrap(), PLUGIN_QML);
         assert_eq!(std::fs::read_to_string(plugin_dir(&home).join("colony-icon.svg")).unwrap(), PLUGIN_ICON);
-        assert_eq!(install_plan(&home).widget, "installed");
-        assert_eq!(install_plan(&home).menu, "installed");
+        assert_eq!(install_plan(&home, "colony").widget, "installed");
+        assert_eq!(install_plan(&home, "colony").menu, "installed");
 
         let r = remove_plan(&home);
         assert!(r.steps[0].target.ends_with("omarchy-plugin-disable missionkit.colony"));
@@ -503,7 +583,7 @@ mod tests {
         let dir = plugin_dir(&home);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("manifest.json"), r#"{"id":"someone.else"}"#).unwrap();
-        let p = install_plan(&home);
+        let p = install_plan(&home, "colony");
         assert!(p.widget.starts_with("conflict"));
         assert!(p.steps.iter().all(|s| !s.target.contains("plugins/")), "{:?}", p.steps);
         assert!(remove_plan(&home).steps.iter().all(|s| !s.target.contains("plugins/")));
@@ -512,7 +592,7 @@ mod tests {
     #[test]
     fn a_failed_command_is_reported_and_files_stay() {
         let home = tmp("fail");
-        let report = apply(&install_plan(&home), |_| Err("shell not running".into()));
+        let report = apply(&install_plan(&home, "colony"), |_| Err("shell not running".into()));
         assert!(report.iter().any(|l| l.starts_with("failed:") && l.contains("shell not running")));
         assert!(plugin_dir(&home).join("manifest.json").exists());
     }
@@ -577,7 +657,7 @@ mod tests {
         // Not the robot (nf-md-robot U+F06A9, the surrogate pair QML spells it with).
         for robot in ["\\uDB81\\uDEA9", "\u{f06a9}", "f06a9"] {
             assert!(!PLUGIN_QML.contains(robot), "robot glyph {robot} still in Colony.qml");
-            assert!(!menu_block().contains(robot), "robot glyph {robot} still in the menu");
+            assert!(!menu_block("colony").contains(robot), "robot glyph {robot} still in the menu");
         }
         // The mark, as an Image beside the QML, tinted by MultiEffect with foreground / urgent.
         assert!(PLUGIN_QML.contains("Qt.resolvedUrl(\"colony-icon.svg\")"));
@@ -594,7 +674,7 @@ mod tests {
             assert!(brand.contains(a), "{a} is not in assets/brand/colony-icon.svg");
         }
         // The menu takes a glyph only: the ringed planet for Colony and Open Colony.
-        let menu: serde_json::Value = serde_json::from_str(&strip_jsonc(&menu_with_block(None).unwrap())).unwrap();
+        let menu: serde_json::Value = serde_json::from_str(&strip_jsonc(&menu_with_block(None, "colony").unwrap())).unwrap();
         assert_eq!(menu["colony"]["icon"], "\u{e22e}");
         assert_eq!(menu["colony.open"]["icon"], "\u{e22e}");
     }
