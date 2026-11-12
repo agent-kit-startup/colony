@@ -30,7 +30,7 @@ Release files:
 | File | What |
 |------|------|
 | `colony-<version>-linux-x86_64.tar.gz` | `colony-<version>-linux-x86_64/colony` (binary, direct channel) and `colony.png` (icon): what `install.sh` installs |
-| `colony-<version>-linux-x86_64-package.tar.gz` | the same layout, binary built with `--no-default-features` (package channel, no updater): the source of distro packages (AUR `colony-bin`, omarchy-pkgs) |
+| `colony-<version>-linux-x86_64-package.tar.gz` | the same layout, binary built with `--no-default-features` (package channel, no updater): the source of distro packages (AUR `missionkit-colony-bin`, omarchy-pkgs; see [Arch package (AUR)](#arch-package-aur)) |
 | `Colony_<version>_amd64.deb` | the Tauri `.deb` bundle (system install with `sudo apt install ./Colony_...deb`) |
 | `Colony_<version>_amd64.AppImage` | the Tauri AppImage (direct channel): the build that updates itself in place |
 | `Colony_<version>_amd64.AppImage.sig` | its updater signature (`createUpdaterArtifacts`, release key) |
@@ -46,11 +46,39 @@ The channel is chosen at build time with a Cargo feature (`src-tauri/src/appupda
 | Channel | Build | Updates |
 |---------|-------|---------|
 | `direct` (default feature `channel-direct`) | `pnpm tauri build` | The official `tauri-plugin-updater` reads `https://github.com/agent-kit-startup/colony/releases/latest/download/latest.json` (prereleases are never "latest", so they never reach it), checks the minisign signature of the download against `plugins.updater.pubkey` (the release key `9A9BB4349C2248C6`, the same key `install.sh` pins) with `requireSignedVersion` (the signed trusted comment must name the announced version: no downgrade through a crafted `latest.json`), and installs it in place. User-started only: `Help → About Colony… → Check for updates / Update and restart`; nothing checks on a timer or at startup. |
-| `package` | `pnpm tauri build --no-bundle -- --no-default-features` | The updater crate is not compiled in. About says updates come from the package manager (`pacman -Syu` on Arch and Omarchy). AUR `colony-bin` and omarchy-pkgs package the `-package` tarball. |
+| `package` | `pnpm tauri build --no-bundle -- --no-default-features` | The updater crate is not compiled in. About says updates come from the package manager (`pacman -Syu` on Arch and Omarchy). AUR `missionkit-colony-bin` and omarchy-pkgs package the `-package` tarball. |
 
 What updates in place, on Linux: the plugin (2.14) installs an AppImage (rewrites the file, per user, no root) or a `.deb`/`.rpm` (as root through `pkexec dpkg -i` / `rpm -U`). It has no installer for the per-user tarball of `install.sh`; an unmarked binary falls through to the AppImage routine, which would overwrite it with AppImage bytes. So Colony installs in place only when it runs from the AppImage (`APPIMAGE` set and the AppImage bundle marker). From the tarball the check still says whether a newer release exists, and the update is the install line again (it keeps the previous version); from the `.deb` it is the newer `.deb`. `latest.json` lists only the AppImage.
 
 `createUpdaterArtifacts` is passed with `--config` in the release workflow, not set in `tauri.conf.json`, so a local `pnpm tauri build` needs no signing key. The release workflow fails when the AppImage signature or `latest.json` is missing.
+
+## Arch package (AUR)
+
+`packaging/aur/missionkit-colony-bin/` holds the files of the AUR package `missionkit-colony-bin`: `PKGBUILD`, `.SRCINFO` and two desktop entries. The package is not `colony-bin`: that AUR name belongs to Project-Colony's launcher, another project, whose package installs `/usr/bin/colony`, `colony.desktop` and the hicolor `colony.png`.
+
+So that the two packages share no file and install side by side, this one installs everything as `colony-hde` (HDE: Hybrid Development Environment). It declares no conflict with `colony-bin` and does not provide `colony`:
+
+| Installed file | From |
+|----------------|------|
+| `/usr/bin/colony-hde` | `colony` of the `-package` tarball, unchanged |
+| `/usr/share/applications/colony-hde.desktop` | `Exec=colony-hde %f`, `Icon=colony-hde`, `StartupWMClass=colony-hde` |
+| `/usr/share/applications/colony-hde-handler.desktop` | the `colony://play` link: `Exec=colony-hde %u`, `MimeType=x-scheme-handler/colony;`, hidden from launchers |
+| `/usr/share/icons/hicolor/256x256/apps/colony-hde.png` | `colony.png` of the tarball |
+| `/usr/share/licenses/missionkit-colony-bin/NOTICE`, `seti-ui.MIT.txt` | the repository at the release tag |
+
+What the other name changes at run time:
+
+- The command is `colony-hde`, and so are the window class and app id (GTK takes them from the name the binary was started with), which is why the desktop entry says `StartupWMClass=colony-hde`. A Hyprland rule or `omarchy-launch-or-focus` call written for the curl install's `colony` class does not match the packaged window.
+- Single instance, `File → New window` and the host-request CLI use the path of the running binary and need nothing.
+- `Settings → Omarchy integration…` writes the menu entries and the bar widget with the name of the running binary (`command_name` in `src-tauri/src/omarchy_shell.rs`), so they run `colony-hde`. Releases up to v0.5.1 wrote `colony` there: package a release that has this change.
+- Settings, the managed engine and the Node runtime stay in `~/.config/colony` and `~/.local/share/colony`, shared with a curl install of the same user. The curl install is unchanged (`~/.local/bin/colony`).
+
+Bumping the package to a new release (stable versions only: a `pkgver` cannot carry a pre-release suffix):
+
+1. Download `SHA256SUMS` and `SHA256SUMS.sig` of the release and check the signature: `base64 -d SHA256SUMS.sig > SHA256SUMS.minisig`, then `minisign -Vm SHA256SUMS -x SHA256SUMS.minisig -P <PUBKEY of packaging/install.sh>`.
+2. Set `pkgver` (and `pkgrel=1`) in `PKGBUILD`, put the `-package.tar.gz` line of the verified `SHA256SUMS` first in `sha256sums`, and refresh the two license file sums if `NOTICE` or `licenses/seti-ui.MIT.txt` changed at the tag (`updpkgsums` rewrites all five).
+3. `makepkg -f` in a scratch copy of the folder, list the result with `bsdtar -tf`, then `makepkg --printsrcinfo > .SRCINFO`. `pnpm test` (`scripts/aurpkg.test.mjs`) checks the folder: the file names, the desktop entries, the pinned sums of the local files and that `.SRCINFO` matches `PKGBUILD`.
+4. Operator only: push `PKGBUILD`, `.SRCINFO` and the two desktop entries to the AUR repository. Set the `# Maintainer:` line to the AUR account before the first push.
 
 ## Where `install.sh` downloads from
 

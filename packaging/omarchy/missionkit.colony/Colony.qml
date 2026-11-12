@@ -20,6 +20,9 @@ Item {
   property int runs: 0
   property int windows: 0
   property string tip: "Colony"
+  // The command this widget polls and starts. Colony writes its own binary name here when
+  // it installs the widget (a distro package may install it under another name).
+  readonly property string colonyCommand: "colony"
 
   readonly property color tint: root.bar ? (root.gates > 0 ? root.bar.urgent : root.bar.foreground) : "white"
 
@@ -42,7 +45,7 @@ Item {
 
   Process {
     id: statusProc
-    command: ["colony", "status", "--bar"]
+    command: [root.colonyCommand, "status", "--bar"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.apply(text)
@@ -119,8 +122,8 @@ Item {
     onExited: if (root.bar) root.bar.hideTooltip(root)
     onClicked: function(mouse) {
       if (!root.bar) return
-      if (mouse.button === Qt.LeftButton && root.gates > 0) root.bar.run("colony --inbox")
-      else root.bar.run("colony")
+      if (mouse.button === Qt.LeftButton && root.gates > 0) root.bar.run(root.colonyCommand + " --inbox")
+      else root.bar.run(root.colonyCommand)
     }
   }
 }
