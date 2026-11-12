@@ -87,7 +87,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
   grid-template-rows: 40px minmax(0, 1fr) 24px;
   grid-template-areas: "top top top top top top" "rail side side-resizer center resizer bottom" "status status status status status status";
 }
-/* Rail at the right (More → Rail, ui.layout.railPosition): the same tracks, the rail last. */
+/* Rail at the right (Settings → Appearance → Rail position, ui.layout.railPosition): the same tracks, the rail last. */
 #shell[data-rail="right"] {
   grid-template-columns: var(--sw) var(--sr) minmax(0, 1fr) var(--rail-w);
   grid-template-areas: "top top top top" "side side-resizer center rail" "side side-resizer resizer rail" "side side-resizer bottom rail" "status status status status";
@@ -154,7 +154,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls svg { width: 16px; height: 16px; }
 
 /* Rail: every kit item at first level, no More menu (ADR 2026-10-24 amend 2026-10-28).
-   Labels under the icons by default, icons only on request (Workspace → Config → Rail);
+   Labels under the icons by default, icons only on request (Settings → Appearance → Rail labels);
    every item keeps its tooltip and accessible name. At any window height the rail scrolls
    (wheel, touch, keys): an edge with items out of view fades, and its first pixel stays a
    1px line in the border colour. Items shrink with the window down to a legible minimum. */
@@ -945,7 +945,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 #st-engine { cursor: pointer; margin-right: 10px; }
 #st-engine.warn, #st-engine.bad { text-decoration: underline dotted; text-underline-offset: 3px; }
 
-/* More → Omarchy integration: the listed steps before anything runs. */
+/* Settings → Integrations → Omarchy integration: the listed steps before anything runs. */
 .omarchy-steps { margin: 4px 0 8px; padding-left: 20px; font-size: 12px; }
 .omarchy-steps li { margin: 2px 0; overflow-wrap: anywhere; }
 .omarchy-steps code { font-family: var(--mc-font-mono); }
@@ -960,12 +960,21 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .ws-nav-btn.active { border-color: var(--border-active); color: var(--text-primary); }
 .ws-body { flex: 1; min-height: 0; position: relative; overflow: auto; }
 .ws-body > .cv { position: absolute; inset: 0; }
-/* Workspace → Config: Colony's settings, the rows the rail's More menu held. */
-.settings-pane { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-xl); max-width: 560px; }
+/* Settings: Colony's settings, one view (the top bar gear and File → Settings… show it). Its
+   rows sit under plain group labels; the current choice and the gear while the view is on
+   screen change only their 1px border colour. */
+.settings-view { overflow: auto; background: var(--bg-primary); }
+.settings-head { display: flex; align-items: center; gap: var(--mc-space-md); padding: var(--mc-space-xl) var(--mc-space-xl) 0; max-width: 560px; }
+.settings-head h2 { margin: 0; flex: 1; font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.settings-pane { display: flex; flex-direction: column; gap: var(--mc-space-md); padding: var(--mc-space-md) var(--mc-space-xl) var(--mc-space-xl); max-width: 560px; }
+.settings-group { display: flex; flex-direction: column; gap: 2px; padding-top: var(--mc-space-md); border-top: 1px solid var(--border); }
+.settings-group[hidden] { display: none; }
+.settings-group-title { margin: 0; padding: 0 10px; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); color: var(--text-secondary); }
 .settings-pane button { text-align: left; border: 1px solid transparent; background: transparent; padding: 6px 10px; font-size: var(--mc-chrome-label-size); border-radius: var(--mc-radius-chrome); }
 .settings-pane button:hover { border-color: var(--border); }
 .settings-pane button.on { border-color: var(--border-active); color: var(--text-primary); }
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
+#btn-settings[aria-current="page"] { border-color: var(--border-active); }
 
 /* Native kit views (src/kitviews.ts): list rows, and the Colony game. Active filters and
    rows change only their 1px border colour (no bar, no inset, no tint). */

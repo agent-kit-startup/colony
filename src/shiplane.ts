@@ -53,7 +53,7 @@ export function shipLaneGate(data: J | null): string | null {
   if (!data) return "Waiting for Mission Control data…";
   const v = data.dashboardDataVersion;
   if (!dataAtLeast(v, SHIP_LANE_DATA_VERSION) || !data.shipLane || typeof data.shipLane !== "object") {
-    return `This engine's Mission Control data is ${typeof v === "string" ? v : "unknown"}; the ship lane needs ${SHIP_LANE_DATA_VERSION} (Agent Kit 6.9.0 or later). Update the engine (Workspace → Config → Engine…) to see and act on it.`;
+    return `This engine's Mission Control data is ${typeof v === "string" ? v : "unknown"}; the ship lane needs ${SHIP_LANE_DATA_VERSION} (Agent Kit 6.9.0 or later). Update the engine (Settings → Engine…) to see and act on it.`;
   }
   return null;
 }

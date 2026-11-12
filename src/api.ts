@@ -171,7 +171,7 @@ export const api = {
   /** Folders a later `colony <folder>` launch hands to this window (single instance). */
   /** The Omarchy theme and font now (`null` off Omarchy), then on every switch. */
   omarchySubscribe: (onEvent: Channel<OmarchyTheme | null>) => invoke<void>("omarchy_subscribe", { onEvent }),
-  /** More → Omarchy integration: what Install / Remove would do, then do it (src-tauri/src/omarchy_shell.rs). */
+  /** Settings → Omarchy integration: what Install / Remove would do, then do it (src-tauri/src/omarchy_shell.rs). */
   omarchyIntegrationPlan: (action: "install" | "remove") => invoke<OmarchyPlan>("omarchy_integration_plan", { action }),
   omarchyIntegrationApply: (action: string) => invoke<string[]>("omarchy_integration_apply", { action }),
   /** This window's open gates and live runs, for the omarchy-shell bar widget (Omarchy only). */

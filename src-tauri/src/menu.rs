@@ -1,7 +1,7 @@
 //! Native menu bar (File, View, Go, Terminal, Run, Help; kit ADR 2026-10-24 amend 2026-11-11).
 //! The items come from `src/menu.json`, the one
-//! command source: its `menus` are this bar, its `config` the action rows of Workspace →
-//! Config (settings only; the window renders those, never here). Every id sits in exactly one
+//! command source: its `menus` are this bar, its `config` the action rows of the Settings
+//! view (settings only; the window renders those, never here). Every id sits in exactly one
 //! of the two and is a key of the window's action map (src/main.ts `runAction`); the tests
 //! below check that against main.ts. A click emits `colony-menu` with the item id to the
 //! main window; the window runs the action.
@@ -24,7 +24,7 @@ const SPEC: &str = include_str!("../../src/menu.json");
 #[derive(Deserialize, Debug)]
 struct Spec {
     menus: Vec<SpecMenu>,
-    /// The action rows of Workspace → Config (src/main.ts renders them; not in the bar).
+    /// The action rows of the Settings view (src/main.ts renders them; not in the bar).
     #[serde(default)]
     config: Vec<SpecItem>,
 }
@@ -43,6 +43,9 @@ struct SpecItem {
     label: String,
     #[serde(default)]
     separator: bool,
+    /// A `config` row: the group label of the Settings view it sits under.
+    #[serde(default)]
+    group: String,
 }
 
 /// One menu of the installed menu bar, read back from the window (COLONY_SMOKE, tests).
@@ -85,10 +88,13 @@ fn parse_str(text: &str) -> Result<Spec, String> {
             check(i)?;
         }
     }
-    // One id, one place: a Config row may not repeat a menu bar item (nor carry a separator:
-    // the Config pane draws its own section breaks).
+    // One id, one place: a Settings row may not repeat a menu bar item (nor carry a separator:
+    // the Settings view draws its own groups).
     for i in &spec.config {
         check(i)?;
+        if i.group.trim().is_empty() {
+            return Err(format!("src/menu.json: the Settings row {} names no group", i.id));
+        }
     }
     Ok(spec)
 }
@@ -206,7 +212,7 @@ mod tests {
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
         assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
         assert_eq!(menu_ids("Help"), ["about", "shortcuts", "check-updates"]);
-        // Engine… is a setting: a Config row, not a Run item.
+        // Engine… is a setting: a Settings row, not a Run item.
         assert!(config_ids().iter().any(|i| i == "engine") && !ids().iter().any(|i| i == "engine"));
     }
 
@@ -230,7 +236,7 @@ mod tests {
 
     const MAIN_TS: &str = include_str!("../../src/main.ts");
 
-    /// The action ids of Workspace → Config (settings only; never in the menu bar).
+    /// The action ids of the Settings view (settings only; never in the menu bar).
     fn config_ids() -> Vec<String> {
         parse().unwrap().config.into_iter().map(|i| i.id).collect()
     }
@@ -284,20 +290,38 @@ mod tests {
         }
     }
 
-    /// The settings Workspace → Config may hold as action rows (Skin, Title bar and Rail are
-    /// markup in main.ts): the Engine panel (kit ADR 2026-10-24 amend 2026-11-11, point 2) and
-    /// the Omarchy integration. Views, commands and About live in the menu bar: a new id here
-    /// is a decision.
-    const CONFIG_SETTINGS: &[&str] = &["engine", "omarchy"];
+    /// The settings the Settings view may hold as action rows (kit ADR 2026-10-24 amend
+    /// 2026-11-11, point 2; Skin, Title bar and Rail are markup in main.ts, under Appearance):
+    /// the Engine panel, the Omarchy integration and the raw settings.json, each with the
+    /// group label it sits under. Views, commands and About live in the menu bar: a new id
+    /// here is a decision.
+    const CONFIG_SETTINGS: &[(&str, &str)] = &[("engine", "Engine"), ("omarchy", "Integrations"), ("settings-json", "Files")];
 
     #[test]
     fn config_holds_settings_only() {
-        for id in config_ids() {
-            assert!(CONFIG_SETTINGS.contains(&id.as_str()), "{id} in Config: Config holds settings only (CONFIG_SETTINGS)");
-        }
-        // Config's action rows come from menu.json, not from markup in main.ts.
+        let rows: Vec<(String, String)> = parse().unwrap().config.into_iter().map(|i| (i.id, i.group)).collect();
+        let want: Vec<(String, String)> = CONFIG_SETTINGS.iter().map(|(id, group)| (id.to_string(), group.to_string())).collect();
+        assert_eq!(rows, want, "the Settings view holds settings only, each under its group (CONFIG_SETTINGS)");
+        // Its action rows come from menu.json, not from markup in main.ts.
         let markup = main_ts_block("<div id=\"settings-pane\"", "</div>\n<div id=\"quick\"");
-        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a Config action row: {markup}");
+        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a Settings action row: {markup}");
+    }
+
+    /// One Settings surface (kit ADR 2026-10-24 amend 2026-11-11, point 2): `settings` (the
+    /// gear and File → Settings…) shows the view, the raw file opens from the one
+    /// `settings-json` row, and Settings is no Workspace section.
+    #[test]
+    fn settings_is_one_view() {
+        let spec = parse().unwrap();
+        let file = spec.menus.iter().find(|m| m.label == "File").unwrap();
+        let item = file.items.iter().find(|i| i.id == "settings").unwrap();
+        assert_eq!(item.label, "Settings…", "the File item names the view, not the file");
+        let actions = main_ts_block("const ACTIONS", "\n};");
+        assert!(actions.contains("\n  settings: () => showSettings(),"), "File → Settings… shows the Settings view");
+        assert!(actions.contains("\n  \"settings-json\": () => openSettings(),"), "Open settings.json opens the raw file");
+        assert!(MAIN_TS.contains("$(\"btn-settings\").addEventListener(\"click\", () => showSettings());"), "the gear shows the same view");
+        assert!(!view_ids().iter().any(|v| v == "view:config"), "Settings is not a Workspace section");
+        assert!(!main_ts_block("const RAIL: RailItem[] = [", "\n];").contains("config"), "the Workspace tooltip names no Config");
     }
 
     #[test]
@@ -329,7 +353,7 @@ mod tests {
     #[test]
     fn view_items_resolve() {
         let views = view_ids();
-        for want in ["view:mission", "view:ship", "view:workspace", "view:plans", "view:config", "view:flight", "view:activity", "view:terminals"] {
+        for want in ["view:mission", "view:ship", "view:workspace", "view:plans", "view:memory", "view:flight", "view:activity", "view:terminals"] {
             assert!(views.iter().any(|v| v == want), "{want} not in {views:?}");
         }
         assert!(!views.iter().any(|v| v == "view:terminal"), "Terminal is a toggle, not a view");
@@ -339,12 +363,14 @@ mod tests {
     fn a_duplicate_id_is_refused() {
         let twice_in_bar = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"},{"id":"x","label":"X again"}]}]}"#;
         assert!(parse_str(twice_in_bar).is_err());
-        let bar_and_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"x","label":"X"}]}"#;
+        let bar_and_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"x","group":"G","label":"X"}]}"#;
         assert!(parse_str(bar_and_config).is_err());
-        let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"},{"id":"y","label":"Y"}]}"#;
+        let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"},{"id":"y","group":"G","label":"Y"}]}"#;
         assert!(parse_str(twice_in_config).is_err());
-        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
+        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"}]}"#;
         assert_eq!(parse_str(fine).map(|s| s.config.len()), Ok(1));
+        let no_group = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
+        assert!(parse_str(no_group).is_err());
         let separator_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"separator":true}]}"#;
         assert!(parse_str(separator_in_config).is_err());
     }

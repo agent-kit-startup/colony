@@ -1,5 +1,5 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files), View (the rail items in rail order, Plans, then the Explorer and the data reload), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of Workspace → Config, which holds settings only (src/main.ts renders them after its Skin, Title bar and Rail choices; `omarchyOnly` rows show on Omarchy only); an id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Plans, then the Explorer and the data reload), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -16,7 +16,7 @@
         { "id": "open-in-editor", "label": "Open in editor" },
         { "id": "file-manager", "label": "Open in terminal file manager" },
         { "separator": true },
-        { "id": "settings", "label": "Settings (settings.json)" },
+        { "id": "settings", "label": "Settings…" },
         { "separator": true },
         { "id": "close-window", "label": "Close window" }
       ]
@@ -96,7 +96,8 @@
     }
   ],
   "config": [
-    { "id": "engine", "label": "Engine…", "title": "The Agent Kit engine Colony runs: version, contracts, Node, install and update" },
-    { "id": "omarchy", "label": "Omarchy integration…", "title": "Bar widget and menu entries for omarchy-shell (opt-in, removable)", "omarchyOnly": true }
+    { "id": "engine", "group": "Engine", "label": "Engine…", "title": "The Agent Kit engine Colony runs: version, contracts, Node, install and update" },
+    { "id": "omarchy", "group": "Integrations", "label": "Omarchy integration…", "title": "Bar widget and menu entries for omarchy-shell (opt-in, removable)", "omarchyOnly": true },
+    { "id": "settings-json", "group": "Files", "label": "Open settings.json", "title": "The raw settings file in an editor tab: editor.command, editor.terminal, fileManager and the saved choices of this view" }
   ]
 }

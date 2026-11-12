@@ -64,7 +64,7 @@ fn queue_mode_for(protocol: Option<String>) -> QueueMode {
         "Queue runner as a driver run: its gates reach the Inbox".to_string()
     } else {
         format!(
-            "Engine driver protocol {} has no run-plan-all driver mode (needs {QUEUE_DRIVER_PROTOCOL}): the queue opens in a terminal tab; update the engine in Workspace → Config → Engine…",
+            "Engine driver protocol {} has no run-plan-all driver mode (needs {QUEUE_DRIVER_PROTOCOL}): the queue opens in a terminal tab; update the engine in Settings → Engine…",
             protocol.as_deref().unwrap_or("unknown")
         )
     };
@@ -94,7 +94,7 @@ fn needs_engine(backend: &str, version: Option<&str>) -> Option<&'static str> {
 fn engine_too_old(backend: &str, version: Option<&str>) -> Result<(), String> {
     match needs_engine(backend, version) {
         Some(min) => Err(format!(
-            "{} needs engine {min} or newer (current {}): update it in Workspace → Config → Engine…",
+            "{} needs engine {min} or newer (current {}): update it in Settings → Engine…",
             if backend == "openrouter" { "OpenRouter" } else { backend },
             version.unwrap_or("?")
         )),
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(needs_engine("openrouter", Some("?")), None);
         assert_eq!(needs_engine("claude", Some("5.0.0")), None);
         let e = engine_too_old("openrouter", Some("6.4.0")).unwrap_err();
-        assert!(e.contains("OpenRouter needs engine 6.6.0") && e.contains("current 6.4.0") && e.contains("Workspace → Config → Engine…"), "{e}");
+        assert!(e.contains("OpenRouter needs engine 6.6.0") && e.contains("current 6.4.0") && e.contains("Settings → Engine…"), "{e}");
         assert!(engine_too_old("codex", Some("6.4.0")).is_ok());
     }
 
@@ -725,7 +725,7 @@ fn queue_gates_in(root: &std::path::Path, backend: &str) -> QueueGates {
         Err(e) => return unsupported(e),
     };
     let Some(decision) = out.status.success().then(|| parse_gates(&out.stdout)).flatten() else {
-        return unsupported("This engine has no `agent-kit queue gates` (and ignores `run-plan-all --note`): update it in Workspace → Config → Engine… to relaunch the queue with a resolution note".into());
+        return unsupported("This engine has no `agent-kit queue gates` (and ignores `run-plan-all --note`): update it in Settings → Engine… to relaunch the queue with a resolution note".into());
     };
     let prompt = match kit_output(root, &["queue", "gates", "--prompt", "--backend", backend]) {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),

@@ -1,4 +1,4 @@
-// Colony bar widget for omarchy-shell (installed by Colony: More → Omarchy integration…).
+// Colony bar widget for omarchy-shell (installed by Colony: Settings → Omarchy integration…).
 // Polls `colony status --bar`, which aggregates the status files the running Colony
 // windows keep in $XDG_RUNTIME_DIR/colony/ and prints Waybar-style JSON:
 // {"text","tooltip","class","gates","runs","windows"}. Uses only the documented
