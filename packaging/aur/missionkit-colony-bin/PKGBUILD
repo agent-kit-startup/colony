@@ -1,0 +1,69 @@
+# Maintainer: set the AUR account's name and e-mail here before the first push
+#
+# Colony, the Mission Kit desktop IDE, from the files of its GitHub release.
+#
+# Everything is installed as colony-hde (HDE: Hybrid Development Environment). The AUR
+# package colony-bin (Project-Colony's launcher, another project) owns /usr/bin/colony,
+# colony.desktop and the hicolor colony.png; this package shares no file with it, so the
+# two install side by side and neither declares a conflict with the other.
+#
+# The source is the release's package-channel build: no self-updater, pacman updates it.
+# Its sha256 is the line of the release's SHA256SUMS, which is signed with the Colony
+# release key 9A9BB4349C2248C6. Bump steps: docs/release.md, "Arch package (AUR)".
+
+pkgname=missionkit-colony-bin
+pkgver=0.5.1
+pkgrel=1
+pkgdesc='Colony, the Mission Kit desktop IDE for agent runs (prebuilt binary)'
+arch=('x86_64')
+url='https://github.com/agent-kit-startup/colony'
+# The app is Apache-2.0. The official build also carries the Oligarchy game catalog, which
+# is all rights reserved and redistributed unmodified with Colony (NOTICE).
+license=('Apache-2.0' 'LicenseRef-Oligarchy-game-content')
+depends=(
+  'cairo'
+  'curl'
+  'dbus'
+  'gcc-libs'
+  'gdk-pixbuf2'
+  'git'
+  'glib2'
+  'glibc'
+  'gtk3'
+  'hicolor-icon-theme'
+  'libsoup3'
+  'tar'
+  'webkit2gtk-4.1'
+)
+optdepends=(
+  'github-cli: pull requests and CI of GitHub repositories'
+  'glab: merge requests and CI of GitLab repositories'
+  'nodejs: run the engine on the system Node (Colony downloads a Node build otherwise)'
+)
+provides=('missionkit-colony')
+conflicts=('missionkit-colony')
+options=('!strip' '!debug')
+_tarball="colony-${pkgver}-linux-x86_64-package.tar.gz"
+_raw="https://raw.githubusercontent.com/agent-kit-startup/colony/v${pkgver}"
+source=(
+  "${_tarball}::${url}/releases/download/v${pkgver}/${_tarball}"
+  "colony-${pkgver}-NOTICE::${_raw}/NOTICE"
+  "colony-${pkgver}-seti-ui.MIT.txt::${_raw}/licenses/seti-ui.MIT.txt"
+  'colony-hde.desktop'
+  'colony-hde-handler.desktop'
+)
+sha256sums=('8623f5050895bcf34656298fe3acce112a2956138cfeba40c3c70f58ff994a8b'
+            '72cd76b204b877ba25a0a795f56653909ae9e91c104d0334125edbab630a24e4'
+            'd4d2d888c6a0a220a7b0e2d6013cf37539b0e05ef937002b3b33bdb364575b88'
+            '8193308f417d41ae67af6ebc26ab888e5e244e11839b57d4bdaa3f65e743c6d0'
+            '693cbb1224f0b2e05432ae23753695bc619096256dc68a4b017bc657396cb2fc')
+
+package() {
+  local _dir="${srcdir}/colony-${pkgver}-linux-x86_64"
+  install -Dm755 "${_dir}/colony" "${pkgdir}/usr/bin/colony-hde"
+  install -Dm644 "${_dir}/colony.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/colony-hde.png"
+  install -Dm644 "${srcdir}/colony-hde.desktop" "${pkgdir}/usr/share/applications/colony-hde.desktop"
+  install -Dm644 "${srcdir}/colony-hde-handler.desktop" "${pkgdir}/usr/share/applications/colony-hde-handler.desktop"
+  install -Dm644 "${srcdir}/colony-${pkgver}-NOTICE" "${pkgdir}/usr/share/licenses/${pkgname}/NOTICE"
+  install -Dm644 "${srcdir}/colony-${pkgver}-seti-ui.MIT.txt" "${pkgdir}/usr/share/licenses/${pkgname}/seti-ui.MIT.txt"
+}

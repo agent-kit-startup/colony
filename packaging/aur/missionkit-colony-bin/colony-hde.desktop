@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Colony
+GenericName=Mission Kit IDE
+Comment=Mission Kit Colony desktop IDE
+Exec=colony-hde %f
+Icon=colony-hde
+Terminal=false
+Categories=Development;IDE;
+StartupWMClass=colony-hde

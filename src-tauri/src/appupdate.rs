@@ -13,7 +13,7 @@
 //! how to update themselves, and the check still says whether a newer release exists.
 //!
 //! `package` (`--no-default-features`): the updater crate is not compiled in at all. Distro
-//! packages (AUR `colony-bin`, omarchy-pkgs) are updated by the package manager, and the
+//! packages (AUR `missionkit-colony-bin`, omarchy-pkgs) are updated by the package manager, and the
 //! About panel says so.
 
 use serde::Serialize;
