@@ -8,6 +8,7 @@
 // operator. Diff, commit and agent text is untrusted: text nodes and textarea values only.
 import { api, errText, h } from "./api";
 import { applyChoices, type Choice, type ConflictFile, type ConflictHunk, type ConflictsListing, hasMarkers, pick, type ProposeResult, unresolved } from "./conflictmerge";
+import posthog, { posthogConfigured, posthogLogger } from "./posthog";
 import { btn, busy, empty } from "./ui";
 
 export interface ConflictHost {
@@ -252,6 +253,11 @@ export class ConflictView {
       await api.writeTextFile(this.abs(f.path), text);
       st.original = text;
       st.saved = true;
+      if (posthogConfigured) {
+        const attributes = { hunk_count: f.hunks.length };
+        posthog.capture("conflict_resolution_saved", attributes);
+        posthogLogger.info("conflict resolution saved", attributes);
+      }
       this.host.status(`Saved ${f.path}: stage it when you are ready`);
       this.host.changed();
     } catch (e) {

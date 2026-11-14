@@ -3,6 +3,7 @@ import { api, errText, h, type GitStatus } from "./api";
 import { UNMERGED_XY } from "./conflictmerge";
 import { obj, snapshot, str } from "./snapshot";
 import { CommitGraph, diffLines } from "./gitgraph";
+import posthog, { posthogConfigured, posthogLogger } from "./posthog";
 import { type ShipHost, ShipLaneTile } from "./shiplane";
 import { btn, busy, card, empty, iconBtn } from "./ui";
 
@@ -166,6 +167,11 @@ export class GitPanel {
       try {
         const out = await api.gitCommit(message, this.stageAll.checked);
         this.msg.value = "";
+        if (posthogConfigured) {
+          const attributes = { stage_all: this.stageAll.checked };
+          posthog.capture("git_commit_completed", attributes);
+          posthogLogger.info("git commit completed", attributes);
+        }
         this.show("Committed", out, "ok");
         this.status("Committed");
         this.onCommitted();
@@ -189,6 +195,11 @@ export class GitPanel {
     await busy(this.pushBtn, prod ? "Pushing (production)…" : "Pushing…", async () => {
       try {
         const out = await api.gitPush(prod ? this.yes.value.trim() : undefined);
+        if (posthogConfigured) {
+          const attributes = { production_branch: prod };
+          posthog.capture("git_push_completed", attributes);
+          posthogLogger.info("git push completed", attributes);
+        }
         this.show(`Pushed ${branch}`, out || "Pushed.", "ok");
         this.status(`Pushed ${branch}`);
       } catch (e) {
