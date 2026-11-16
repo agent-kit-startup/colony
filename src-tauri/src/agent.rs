@@ -260,6 +260,17 @@ mod tests {
     /// a detached tool subprocess; `kill_all` leaves no descendant alive and empties the map.
     #[cfg(target_os = "linux")]
     #[test]
+    fn driver_refuses_prod() {
+        assert_eq!(super::run_command("run-plan"), Ok(false));
+        assert_eq!(super::run_command("run-plan-all"), Ok(true));
+        for c in ["git-prod", "/git-prod", "kit-prod", "/kit-prod"] {
+            let e = super::run_command(c).unwrap_err();
+            assert!(e.contains("interactive tab"), "{c}: {e}");
+        }
+        assert!(super::run_command("git-staging").is_err());
+    }
+
+    #[test]
     fn kill_all_ends_every_run_tree() {
         use super::{AgentRegistry, AgentRun};
         use std::io::{BufRead, BufReader};
@@ -520,6 +531,18 @@ pub(crate) fn check_note(note: &str) -> Result<&str, String> {
     Ok(n)
 }
 
+/// The driver runs `run-plan` (false) or `run-plan-all` (true) and nothing else. `/git-prod`
+/// and `/kit-prod` are interactive only (vendor.rs `INTERACTIVE_ONLY`): the driver refuses
+/// them by name, before the generic refusal, so the reason is explicit.
+fn run_command(command: &str) -> Result<bool, String> {
+    match command {
+        "run-plan" => Ok(false),
+        "run-plan-all" => Ok(true),
+        c if crate::vendor::interactive_only(c.trim_start_matches('/')) => Err(format!("{c} runs only in an interactive tab, never from the driver")),
+        other => Err(format!("Unknown run command: {other}")),
+    }
+}
+
 /// Start a driver run in the opened folder, or in `cwd` (another folder the operator
 /// picked, e.g. a second repository or a worktree). `command` is `run-plan` (default) or
 /// `run-plan-all`, the queue runner, which needs driver protocol 1.2.0 (`queue_mode`).
@@ -541,11 +564,7 @@ pub fn agent_start(
     }
     check_engine(&backend)?;
     let command = command.unwrap_or_else(|| "run-plan".into());
-    let queue = match command.as_str() {
-        "run-plan" => false,
-        "run-plan-all" => true,
-        other => return Err(format!("Unknown run command: {other}")),
-    };
+    let queue = run_command(&command)?;
     let note = match note.filter(|n| !n.trim().is_empty()) {
         Some(_) if !queue => return Err("--note only applies to run-plan-all".into()),
         Some(n) => Some(check_note(&n)?.to_string()),
