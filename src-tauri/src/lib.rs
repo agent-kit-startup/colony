@@ -27,6 +27,7 @@ mod menu;
 mod newwindow;
 mod omarchy;
 mod omarchy_shell;
+mod proctree;
 mod prworktree;
 mod pty;
 mod review;
@@ -472,8 +473,12 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let server = state.dashboard.lock().ok().and_then(|mut d| d.take());
             drop(server); // kills the dashboard server
-            state.ptys.kill_all();
-            state.agents.kill_all();
+            // Closing Colony ends every tree it started (terminals and agent runs, each with
+            // its grace period, side by side) and keeps the state on disk.
+            std::thread::scope(|sc| {
+                sc.spawn(|| state.ptys.kill_all());
+                state.agents.kill_all();
+            });
             handle.state::<hostreq::Shared>().cleanup();
             if let Some(p) = state.instance_socket.lock().ok().and_then(|mut p| p.take()) {
                 let _ = std::fs::remove_file(p);

@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::{review, tools, workspace, AppState};
+use crate::{proctree, review, tools, workspace, AppState};
 
 /// `agent-kit run-plan --backend` values (kit 6.6.0: packages/cli/src/plan-loop/detect.ts).
 /// `openrouter` needs an engine that knows the id; an older kit refuses it.
@@ -183,18 +183,41 @@ pub struct AgentRun {
     root: PathBuf,
     child: Arc<Mutex<Child>>,
     stdin: Option<ChildStdin>,
+    /// The engine's process group (its pid: `proctree::own_group`), which the agent CLI and
+    /// its tool subprocesses inherit.
+    group: i32,
 }
 
 impl AgentRun {
+    /// Hard stop of one run (Kill…): the whole tree, off the calling thread so the window
+    /// does not wait for the grace period.
     pub fn kill(&mut self) {
         self.stdin = None;
-        if let Ok(mut c) = self.child.lock() {
-            let _ = c.kill();
-        }
+        let (group, child) = (self.group, self.child.clone());
+        std::thread::spawn(move || end_tree(&[(group, child)]));
     }
 
     fn alive(&self) -> bool {
         matches!(self.child.lock().map(|mut c| c.try_wait()), Ok(Ok(None)))
+    }
+}
+
+/// SIGTERM to each engine group and its descendants, the grace period, SIGKILL to what is
+/// left (kit ADR 2026-10-19 amend 2026-11-16 point 7), then the direct kill as a backstop.
+fn end_tree(runs: &[(i32, Arc<Mutex<Child>>)]) {
+    let groups: Vec<i32> = runs.iter().map(|(g, _)| *g).collect();
+    proctree::end_trees(&groups, proctree::GRACE, || {
+        for (_, c) in runs {
+            if let Ok(mut c) = c.lock() {
+                let _ = c.try_wait();
+            }
+        }
+    });
+    for (_, c) in runs {
+        if let Ok(mut c) = c.lock() {
+            let _ = c.kill();
+            let _ = c.try_wait();
+        }
     }
 }
 
@@ -205,12 +228,15 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// App exit: every run's tree, all at once, before Colony returns (closing Colony kills
+    /// everything and keeps the state: the engine and the agent write it as they go).
     pub fn kill_all(&self) {
-        if let Ok(mut map) = self.runs.lock() {
-            for (_, mut run) in map.drain() {
-                run.kill();
-            }
-        }
+        let runs: Vec<AgentRun> = match self.runs.lock() {
+            Ok(mut map) => map.drain().map(|(_, r)| r).collect(),
+            Err(_) => return,
+        };
+        let trees: Vec<(i32, Arc<Mutex<Child>>)> = runs.into_iter().map(|r| (r.group, r.child)).collect();
+        end_tree(&trees);
     }
 }
 
@@ -228,6 +254,34 @@ pub enum AgentEvent {
 
 #[cfg(test)]
 mod tests {
+    /// The app-exit path: a stub engine (own group, like agent_start) with an agent child and
+    /// a detached tool subprocess; `kill_all` leaves no descendant alive and empties the map.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kill_all_ends_every_run_tree() {
+        use super::{AgentRegistry, AgentRun};
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        use std::sync::{Arc, Mutex};
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sh -c 'setsid sleep 300 & echo $!; sleep 300' & echo $!; wait").stdout(Stdio::piped()).stdin(Stdio::piped());
+        crate::proctree::own_group(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let group = child.id() as i32;
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let pids: Vec<u32> = (0..2).map(|_| lines.next().unwrap().unwrap().trim().parse().unwrap()).collect();
+        let stdin = child.stdin.take();
+        let reg = AgentRegistry::default();
+        reg.runs.lock().unwrap().insert(1, AgentRun { root: "/".into(), child: Arc::new(Mutex::new(child)), stdin, group });
+        let live = |p: u32| std::fs::read_to_string(format!("/proc/{p}/stat")).is_ok_and(|s| !s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'));
+        assert!(pids.iter().all(|p| live(*p)));
+        reg.kill_all();
+        assert!(reg.runs.lock().unwrap().is_empty());
+        for p in pids {
+            assert!(!live(p), "pid {p} survived kill_all");
+        }
+    }
+
     #[test]
     fn resolution_note_is_context_never_an_answer() {
         use super::check_note;
@@ -544,7 +598,10 @@ pub fn agent_start(
         args
     };
     let mut cmd = Command::new(&kit.program);
+    // agent_start is a synchronous command, so this runs on the main thread: the parent-death
+    // signal stays armed for the life of the app. Own group: closing Colony ends the tree.
     tools::die_with_parent(&mut cmd);
+    proctree::own_group(&mut cmd);
     let mut child = cmd
         .args(&kit.args)
         .args(&args)
@@ -559,6 +616,7 @@ pub fn agent_start(
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let stdin = child.stdin.take();
+    let group = child.id() as i32;
     let child = Arc::new(Mutex::new(child));
 
     let ch_out = on_event.clone();
@@ -599,7 +657,7 @@ pub fn agent_start(
         let _ = on_event.send(AgentEvent::Exit { code });
     });
 
-    runs.insert(id, AgentRun { root: root.clone(), child, stdin });
+    runs.insert(id, AgentRun { root: root.clone(), child, stdin, group });
     // The note can be long and multi-line: the shown command names it, the run keeps it.
     let shown: Vec<String> = match args.iter().position(|a| a == "--note") {
         Some(i) => args[..=i].iter().cloned().chain(std::iter::once("<note>".to_string())).chain(args[i + 2..].iter().cloned()).collect(),

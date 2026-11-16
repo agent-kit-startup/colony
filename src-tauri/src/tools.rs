@@ -113,15 +113,24 @@ pub fn user_shell() -> String {
 }
 
 /// Make a spawned helper (dashboard server, run-plan driver) receive SIGTERM when Colony
-/// dies, even on a crash or `kill`, so no loopback server is left behind.
+/// dies, even on a crash or `kill`, so no loopback server is left behind. The signal fires
+/// when the thread that spawned the child exits, so call this only from a thread that lives
+/// as long as the app (the main thread: synchronous Tauri commands run there) or for a
+/// helper that ends before its thread does (`Command::output`).
 pub fn die_with_parent(cmd: &mut std::process::Command) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
-        // SAFETY: prctl is async-signal-safe and touches no Rust state in the child.
+        let parent = std::process::id() as libc::pid_t;
+        // SAFETY: prctl and getppid are async-signal-safe and touch no Rust state in the child.
         unsafe {
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                // Colony died between fork and prctl: the signal will never come, so do not
+                // start an orphan.
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
                 Ok(())
             });
         }
