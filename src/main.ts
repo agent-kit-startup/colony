@@ -4753,6 +4753,24 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       toggleTerminal(shownBefore);
       await log("tab-placement-seed", Object.values(r).every((v) => v === true), { shell: s1, a: a?.id ?? null, terminalPlacement: raw, ...r });
     }
+    // Process tree (kit ADR 2026-10-19 amend 2026-11-16 point 7), last so no later step needs
+    // the folder's one run: the fake's `--model smoke-tree` run starts an agent child and a
+    // detached tool subprocess, writes the three pids to .git/colony-tree-pids and stays
+    // live. smoke_exit then ends the window with the run still going; the runner checks after
+    // Colony exits that none of the three pids is alive (closing Colony kills everything).
+    if (fixture) {
+      const tree = await runs.start({ backend: "claude", maxTicks: 1, model: "smoke-tree" }).then(
+        (r) => r,
+        (e) => errText(e),
+      );
+      let pids = "";
+      for (let i = 0; i < 50 && pids.split(" ").length < 3; i++) {
+        await wait(200);
+        pids = (await api.readTextFile(`${root}/.git/colony-tree-pids`).catch(() => "")).trim();
+      }
+      const live = typeof tree !== "string" && tree.running;
+      await log("process-tree-armed", live && /^\d+ \d+ \d+$/.test(pids), { run: typeof tree === "string" ? tree : tree.id, running: live, pids });
+    }
     showTab("mission");
     await shot("mission");
     // Negative probe: the policy is really enforced (an inline script must not run).

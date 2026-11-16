@@ -26,11 +26,28 @@ pub struct PtyRegistry {
 }
 
 impl PtyRegistry {
+    /// App exit: each terminal's whole tree. The shell is a session leader (its pid is its
+    /// group id); a foreground job runs in a group of its own, so that group goes too.
     pub fn kill_all(&self) {
-        if let Ok(mut map) = self.sessions.lock() {
-            for (_, mut s) in map.drain() {
-                let _ = s.child.kill();
+        let Ok(mut map) = self.sessions.lock() else { return };
+        let mut sessions: Vec<Session> = map.drain().map(|(_, s)| s).collect();
+        drop(map);
+        // Read now from live sessions (an ended one has already left the map): no start time.
+        let mut roots: Vec<(i32, Option<u64>)> = Vec::new();
+        for s in &sessions {
+            roots.extend(s.child.process_id().map(|p| (p as i32, None)));
+            #[cfg(unix)]
+            roots.extend(s.master.process_group_leader().map(|p| (p, None)));
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        crate::proctree::end_trees(&roots, crate::proctree::GRACE, || {
+            for s in sessions.iter_mut() {
+                let _ = s.child.try_wait();
             }
+        });
+        for mut s in sessions {
+            let _ = s.child.kill();
         }
     }
 }

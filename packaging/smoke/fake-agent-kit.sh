@@ -137,6 +137,22 @@ qusage='{"inputTokens":5000,"cachedInputTokens":3000,"outputTokens":700,"totalTo
 tgate='{"inputTokens":900,"cachedInputTokens":600,"outputTokens":200,"totalTokens":1100}'
 qgate='{"inputTokens":4000,"cachedInputTokens":2500,"outputTokens":500,"totalTokens":4500}'
 ev() { printf '{"v":1,"ts":"%s",%s}\n' "$(ts)" "$1"; }
+# Process tree (COLONY_SMOKE process-tree-armed step), picked by `--model smoke-tree`: the run
+# starts an agent child in its group and a detached tool subprocess (setsid), writes
+# "<fixture pid> <agent pid> <detached pid>" to .git/colony-tree-pids and waits on them
+# (10 minutes), so only Colony's exit ends it. No workspace file is written.
+if [ "$cmd" = run-plan ] && [ "${model:-}" = smoke-tree ]; then
+  ev "\"type\":\"run_start\",\"protocol\":\"1.5.0\",\"command\":\"run-plan\",\"backend\":\"$backend\",\"plan\":\"smoke-fixture.plan.md\",\"pending\":1,\"maxTicks\":$max,\"hitl\":\"driver\""
+  ev "\"type\":\"tick_start\",\"tick\":1,\"maxTicks\":$max,\"pending\":1,\"log\":\".cursor/loop-logs/tick-tree.log\",\"prompt\":\"TICK_PROMPT tree fixture\",\"backend\":\"$backend\""
+  sleep 600 &
+  agent=$!
+  setsid sleep 600 &
+  detached=$!
+  printf '%s %s %s\n' "$$" "$agent" "$detached" > "$cwd/.git/colony-tree-pids"
+  ev "\"type\":\"log\",\"level\":\"info\",\"message\":\"fixture tree pids: $$ $agent $detached\""
+  wait
+  exit 0
+fi
 # Current mission card (COLONY_SMOKE card-* steps), picked by `--model smoke-card-*`: plan
 # smoke-fixture.plan.md, and NO file is written (the 2026-10-27 tick-review fixture gap: a
 # stand-in that edits the workspace shows up in a later step's review). The stdin line it
