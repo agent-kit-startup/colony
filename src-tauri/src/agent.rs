@@ -184,8 +184,10 @@ pub struct AgentRun {
     child: Arc<Mutex<Child>>,
     stdin: Option<ChildStdin>,
     /// The engine's process group (its pid: `proctree::own_group`), which the agent CLI and
-    /// its tool subprocesses inherit.
+    /// its tool subprocesses inherit, and the engine's start time: an ended run stays in the
+    /// map until the next start prunes it, and its pid may name another process by then.
     group: i32,
+    start: Option<u64>,
 }
 
 impl AgentRun {
@@ -193,8 +195,8 @@ impl AgentRun {
     /// does not wait for the grace period.
     pub fn kill(&mut self) {
         self.stdin = None;
-        let (group, child) = (self.group, self.child.clone());
-        std::thread::spawn(move || end_tree(&[(group, child)]));
+        let (group, start, child) = (self.group, self.start, self.child.clone());
+        std::thread::spawn(move || end_tree(&[(group, start, child)]));
     }
 
     fn alive(&self) -> bool {
@@ -204,16 +206,16 @@ impl AgentRun {
 
 /// SIGTERM to each engine group and its descendants, the grace period, SIGKILL to what is
 /// left (kit ADR 2026-10-19 amend 2026-11-16 point 7), then the direct kill as a backstop.
-fn end_tree(runs: &[(i32, Arc<Mutex<Child>>)]) {
-    let groups: Vec<i32> = runs.iter().map(|(g, _)| *g).collect();
+fn end_tree(runs: &[(i32, Option<u64>, Arc<Mutex<Child>>)]) {
+    let groups: Vec<(i32, Option<u64>)> = runs.iter().map(|(g, s, _)| (*g, *s)).collect();
     proctree::end_trees(&groups, proctree::GRACE, || {
-        for (_, c) in runs {
+        for (_, _, c) in runs {
             if let Ok(mut c) = c.lock() {
                 let _ = c.try_wait();
             }
         }
     });
-    for (_, c) in runs {
+    for (_, _, c) in runs {
         if let Ok(mut c) = c.lock() {
             let _ = c.kill();
             let _ = c.try_wait();
@@ -235,7 +237,7 @@ impl AgentRegistry {
             Ok(mut map) => map.drain().map(|(_, r)| r).collect(),
             Err(_) => return,
         };
-        let trees: Vec<(i32, Arc<Mutex<Child>>)> = runs.into_iter().map(|r| (r.group, r.child)).collect();
+        let trees: Vec<(i32, Option<u64>, Arc<Mutex<Child>>)> = runs.into_iter().map(|r| (r.group, r.start, r.child)).collect();
         end_tree(&trees);
     }
 }
@@ -272,7 +274,8 @@ mod tests {
         let pids: Vec<u32> = (0..2).map(|_| lines.next().unwrap().unwrap().trim().parse().unwrap()).collect();
         let stdin = child.stdin.take();
         let reg = AgentRegistry::default();
-        reg.runs.lock().unwrap().insert(1, AgentRun { root: "/".into(), child: Arc::new(Mutex::new(child)), stdin, group });
+        let start = crate::proctree::start_of(group);
+        reg.runs.lock().unwrap().insert(1, AgentRun { root: "/".into(), child: Arc::new(Mutex::new(child)), stdin, group, start });
         let live = |p: u32| std::fs::read_to_string(format!("/proc/{p}/stat")).is_ok_and(|s| !s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'));
         assert!(pids.iter().all(|p| live(*p)));
         reg.kill_all();
@@ -617,6 +620,7 @@ pub fn agent_start(
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let stdin = child.stdin.take();
     let group = child.id() as i32;
+    let start = proctree::start_of(group);
     let child = Arc::new(Mutex::new(child));
 
     let ch_out = on_event.clone();
@@ -657,7 +661,7 @@ pub fn agent_start(
         let _ = on_event.send(AgentEvent::Exit { code });
     });
 
-    runs.insert(id, AgentRun { root: root.clone(), child, stdin, group });
+    runs.insert(id, AgentRun { root: root.clone(), child, stdin, group, start });
     // The note can be long and multi-line: the shown command names it, the run keeps it.
     let shown: Vec<String> = match args.iter().position(|a| a == "--note") {
         Some(i) => args[..=i].iter().cloned().chain(std::iter::once("<note>".to_string())).chain(args[i + 2..].iter().cloned()).collect(),

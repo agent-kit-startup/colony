@@ -92,6 +92,30 @@ fn alive(_p: Proc) -> bool {
     false
 }
 
+/// The process start time (clock ticks since boot) of `pid`, recorded at spawn so a root
+/// whose pid was reused later is never signalled. `None` off Linux or when it is gone.
+pub fn start_of(pid: i32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        stat(pid).map(|s| s.3)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// A root recorded at spawn is still the same process (or its group outlived it). A live
+/// process at that pid with another start time means the pid was reused, and since Linux
+/// never hands out a pid that still names a process group, the old group is gone too: skip.
+fn same_root(pid: i32, start: Option<u64>) -> bool {
+    match (start, start_of(pid)) {
+        (Some(recorded), Some(now)) => recorded == now,
+        _ => true,
+    }
+}
+
 /// A group Colony may signal: never 0 or 1, never Colony's own pid or group.
 pub fn safe_root(root: i32) -> bool {
     #[cfg(unix)]
@@ -114,16 +138,17 @@ fn group_exists(pgid: i32) -> bool {
     unsafe { libc::killpg(pgid, 0) == 0 }
 }
 
-/// End the trees rooted at `roots` (engine pids started with [`own_group`]): SIGTERM to each
-/// group and each descendant, up to `grace` for them to exit (`reap` is called on every poll
-/// so Colony collects its own exited children), then SIGKILL to what is left. Roots that fail
-/// [`safe_root`] are skipped. Returns the pids still alive after the SIGKILL (empty when the
-/// whole tree is gone).
-pub fn end_trees(roots: &[i32], grace: Duration, mut reap: impl FnMut()) -> Vec<i32> {
+/// End the trees rooted at `roots` (engine pids started with [`own_group`], each with the
+/// start time recorded at spawn, or `None` when it is read now): SIGTERM to each group and
+/// each descendant, up to `grace` for them to exit (`reap` is called on every poll so Colony
+/// collects its own exited children), then SIGKILL to what is left. Roots that fail
+/// [`safe_root`], or whose pid now belongs to another process, are skipped. Returns the pids
+/// still alive after the SIGKILL (empty when the whole tree is gone).
+pub fn end_trees(roots: &[(i32, Option<u64>)], grace: Duration, mut reap: impl FnMut()) -> Vec<i32> {
     #[cfg(unix)]
     {
         use std::time::Instant;
-        let roots: Vec<i32> = roots.iter().copied().filter(|r| safe_root(*r)).collect();
+        let roots: Vec<i32> = roots.iter().filter(|(r, start)| safe_root(*r) && same_root(*r, *start)).map(|(r, _)| *r).collect();
         if roots.is_empty() {
             return Vec::new();
         }
@@ -209,7 +234,7 @@ mod tests {
         assert!(left_group, "the setsid child left the group");
         assert!(pids.iter().all(|p| running(*p)));
         let started = Instant::now();
-        let left = end_trees(&[root], Duration::from_secs(3), || {
+        let left = end_trees(&[(root, start_of(root))], Duration::from_secs(3), || {
             let _ = child.try_wait();
         });
         assert!(left.is_empty(), "survivors: {left:?}");
@@ -231,7 +256,7 @@ mod tests {
         let root = child.id() as i32;
         let pids = read_pids(&mut child, 1);
         let started = Instant::now();
-        let left = end_trees(&[root], Duration::from_millis(400), || {
+        let left = end_trees(&[(root, None)], Duration::from_millis(400), || {
             let _ = child.try_wait();
         });
         assert!(left.is_empty(), "survivors: {left:?}");
@@ -249,9 +274,30 @@ mod tests {
         for r in [-1, 0, 1, me, group] {
             assert!(!safe_root(r), "{r}");
         }
-        assert!(end_trees(&[0, 1, me, group], Duration::from_millis(10), || {}).is_empty());
+        assert!(end_trees(&[(0, None), (1, None), (me, None), (group, None)], Duration::from_millis(10), || {}).is_empty());
         // Still here: nothing was signalled.
         assert!(running(me));
+    }
+
+    /// A run that ended long ago keeps its pid in the registry: when that pid now names
+    /// another process (another start time), nothing is signalled.
+    #[test]
+    fn skips_a_root_whose_pid_was_reused() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("300");
+        own_group(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id() as i32;
+        let real = start_of(pid).unwrap();
+        let left = end_trees(&[(pid, Some(real + 1))], Duration::from_millis(200), || {});
+        assert!(left.is_empty());
+        assert!(running(pid), "a reused pid must not be signalled");
+        assert!(end_trees(&[(pid, Some(real))], Duration::from_secs(3), || {
+            let _ = child.try_wait();
+        })
+        .is_empty());
+        let _ = child.wait();
+        assert!(!running(pid));
     }
 
     #[test]
