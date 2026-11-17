@@ -3,8 +3,9 @@
 //! - `interactive`: the unmodified vendor agent CLI (`claude` or `codex`) in a PTY tab in
 //!   the opened folder, on the user's own login. Colony passes no credentials and reads
 //!   none: the child inherits the environment exactly like the shell tab does. An optional
-//!   first prompt is one allowlisted kit slash command (e.g. `/run-plan <plan>`), passed as
-//!   the CLI's own positional prompt argument. Instead of a prompt it may resume a saved
+//!   first prompt is one allowlisted kit slash command plus an optional context string
+//!   (e.g. `/run-plan <plan>`, `/backlog-add <goal typed by the user>`), passed as the CLI's
+//!   own positional prompt argument, never through a shell. Instead of a prompt it may resume a saved
 //!   session of the folder (chats.rs): `claude --resume <session uuid>`, the id checked
 //!   as a UUID here before it reaches argv.
 //! - `run-plan-all`: `agent-kit run-plan-all` in a PTY tab, the fallback for an engine whose
@@ -13,23 +14,66 @@
 //!   queue starts as a driver run instead (agent.rs `queue_mode`, `agent_start` with
 //!   command `run-plan-all`), and its gates reach the Inbox.
 //!
-//! `/git-prod`, `/kit-prod` and any other slash command stay out of the allowlist.
+//! The allowlist is the set of kit and factory command names compiled in here; the kit's
+//! catalog can only narrow it (catalog.rs: meta rows outside the factory workspace, project
+//! rows), never add a name. `/git-prod` and `/kit-prod` are interactive only: an interactive
+//! tab may open with them (the page asks its native confirm first, and the routine's own gate
+//! inside the session is the yes), while the driver (agent.rs `agent_start`), the queue
+//! runner and every pre-answer path refuse them (ADR 2026-10-22 commands-catalog contract,
+//! amend 2026-11-16 run with context).
 
 use serde::Serialize;
 
 use crate::{agent, chats, tools};
 
-/// Slash commands a cockpit button may hand to an interactive agent as its first prompt.
-/// `agent-kit-onboard`, `start-project` and `backlog-add` are the first-run path: they run
-/// only as an interactive agent in a terminal tab, so their own Asks (CI/CD config, hooks,
-/// remotes, scaffold: onboard Hard Stop 3; the plan and backlog write gates) are answered
-/// there by the user. Colony never answers or auto-applies them. `backlog-edit`,
-/// `archive-plan`, `backlog-cancel` and `backlog-delete` are the plan CRUD dropdown
-/// (src/plancrud.ts; commands-catalog ADR 2026-10-22 point 4, amend 2026-10-26): each asks
-/// its own confirmation before it writes and stops on the active plan. `cancel-plan` is the
-/// active plan's Cancel (the Mission card and its Plans row; shell ADR amend 2026-10-29): it
-/// asks its own confirmation and refuses while a run or queue is in flight.
+/// Slash commands a cockpit button may hand to an interactive agent as its first prompt:
+/// every kit and factory command (kit `.cursor/commands/`, catalog 1.1.0). Each of them asks
+/// its own questions in the interactive session (plan and backlog write gates, onboard Hard
+/// Stop 3, the CRUD confirmations, the git staging and prod gates), answered there by the
+/// user; Colony never answers or auto-applies them. Which rows the page offers is narrowed by
+/// the catalog (catalog.rs `run`): meta rows only in the factory workspace, project rows never.
+/// The reserved `agent-kit` refresh name is not a command row and stays out.
 const PROMPT_SLASH: &[&str] = &[
+    "agent-kit-onboard",
+    "archive-plan",
+    "backlog-add",
+    "backlog-cancel",
+    "backlog-delete",
+    "backlog-edit",
+    "cancel-plan",
+    "context-status",
+    "continue-plan",
+    "cursor-update-awareness",
+    "dashboard",
+    "dashboard-broadcast",
+    "dogfood",
+    "field-report-resolve",
+    "git-prod",
+    "git-staging",
+    "handoff",
+    "hotfix",
+    "kit-prod",
+    "kit-staging",
+    "plan-external-review",
+    "plan-review-triage",
+    "public-inbound-radar",
+    "public-issue-triage",
+    "qa",
+    "resolve-conflicts",
+    "review-pack",
+    "run-plan",
+    "run-plan-all",
+    "run-plan-loop",
+    "run-plan-orchestrated",
+    "start-project",
+    "summary",
+    "tips",
+    "update",
+];
+
+/// The run set before catalog 1.1.0 (Colony main 5bcf474). An older engine's catalog has no
+/// `audience` field, so catalog.rs keeps this set for it ("missing fields = today's behavior").
+pub const LEGACY_RUN: &[&str] = &[
     "run-plan",
     "continue-plan",
     "backlog-edit",
@@ -47,6 +91,19 @@ const PROMPT_SLASH: &[&str] = &[
     "backlog-add",
 ];
 
+/// Production promote commands: an interactive tab only, never the driver, the queue runner
+/// or a pre-answer, whatever the catalog says (the kit's `interactiveOnly` floor matches).
+pub const INTERACTIVE_ONLY: &[&str] = &["git-prod", "kit-prod"];
+
+/// Commands whose context is a goal the user typed (catalog `context: goal`): they take free
+/// text after the slash. Every other command takes at most one plain token (a plan file, a
+/// branch, a PR number, a SHA, an attention id), checked as before: those values come from
+/// the repository or the forge, and a token cannot smuggle a second instruction.
+pub const GOAL_CONTEXT: &[&str] = &["backlog-add", "dogfood", "hotfix", "qa", "start-project"];
+
+/// Byte cap of a goal after `/name `.
+pub const MAX_CONTEXT: usize = 4096;
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TermLaunch {
@@ -62,7 +119,31 @@ pub fn runnable(name: &str) -> bool {
     PROMPT_SLASH.contains(&name)
 }
 
-/// `/name` or `/name <arg>`, where `name` is allowlisted and `arg` is one plain token.
+/// A slash name that runs only in an interactive tab (`/git-prod`, `/kit-prod`).
+pub fn interactive_only(name: &str) -> bool {
+    INTERACTIVE_ONLY.contains(&name)
+}
+
+/// Bidi overrides, isolates and zero-width marks: printable-looking text that can hide or
+/// reorder what the user reads before the agent gets it.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// The context string after `/name `: non-empty, at most `MAX_CONTEXT` bytes, printable text
+/// with newlines allowed; no NUL, no other control character, no bidi or zero-width mark.
+pub fn valid_context(a: &str) -> bool {
+    !a.trim().is_empty() && a.len() <= MAX_CONTEXT && a.chars().all(|c| c == '\n' || !(c.is_control() || invisible(c)))
+}
+
+/// One plain token: a plan file, branch, PR number, SHA or attention id.
+fn valid_token(a: &str) -> bool {
+    !a.is_empty() && a.len() <= 240 && !a.starts_with('-') && !a.split('/').any(|seg| seg == "..") && a.chars().all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
+}
+
+/// `/name`, `/name <goal>` for a `GOAL_CONTEXT` command (free text, `valid_context`), or
+/// `/name <token>` for any other allowlisted command. The whole prompt is one argv element:
+/// no shell ever sees it.
 pub fn valid_prompt(p: &str) -> bool {
     let Some(rest) = p.strip_prefix('/') else { return false };
     let (name, arg) = match rest.split_once(' ') {
@@ -74,14 +155,14 @@ pub fn valid_prompt(p: &str) -> bool {
     }
     match arg {
         None => true,
-        Some(a) => {
-            !a.is_empty()
-                && a.len() <= 240
-                && !a.starts_with('-')
-                && !a.split('/').any(|seg| seg == "..")
-                && a.chars().all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
-        }
+        Some(a) if GOAL_CONTEXT.contains(&name) => valid_context(a),
+        Some(a) => valid_token(a),
     }
+}
+
+/// The slash name of a prompt that passed `valid_prompt`.
+fn prompt_name(p: &str) -> &str {
+    p.trim_start_matches('/').split(' ').next().unwrap_or(p)
 }
 
 /// The vendor CLI for an engine choice: `claude` and `codex` map to themselves; any other
@@ -142,7 +223,7 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, res
                 argv.push(p.to_string());
             }
             let label = match prompt {
-                Some(p) => format!("{name} {}", p.split(' ').next().unwrap_or(p)),
+                Some(p) => format!("{name} /{}", prompt_name(p)),
                 None => format!("{name} (interactive)"),
             };
             Ok(TermLaunch { argv, label, bin, note })
@@ -203,20 +284,100 @@ mod tests {
 
     #[test]
     fn prompts() {
-        for ok in ["/run-plan", "/run-plan demo.plan.md", "/backlog-edit x-2026.plan.md", "/plan-review-triage .cursor/memory/plan-monitor-x.md", "/field-report-resolve attention:report:x"] {
+        for ok in [
+            "/run-plan",
+            "/run-plan demo.plan.md",
+            "/backlog-edit x-2026.plan.md",
+            "/plan-review-triage .cursor/memory/plan-monitor-x.md",
+            "/field-report-resolve attention:report:x",
+            "/backlog-add Ship the onboarding emails; keep them short",
+            "/hotfix Login fails when the email has a + sign\nSeen on 6.18.0",
+            "/start-project Um app de receitas com busca por ingrediente",
+            "/git-staging feat/commands-run-with-context",
+            "/git-prod 5bcf474",
+            "/kit-prod 5bcf474",
+        ] {
             assert!(valid_prompt(ok), "{ok}");
         }
-        for bad in ["run-plan", "/git-prod", "/kit-prod", "/run-plan a b", "/run-plan ../x", "/run-plan --flag", "/run-plan x;rm", "/run-plan $(id)", "/run-plan "] {
+        for bad in [
+            "run-plan",
+            "/agent-kit",
+            "/not-a-command",
+            "/run-plan ",
+            "/run-plan  ",
+            "/run-plan\nx",
+            "/Run-plan",
+            // Commands that take a plan, branch, PR or SHA keep the one-token grammar.
+            "/run-plan a b",
+            "/run-plan ../x",
+            "/run-plan --flag",
+            "/run-plan x;rm",
+            "/run-plan $(id)",
+            "/git-prod 5bcf474 and skip the gate",
+            "/git-staging feat/x\nyes",
+        ] {
             assert!(!valid_prompt(bad), "{bad}");
         }
     }
 
     #[test]
-    fn never_prod() {
-        for name in ["git-prod", "kit-prod"] {
-            assert!(!PROMPT_SLASH.contains(&name), "{name}");
-            assert!(!super::runnable(name), "{name}");
+    fn context_rejects_control_and_invisible_chars() {
+        for bad in ["a\0b", "a\rb", "a\tb", "a\u{1b}[31mb", "a\u{7f}b", "a\u{202e}b", "a\u{200b}b", "a\u{2066}b", "\u{feff}a", "a\u{85}b"] {
+            assert!(!super::valid_context(bad), "{bad:?}");
+            assert!(!valid_prompt(&format!("/backlog-add {bad}")), "{bad:?}");
         }
+        assert!(super::valid_context("línea uno\nlínea dos — ok"));
+    }
+
+    #[test]
+    fn context_cap() {
+        let at_cap = "a".repeat(super::MAX_CONTEXT);
+        assert!(valid_prompt(&format!("/backlog-add {at_cap}")));
+        assert!(!valid_prompt(&format!("/backlog-add {at_cap}b")));
+        // The cap is in bytes: multi-byte text reaches it sooner.
+        let wide = "é".repeat(super::MAX_CONTEXT / 2 + 1);
+        assert!(!valid_prompt(&format!("/backlog-add {wide}")));
+    }
+
+    /// `/git-prod` and `/kit-prod` open only as an interactive tab (ADR amend 2026-11-16).
+    #[test]
+    fn prod_is_interactive_only() {
+        for name in ["git-prod", "kit-prod"] {
+            assert!(PROMPT_SLASH.contains(&name), "{name}");
+            assert!(super::interactive_only(name), "{name}");
+            assert!(super::runnable(name), "{name}");
+        }
+        for name in PROMPT_SLASH {
+            assert_eq!(super::interactive_only(name), matches!(*name, "git-prod" | "kit-prod"), "{name}");
+        }
+        // The queue runner tab takes no prompt at all.
+        let l = plan("run-plan-all", "claude", None, Some("/git-prod"), None, false, &find).unwrap();
+        assert!(!l.argv.iter().any(|a| a.contains("git-prod")), "{:?}", l.argv);
+    }
+
+    #[test]
+    fn legacy_run_set() {
+        for name in super::LEGACY_RUN {
+            assert!(PROMPT_SLASH.contains(name), "{name}");
+            assert!(!super::interactive_only(name), "{name}");
+        }
+        assert!(!super::LEGACY_RUN.contains(&"git-staging"));
+    }
+
+    #[test]
+    fn goal_commands_are_allowlisted() {
+        for name in super::GOAL_CONTEXT {
+            assert!(PROMPT_SLASH.contains(name), "{name}");
+            assert!(!super::interactive_only(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn allowlist_is_sorted_and_unique() {
+        let mut sorted = PROMPT_SLASH.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, PROMPT_SLASH, "keep PROMPT_SLASH sorted, one entry per name");
     }
 
     /// The names after `/^\/` in the regex literal `const <name> = /^\/...` of a page source:
@@ -268,14 +429,16 @@ mod tests {
     }
 
     /// The first-run commands (onboarding, a first plan, the backlog) run from the IDE as an
-    /// interactive agent, bare or with one plain argument, like the other allowlisted names.
+    /// interactive agent: onboarding bare or with one plain token, the plan and backlog
+    /// commands with the goal the user typed (ADR amend 2026-11-16, run with context).
     #[test]
     fn first_run_commands_runnable() {
         for name in FIRST_RUN {
             assert!(super::runnable(name), "{name}");
             assert!(valid_prompt(&format!("/{name}")), "{name}");
-            assert!(!valid_prompt(&format!("/{name} --yes")), "{name}");
-            assert!(!valid_prompt(&format!("/{name} a b")), "{name}");
+            let goal = super::GOAL_CONTEXT.contains(&name);
+            assert_eq!(valid_prompt(&format!("/{name} a b")), goal, "{name}");
+            assert!(!valid_prompt(&format!("/{name} a\u{7}b")), "{name}");
             let t = plan("interactive", "claude", None, Some(&format!("/{name}")), None, false, &find).unwrap();
             assert_eq!(t.argv, ["/bin/claude", &format!("/{name}")]);
         }
@@ -313,7 +476,14 @@ mod tests {
         assert_eq!(l.argv, vec!["/bin/claude", "--model", "sonnet"]);
         assert!(!l.note.is_empty());
         assert!(plan("interactive", "codex", None, None, None, false, &find).is_err());
-        assert!(plan("interactive", "claude", None, Some("/git-prod"), None, false, &find).is_err());
+        // Context with spaces and newlines is one argv element.
+        let l = plan("interactive", "claude", None, Some("/backlog-add Ship it\nthen tell me"), None, false, &find).unwrap();
+        assert_eq!(l.argv, vec!["/bin/claude", "/backlog-add Ship it\nthen tell me"]);
+        assert_eq!(l.label, "claude /backlog-add");
+        let l = plan("interactive", "claude", None, Some("/git-prod 5bcf474"), None, false, &find).unwrap();
+        assert_eq!(l.argv, vec!["/bin/claude", "/git-prod 5bcf474"]);
+        assert!(plan("interactive", "claude", None, Some("/backlog-add a\u{1b}b"), None, false, &find).is_err());
+        assert!(plan("interactive", "claude", None, Some("/agent-kit"), None, false, &find).is_err());
     }
 
     #[test]
