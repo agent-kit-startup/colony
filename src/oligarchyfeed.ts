@@ -128,9 +128,12 @@ export function gameDataFromLedger(ledger: unknown): GameData {
   return out;
 }
 
-/** Whether `origin` is exactly one of `allowed`: string equality, no parsing, no prefixes. */
+/**
+ * Whether `origin` is exactly one of `allowed`: string equality, no parsing, no prefixes. `"*"`
+ * (any origin) and `"/"` (Colony's own) are never a target, whatever list a caller passes.
+ */
 export function isAllowedOrigin(origin: unknown, allowed: readonly string[] = OLIGARCHY_ORIGINS): origin is string {
-  return typeof origin === "string" && allowed.includes(origin);
+  return typeof origin === "string" && origin !== "*" && origin !== "/" && allowed.includes(origin);
 }
 
 /** The message for a ledger. Takes the ledger, not a GameData, so nothing unfiltered is posted. */

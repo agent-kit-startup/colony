@@ -248,6 +248,12 @@ test("posting addresses the exact origin and refuses '*' and every other origin"
   for (const o of ["*", "/", "https://oligarchy.missionkit.io.evil.com", "https://oligarchy-staging.missionkit.io", ""]) {
     assert.equal(postGameData(w, o, kitLedger()), false, o);
   }
+  for (const o of ["*", "/"]) {
+    assert.equal(isAllowedOrigin(o, [PROD, o]), false, `${o} in a caller's list`);
+    assert.equal(postGameData(w, o, kitLedger(), [PROD, o]), false, `${o} in a caller's list`);
+    const handle = gameDataRequestHandler(() => w, o, () => kitLedger(), [PROD, o]);
+    assert.equal(handle({ origin: o, source: w, data: { type: GAME_DATA_REQUEST } }), false);
+  }
   assert.equal(postGameData(null, PROD, kitLedger()), false);
   assert.equal(postGameData(undefined, PROD, kitLedger()), false);
   assert.equal(w.sent.length, 1, "nothing else was posted");
