@@ -1,4 +1,4 @@
-// Monaco editor with one model per open file.
+// Monaco: one model per open file, one editor view per pane of the centre split tree.
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
@@ -51,15 +51,18 @@ monaco.editor.registerLinkOpener({
 interface Doc {
   model: monaco.editor.ITextModel;
   saved: number;
-  view: monaco.editor.ICodeEditorViewState | null;
 }
 
-export class Editors {
+/** One Monaco editor in one pane of the centre split tree (kit ADR 2026-10-24 amend
+ *  2026-11-19): it shows one file at a time and keeps its own view state (cursor, scroll,
+ *  folds) per file. A file open in two panes is one model in two views. */
+export class EditorView {
   readonly editor: monaco.editor.IStandaloneCodeEditor;
-  private docs = new Map<string, Doc>();
+  /** The file this view shows (null: none). */
   active: string | null = null;
+  readonly states = new Map<string, monaco.editor.ICodeEditorViewState | null>();
 
-  constructor(el: HTMLElement, private onChange: () => void) {
+  constructor(readonly el: HTMLElement) {
     this.editor = monaco.editor.create(el, {
       model: null,
       theme: "colony",
@@ -70,10 +73,60 @@ export class Editors {
       smoothScrolling: true,
       renderWhitespace: "selection",
     });
-    // The Omarchy skin follows the system monospace font.
-    onSkin(() => this.editor.updateOptions({ fontFamily: monoFont() }));
     // No Ctrl+S command here: the window's capture-phase keyboard handler (main.ts) is the one
-    // save path (File → Save, the palette and Ctrl+S), so a save never fails silently.
+    // save path (File → Save, the palette and Ctrl+S), so a save never fails silently. Never
+    // editor.addCommand either: Monaco keeps one keybinding service for every editor, so a
+    // command added to two editors runs the last one's handler in both (plan t0 spike);
+    // per-editor keys use addAction.
+  }
+
+  /** Remember where this view stood in the file it shows. */
+  saveState() {
+    if (this.active) this.states.set(this.active, this.editor.saveViewState());
+  }
+}
+
+/** The open files (one model each) and the editor views of the panes that show them. */
+export class Editors {
+  private docs = new Map<string, Doc>();
+  private views = new Set<EditorView>();
+  /** The view of the focused pane (main.ts sets it): `editor`, `active` and the one-argument
+   *  calls act on it. */
+  current: EditorView | null = null;
+
+  constructor(private onChange: () => void) {
+    // The Omarchy skin follows the system monospace font.
+    onSkin(() => {
+      for (const v of this.views) v.editor.updateOptions({ fontFamily: monoFont() });
+    });
+  }
+
+  /** A new editor view in `el` (a new pane). */
+  createView(el: HTMLElement): EditorView {
+    const v = new EditorView(el);
+    this.views.add(v);
+    this.current ??= v;
+    return v;
+  }
+
+  /** A pane went away: its editor goes with it (the models stay while another pane or tab
+   *  holds them). */
+  disposeView(v: EditorView) {
+    v.editor.dispose();
+    this.views.delete(v);
+    if (this.current === v) this.current = this.views.values().next().value ?? null;
+  }
+
+  /** The focused pane's editor. */
+  get editor(): monaco.editor.IStandaloneCodeEditor {
+    const v = this.current ?? this.views.values().next().value;
+    if (!v) throw new Error("no editor view");
+    return v.editor;
+  }
+
+  /** The file the focused pane's editor shows. */
+  get active(): string | null {
+    return this.current?.active ?? null;
   }
 
   paths(): string[] {
@@ -97,28 +150,31 @@ export class Editors {
     return !!d && d.model.getAlternativeVersionId() !== d.saved;
   }
 
-  async open(path: string) {
+  /** Load `path` into a model (once) and show it in `view` (the focused pane's by default). */
+  async open(path: string, view = this.current) {
     if (!this.docs.has(path)) {
       const text = await api.readTextFile(path);
+      if (this.docs.has(path)) return this.activate(path, view);
       const model = monaco.editor.createModel(text, undefined, monaco.Uri.file(path));
-      const doc: Doc = { model, saved: model.getAlternativeVersionId(), view: null };
+      const doc: Doc = { model, saved: model.getAlternativeVersionId() };
       model.onDidChangeContent(() => this.onChange());
       this.docs.set(path, doc);
     }
-    this.activate(path);
+    this.activate(path, view);
   }
 
-  activate(path: string) {
+  /** Show `path` in `view`, where that view last stood in it. */
+  activate(path: string, view = this.current) {
     const doc = this.docs.get(path);
-    if (!doc) return;
-    if (this.active && this.active !== path) {
-      const cur = this.docs.get(this.active);
-      if (cur) cur.view = this.editor.saveViewState();
+    if (!doc || !view) return;
+    if (view.active !== path) {
+      view.saveState();
+      view.active = path;
+      view.editor.setModel(doc.model);
+      const st = view.states.get(path);
+      if (st) view.editor.restoreViewState(st);
     }
-    this.active = path;
-    this.editor.setModel(doc.model);
-    if (doc.view) this.editor.restoreViewState(doc.view);
-    if (focusPolicy.enabled) this.editor.focus();
+    if (focusPolicy.enabled) view.editor.focus();
     this.onChange();
   }
 
@@ -132,15 +188,22 @@ export class Editors {
     return path;
   }
 
+  /** `view` stops showing `path` (its tab closed in that pane; the model stays). */
+  release(path: string, view: EditorView) {
+    view.states.delete(path);
+    if (view.active === path) {
+      view.active = null;
+      view.editor.setModel(null);
+    }
+  }
+
+  /** Close the file everywhere: its model goes, and every view that showed it is empty. */
   close(path: string) {
     const doc = this.docs.get(path);
     if (!doc) return;
+    for (const v of this.views) this.release(path, v);
     doc.model.dispose();
     this.docs.delete(path);
-    if (this.active === path) {
-      this.active = null;
-      this.editor.setModel(null);
-    }
     this.onChange();
   }
 
@@ -149,6 +212,6 @@ export class Editors {
   }
 
   layout() {
-    this.editor.layout();
+    for (const v of this.views) v.editor.layout();
   }
 }

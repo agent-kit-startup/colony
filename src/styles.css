@@ -175,7 +175,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active { color: var(--text-primary); border-color: var(--border-active); }
 .rail-item.on { color: var(--text-primary); }
 .rail-item.on .rail-icon { color: var(--green); }
-#tabs.tabbar-empty { display: none; }
+.pane-tabs.tabbar-empty { display: none; }
 /* Whole words only: a label wraps between words (Flight Log), never inside one. */
 .rail-item .lbl { max-width: 100%; text-align: center; }
 .rail-icon-wrap { position: relative; display: inline-flex; }
@@ -250,7 +250,26 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tab-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
 .tab.exited { opacity: 0.6; }
 .tab-add { border: 0; background: transparent; padding: 0 12px; font-size: 16px; color: var(--text-secondary); }
-#views { flex: 1; position: relative; min-height: 0; }
+/* The centre split tree (kit ADR 2026-10-24 amend 2026-11-19): nested flex boxes of panes,
+   a divider between two halves. Each pane: its strip, then its views host. */
+#panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.pane-split { display: flex; min-width: 0; min-height: 0; }
+.pane-split[data-dir="right"] { flex-direction: row; }
+.pane-split[data-dir="down"] { flex-direction: column; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 0; }
+/* With more than one pane, the focused one shows by its 1px border colour only (no accent
+   bar, no tint); one pane looks as before splits. */
+#panes.multi .pane { border: 1px solid transparent; }
+#panes.multi .pane.focused { border-color: var(--border-active); }
+.pane-divider { flex: none; background: var(--border); position: relative; z-index: 1; }
+.pane-divider[data-dir="right"] { width: 1px; cursor: col-resize; }
+.pane-divider[data-dir="down"] { height: 1px; cursor: row-resize; }
+/* A wider grab area than the 1px line. */
+.pane-divider::after { content: ""; position: absolute; inset: 0; }
+.pane-divider[data-dir="right"]::after { left: -3px; right: -3px; }
+.pane-divider[data-dir="down"]::after { top: -3px; bottom: -3px; }
+.pane-views { flex: 1; position: relative; min-height: 0; }
+.pane-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
 .view { position: absolute; inset: 0; }
 #welcome { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg-primary); }
 #welcome h1 { display: flex; align-items: center; gap: 12px; margin: 0; font-weight: 600; }
@@ -423,12 +442,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .tabbar .tab.active .tab-icon { color: var(--blue); }
 .tabbar .tab .badge { margin-left: -2px; }
 .badge.muted { background: var(--bg-card-hover); color: var(--text-secondary); }
-#tabs { overflow: hidden; }
+.pane-tabs { overflow: hidden; }
 .tabs-docs { display: flex; gap: 1px; overflow-x: auto; min-width: 0; flex: 1; }
 .tabs-docs::-webkit-scrollbar { height: 3px; }
 .tab-sep { width: 1px; background: var(--border); margin: 6px 4px; flex: none; }
-/* Back / Forward head the strip, built once (only #tabs-rest is re-rendered). */
-#tabs-rest { display: contents; }
+/* Back / Forward head each strip, built once (only .tabs-rest is re-rendered). */
+.tabs-rest { display: contents; }
 .tab-nav { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 4px 0 6px; }
 .tab-nav button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border-color: transparent; color: var(--text-secondary); }
 .tab-nav button:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-active); }
@@ -845,13 +864,13 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .md-link-text { text-decoration: underline dotted; text-underline-offset: 2px; }
 
 /* ---- Markdown file tabs: Preview | Editor (plans and HANDOFF open rendered) ------------ */
-#view-editor { display: flex; flex-direction: column; }
-#monaco-host { flex: 1; min-height: 0; position: relative; }
-#doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-#doc-bar button { padding: 2px 10px; background: transparent; }
+.pane-editor { display: flex; flex-direction: column; }
+.monaco-host { flex: 1; min-height: 0; position: relative; }
+.doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.doc-bar button { padding: 2px 10px; background: transparent; }
 /* The shown mode: its border colour only. */
-#doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
-#doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
+.doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
 .md-doc { max-width: 980px; margin: 0 auto; padding: 16px 24px 40px; }
 .md-doc.prose, .md-doc .prose { font-size: 14px; }
 .md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4, .md-doc h5, .md-doc h6 { margin: 18px 0 6px; line-height: 1.3; color: var(--text-primary); }

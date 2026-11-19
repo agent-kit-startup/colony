@@ -1,5 +1,5 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Plans, then the Explorer and the data reload), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Plans, then the Explorer, the data reload and the Splits submenu: split the focused pane right or down, close a pane), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An item with `items` is a submenu (one level, no id of its own). An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -42,7 +42,16 @@
         { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },
         { "id": "explorer-refresh", "label": "Refresh the Explorer" },
         { "separator": true },
-        { "id": "refresh", "label": "Reload Mission Control data" }
+        { "id": "refresh", "label": "Reload Mission Control data" },
+        { "separator": true },
+        {
+          "label": "Splits",
+          "items": [
+            { "id": "split-right", "label": "Split right" },
+            { "id": "split-down", "label": "Split down" },
+            { "id": "pane-close", "label": "Close pane" }
+          ]
+        }
       ]
     },
     {

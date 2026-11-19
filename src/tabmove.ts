@@ -1,4 +1,4 @@
-// Moving a terminal tab between the editor area (the centre bar, #tabs) and the panel (the
+// Moving a terminal tab between the editor area (a centre pane strip, .pane-tabs) and the panel (the
 // drawer bar, #term-tabs), both ways (kit ADR 2026-10-24 amend 2026-11-07): drawer shells
 // (`drawer:<n>`) and centre PTYs (`term:<n>`: interactive CLIs, resumed chats, the driver chat,
 // the queue runner). Run transcripts, files and views never move. A moved tab stays where it
@@ -26,7 +26,7 @@ export function dragStarted(dx: number, dy: number): boolean {
 export function dropPlace(el: { closest(sel: string): unknown } | null): Place | null {
   if (!el) return null;
   if (el.closest("#term-tabs")) return "panel";
-  if (el.closest("#tabs")) return "editor";
+  if (el.closest(".pane-tabs")) return "editor";
   return null;
 }
 

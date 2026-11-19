@@ -46,6 +46,21 @@ struct SpecItem {
     /// A `config` row: the group label of the Settings view it sits under.
     #[serde(default)]
     group: String,
+    /// A submenu of a bar menu (View → Splits): its own items, one level deep; the submenu
+    /// itself has a label and no id.
+    #[serde(default)]
+    items: Vec<SpecItem>,
+}
+
+impl SpecItem {
+    fn is_submenu(&self) -> bool {
+        !self.items.is_empty()
+    }
+}
+
+/// The action items of one menu, a submenu's items in its place, separators left out.
+fn actions(items: &[SpecItem]) -> impl Iterator<Item = &SpecItem> {
+    items.iter().filter(|i| !i.separator).flat_map(|i| if i.is_submenu() { i.items.iter().filter(|c| !c.separator).collect::<Vec<_>>() } else { vec![i] })
 }
 
 /// One menu of the installed menu bar, read back from the window (COLONY_SMOKE, tests).
@@ -85,7 +100,20 @@ fn parse_str(text: &str) -> Result<Spec, String> {
             return Err("src/menu.json: a menu without a label or items".into());
         }
         for i in m.items.iter().filter(|i| !i.separator) {
-            check(i)?;
+            if !i.is_submenu() {
+                check(i)?;
+                continue;
+            }
+            // A submenu: a plain label, no id, one level of plain items.
+            if !i.id.is_empty() || i.label.trim().is_empty() || i.label.contains('&') || i.label.contains('_') {
+                return Err(format!("src/menu.json: the submenu {:?} of {} needs a plain label and no id", i.label, m.label));
+            }
+            for c in i.items.iter().filter(|c| !c.separator) {
+                if c.is_submenu() {
+                    return Err(format!("src/menu.json: the submenu {:?} nests another one", i.label));
+                }
+                check(c)?;
+            }
         }
     }
     // One id, one place: a Settings row may not repeat a menu bar item (nor carry a separator:
@@ -105,7 +133,7 @@ fn parse() -> Result<Spec, String> {
 
 /// Every action id of the menu bar, in menu order.
 pub fn ids() -> Vec<String> {
-    parse().map(|s| s.menus.into_iter().flat_map(|m| m.items).filter(|i| !i.separator).map(|i| i.id).collect()).unwrap_or_default()
+    parse().map(|s| s.menus.iter().flat_map(|m| actions(&m.items).map(|i| i.id.clone()).collect::<Vec<_>>()).collect()).unwrap_or_default()
 }
 
 fn spec() -> tauri::Result<Spec> {
@@ -113,9 +141,19 @@ fn spec() -> tauri::Result<Spec> {
 }
 
 fn submenu<R: Runtime, M: Manager<R>>(manager: &M, m: &SpecMenu) -> tauri::Result<Submenu<R>> {
-    let mut sub = SubmenuBuilder::new(manager, &m.label);
-    for i in &m.items {
-        sub = if i.separator { sub.separator() } else { sub.text(i.id.as_str(), &i.label) };
+    build_items(manager, &m.label, &m.items)
+}
+
+fn build_items<R: Runtime, M: Manager<R>>(manager: &M, label: &str, items: &[SpecItem]) -> tauri::Result<Submenu<R>> {
+    let mut sub = SubmenuBuilder::new(manager, label);
+    for i in items {
+        sub = if i.separator {
+            sub.separator()
+        } else if i.is_submenu() {
+            sub.item(&build_items(manager, &i.label, &i.items)?)
+        } else {
+            sub.text(i.id.as_str(), &i.label)
+        };
     }
     sub.build()
 }
@@ -157,8 +195,15 @@ pub fn menu_state(window: tauri::WebviewWindow) -> Result<Vec<MenuState>, String
         let MenuItemKind::Submenu(sub) = kind else { continue };
         let mut items = Vec::new();
         for item in sub.items().map_err(|e| e.to_string())? {
-            if let MenuItemKind::MenuItem(i) = item {
-                items.push(MenuItemState { id: i.id().0.clone(), label: i.text().map_err(|e| e.to_string())?, enabled: i.is_enabled().map_err(|e| e.to_string())? });
+            // A submenu's items are listed in its place (View → Splits).
+            let inner = match item {
+                MenuItemKind::Submenu(s) => s.items().map_err(|e| e.to_string())?,
+                other => vec![other],
+            };
+            for item in inner {
+                if let MenuItemKind::MenuItem(i) = item {
+                    items.push(MenuItemState { id: i.id().0.clone(), label: i.text().map_err(|e| e.to_string())?, enabled: i.is_enabled().map_err(|e| e.to_string())? });
+                }
             }
         }
         out.push(MenuState { label: sub.text().map_err(|e| e.to_string())?, items });
@@ -195,7 +240,7 @@ mod tests {
     fn menu_ids(label: &str) -> Vec<String> {
         let spec = parse().unwrap();
         let m = spec.menus.iter().find(|m| m.label == label).unwrap_or_else(|| panic!("no {label} menu"));
-        m.items.iter().filter(|i| !i.separator).map(|i| i.id.clone()).collect()
+        actions(&m.items).map(|i| i.id.clone()).collect()
     }
 
     /// The six-menu tree (kit ADR 2026-10-24 amend 2026-11-11, point 1): each id in the menu
@@ -207,7 +252,7 @@ mod tests {
         assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 13, "{view:?}");
         assert_eq!(view[..13].iter().filter(|i| i.starts_with("view:")).count(), 13, "the views come first: {view:?}");
         assert_eq!(view[12], "view:plans", "Plans after the rail items: {view:?}");
-        assert_eq!(view[13..], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
+        assert_eq!(view[13..], ["explorer", "explorer-collapse", "explorer-refresh", "refresh", "split-right", "split-down", "pane-close"]);
         assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
         assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
@@ -232,6 +277,37 @@ mod tests {
         let term = menu_ids("Terminal");
         let at = |id: &str| term.iter().position(|i| i == id).unwrap_or_else(|| panic!("{id} not in Terminal: {term:?}"));
         assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{term:?}");
+    }
+
+    /// Free tiling (kit ADR 2026-10-24 amend 2026-11-19, point 4): the split actions live in a
+    /// Splits submenu at the end of View, so View does not grow by a row per action; one level
+    /// deep, a plain label and no id of its own.
+    #[test]
+    fn splits_live_in_a_view_submenu() {
+        let spec = parse().unwrap();
+        let view = spec.menus.iter().find(|m| m.label == "View").unwrap();
+        let last = view.items.last().unwrap();
+        assert!(last.is_submenu() && last.label == "Splits" && last.id.is_empty(), "{last:?}");
+        let split: Vec<&str> = last.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(split, ["split-right", "split-down", "pane-close"]);
+        assert!(view.items[..view.items.len() - 1].iter().all(|i| !i.is_submenu()), "one Splits submenu");
+        let bar = ids();
+        for id in split {
+            assert!(bar.iter().any(|i| i == id), "{id} is a menu bar id");
+        }
+    }
+
+    #[test]
+    fn a_submenu_is_one_level_with_a_plain_label() {
+        let bad_nest = r#"{"menus":[{"label":"View","items":[{"label":"A","items":[{"label":"B","items":[{"id":"x","label":"X"}]}]}]}]}"#;
+        assert!(parse_str(bad_nest).unwrap_err().contains("nests"));
+        let with_id = r#"{"menus":[{"label":"View","items":[{"id":"s","label":"S","items":[{"id":"x","label":"X"}]}]}]}"#;
+        assert!(parse_str(with_id).unwrap_err().contains("no id"));
+        let dup = r#"{"menus":[{"label":"View","items":[{"id":"x","label":"X"},{"label":"S","items":[{"id":"x","label":"Again"}]}]}]}"#;
+        assert!(parse_str(dup).unwrap_err().contains("duplicate"));
+        let ok = r#"{"menus":[{"label":"View","items":[{"id":"x","label":"X"},{"label":"S","items":[{"id":"y","label":"Y"}]}]}]}"#;
+        let spec = parse_str(ok).unwrap();
+        assert_eq!(actions(&spec.menus[0].items).map(|i| i.id.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
 
     const MAIN_TS: &str = include_str!("../../src/main.ts");
