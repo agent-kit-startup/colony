@@ -30,6 +30,9 @@ interface FileState {
   saved: boolean;
 }
 
+/** The one line under the verify box: what ticking it runs, and as whom. */
+export const VERIFY_NOTE = "Verify runs this repository's test commands on the agent's text and the merged files, before you review them, unsandboxed, as you.";
+
 const sideLabel = (s: { ref: string; sha: string; subject: string } | null, fallback: string) => (s ? `${s.ref} ${s.sha.slice(0, 7)} · ${s.subject}` : fallback);
 
 export class ConflictView {
@@ -41,7 +44,10 @@ export class ConflictView {
   private files = new Map<string, FileState>();
   private current = "";
   private backend = h("select", { "aria-label": "DevOps agent backend" });
-  private verify = h("input", { type: "checkbox", checked: "" });
+  // Unticked by default (git-cicd ADR amend 2026-11-19): verification runs the repository's
+  // commands on the agent's text and the merged files before anyone reviewed them, as the
+  // operator, so it is an explicit choice per run.
+  private verify = h("input", { type: "checkbox", "data-act": "cf-verify" });
 
   constructor(private host: ConflictHost) {
     for (const b of ["auto", "claude", "cursor-agent"]) this.backend.append(h("option", { value: b }, b));
@@ -154,6 +160,7 @@ export class ConflictView {
     const verifyLabel = h("label", { class: "check small" }, this.verify, " verify in a temporary worktree");
     this.body.replaceChildren(
       h("div", { class: "panel-row" }, h("strong", { class: "grow ellipsis mono" }, f.path), h("span", { class: "dim small" }, `base from ${f.baseSource ?? "none"}`), this.backend, verifyLabel, ask),
+      h("div", { class: "hint small cf-verify-note" }, VERIFY_NOTE),
       ...(st.proposal ? [this.proposalSummary(st.proposal)] : []),
       ...f.hunks.map((hk) => this.hunkView(st, hk)),
       h("div", { class: "panel-row cf-actions" }, h("span", { class: "dim small grow" }, left.length ? `${left.length} hunk(s) still open: ${left.join(", ")}` : st.saved ? "Saved. Stage it, then commit from the Working tree." : "Every hunk resolved: save the file."), save, stage),
