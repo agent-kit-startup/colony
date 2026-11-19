@@ -21,6 +21,18 @@ export interface SmokeCtx {
   activeTab: () => string;
 }
 
+/**
+ * The promote step's precondition, typed into a terminal tab in the fixture repository: one
+ * commit that adds `smoke-promote.txt` on top of the scratch origin's staging, built with
+ * plumbing on a temporary index (the working tree, the index, HEAD and main stay as they
+ * are), pushed to the push URL, which must be a local folder (the runner's bare scratch
+ * origin; a real remote is refused), and mirrored into `refs/remotes/origin/staging`, since
+ * the fetch URL is not reachable. main stays outside
+ * staging, so the staging-sync step still has a sync to open. The subshell stops at the first
+ * failing command (set -e, outside any || list) and the file ends with its exit code.
+ */
+const PROMOTE_FIXTURE = `( set -e; o=$(git config remote.origin.pushurl); test -d "$o"; b=$(git rev-parse refs/remotes/origin/staging); d=$(mktemp -d); GIT_INDEX_FILE=$d/index git read-tree "$b"; h=$(printf 'Colony smoke: a staging-only file\\n' | git hash-object -w --stdin); GIT_INDEX_FILE=$d/index git update-index --add --cacheinfo "100644,$h,smoke-promote.txt"; t=$(GIT_INDEX_FILE=$d/index git write-tree); rm -rf "$d"; n=$(git -c user.name=smoke -c user.email=smoke@example.invalid commit-tree "$t" -p "$b" -m "feat: staging-only file (Colony smoke)"); git push -q "$o" "$n:refs/heads/staging"; git update-ref refs/remotes/origin/staging "$n"; echo "ok $n" ) > promote-fixture.txt 2>&1; echo "exit=$?" >> promote-fixture.txt\n`;
+
 export async function hostSmoke(c: SmokeCtx) {
   const read = (rel: string) => api.readTextFile(`${c.root}/${rel}`).catch(() => "");
   const untilFile = async (rel: string, ok: (t: string) => boolean, ms: number) => {
@@ -242,12 +254,16 @@ export async function gitCicdSmoke(c: SmokeCtx) {
     await c.log("ship-merge-staging", m11.el?.dataset.production === "no" && gh.includes("pr merge 11 --squash"), { production: m11.el?.dataset.production });
 
     // Open the staging -> main PR: fixed branches and title, no typed yes (it merges nothing).
+    // The host refuses a promote whose staging has the same files as main, so the step first
+    // gives the scratch origin's staging one staging-only file (PROMOTE_FIXTURE).
+    await c.term(PROMOTE_FIXTURE);
+    const pf = (await untilFile("promote-fixture.txt", (x) => x.includes("exit="), 10000)).trim();
     click(row("staging-main"), "ship-open-pr");
     const op = await ready("open-pr", "promote");
     const opText = op.el?.textContent ?? "";
     click(op.el, "approve");
     gh = await untilFile("gh-proof.txt", (x) => x.includes("pr create --base main --head staging"), 15000);
-    await c.log("ship-open-promote", op.el?.dataset.production === "no" && opText.includes("Promote staging to main") && opText.includes("main ← staging") && gh.includes("pr create --base main --head staging --title Promote staging to main --body"), { text: opText.slice(0, 300) });
+    await c.log("ship-open-promote", /^ok [0-9a-f]{40}\nexit=0$/.test(pf) && op.el?.dataset.production === "no" && opText.includes("Promote staging to main") && opText.includes("main ← staging") && gh.includes("pr create --base main --head staging --title Promote staging to main --body"), { fixture: pf.slice(0, 300), text: opText.slice(0, 300) });
 
     // Rerun the failed jobs of the tag's CI run.
     click(row("tag-ci"), "ship-rerun-checks");
