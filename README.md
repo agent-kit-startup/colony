@@ -180,7 +180,7 @@ Oligarchy, the game, is one web page: the one served at `https://oligarchy.missi
 
 - **Data.** The page asks Colony for the game data and Colony answers with the minimal shape of `src/oligarchyfeed.ts`: the kind and time of each of the newest 20 outcomes of the open folder's ledger, counts per kind and per resource, and the flow streak, posted only to the exact game origin. Every snapshot change posts a fresh copy. With no folder open Colony does not answer, and the page plays the trial with its no-data note.
 - **Nothing else crosses.** No Colony command or capability names the game origin, the CSP allows only that origin as a frame, and the webview refuses every navigation, in any frame, that is not the game's origin (`src-tauri/src/gameframe.rs`; Colony's own page only for its first load).
-- **Offline.** The view says the game needs the network, with `Try again`, instead of an empty frame.
+- **Offline.** Before each load the view sends a HEAD request to the page (no cookie, no referrer; the CSP's `connect-src` names the game origin for it). No answer within 8 s, or the window's offline event, shows that the game needs the network, with `Try again`, instead of an empty frame or WebKit's error page.
 - **Saves.** The page keeps its save in its own origin's storage. Colony keeps no game state; the saves of the earlier in-Colony game (`oligarchy-state-v1:*`) are left as they were and not read.
 - **Staging.** This build loads the production origin only. The staging origin behind a Settings switch (ADR point 8) is not in this build.
 

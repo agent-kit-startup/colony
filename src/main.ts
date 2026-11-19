@@ -4329,8 +4329,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // its exact origin, no engine view; offline, a new load shows the network-needed state, and
     // back online the frame loads again. The data channel itself is unit-tested
     // (scripts/oligarchyfeed.test.mjs); the page that answers it is not this build's to load.
+    const settled = async () => {
+      for (let i = 0; i < 60 && oligarchyView.state === "loading"; i++) await wait(200);
+    };
     showTab("colony");
     await wait(150);
+    await settled();
     const gameFrame = () => oligarchyView.frameEl;
     const game: Record<string, unknown> = {
       state: oligarchyView.state,
@@ -4346,6 +4350,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     game.offline = oligarchyView.state === "offline" && !gameFrame() && !!view("colony").querySelector('[data-act="retry"]');
     window.dispatchEvent(new Event("online"));
     await wait(100);
+    await settled();
     game.backOnline = oligarchyView.state === "frame" && gameFrame()?.getAttribute("src") === oligarchyView.url;
     const gameOk = game.state === "frame" && game.src === oligarchyView.url && game.sandbox === "allow-scripts allow-same-origin" && game.frames === 1 && game.noEngineView === true && game.label === "Oligarchy" && game.offline === true && game.backOnline === true;
     await log("oligarchy-view", gameOk, game);
@@ -5282,6 +5287,7 @@ async function runPlaySmoke(info: StartupInfo) {
     await log("play-wait", true, "no folder: waiting for colony://play");
     for (let i = 0; i < 300 && !(oligarchyView.visible && !oligarchyView.el.hidden); i++) await wait(200);
     await wait(300);
+    for (let i = 0; i < 60 && oligarchyView.state === "loading"; i++) await wait(200);
     const cv = oligarchyView.el;
     const shown = (sel: string) => {
       const el = cv.querySelector<HTMLElement>(sel);

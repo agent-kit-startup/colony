@@ -5,12 +5,16 @@
 // posted to the exact game origin), then posts a fresh copy on every snapshot change. The frame
 // gets no Tauri command or capability (none names its origin), navigation away from the game
 // origin is refused by the CSP `frame-src` and by the webview's navigation check (src-tauri
-// lib.rs), and offline the view says the game needs the network instead of showing a blank frame.
+// lib.rs), and offline (no answer to a HEAD request to the page) the view says the game needs the
+// network instead of showing a blank frame or WebKit's error page.
 import { h } from "./api";
 import { type CockpitHost, View } from "./cockpit";
 import { FRAME_SANDBOX, gameDataRequestHandler, gameUrl, OLIGARCHY_ORIGINS, postGameData } from "./oligarchyfeed";
 import { snapshot } from "./snapshot";
 import { btn, emptyCta } from "./ui";
+
+/** How long the reachability request may take before the view says the game needs the network. */
+const PROBE_MS = 8000;
 
 export interface GameHost {
   /** Pick a folder (the game shown with no folder). */
@@ -30,9 +34,12 @@ export class OligarchyView extends View {
   private asked = false;
   /** Set by the window's offline event, cleared by its online event. */
   private netDown = false;
+  /** A reachability request is running. */
+  private probing = false;
   private readonly bar: HTMLElement;
   private readonly noFolder: HTMLElement[];
   private readonly offline: HTMLElement;
+  private readonly loading: HTMLElement;
   private readonly stage = h("div", { class: "oligarchy-stage", style: "display: contents" });
 
   constructor(host: CockpitHost, private game: GameHost) {
@@ -55,6 +62,7 @@ export class OligarchyView extends View {
       actions: [{ label: "Try again", onClick: () => this.reload(), act: "retry", title: "Load the game page again" }],
     });
     this.offline.classList.add("oligarchy-offline");
+    this.loading = h("div", { class: "oligarchy-offline dim small" }, `Loading the game from ${new URL(this.url).host}…`);
     const answer = gameDataRequestHandler(
       () => this.frame?.contentWindow,
       this.origin,
@@ -86,8 +94,9 @@ export class OligarchyView extends View {
   }
 
   /** Whether the frame or the network-needed state is on screen (for the smoke). */
-  get state(): "frame" | "offline" | "idle" {
-    return this.el.dataset.state === "frame" || this.el.dataset.state === "offline" ? this.el.dataset.state : "idle";
+  get state(): "frame" | "offline" | "loading" | "idle" {
+    const s = this.el.dataset.state;
+    return s === "frame" || s === "offline" || s === "loading" ? s : "idle";
   }
 
   get frameEl(): HTMLIFrameElement | null {
@@ -117,6 +126,44 @@ export class OligarchyView extends View {
     this.sync();
   }
 
+  /**
+   * Load the page, after a HEAD request to the same address: WebKitGTK may report online with no
+   * route out (navigator.onLine stays true), and a frame that fails to load shows WebKit's error
+   * page, not ours. The request carries no cookie, no referrer and no data.
+   */
+  private async load(root: string) {
+    if (this.probing) return;
+    this.probing = true;
+    this.el.dataset.state = "loading";
+    this.stage.replaceChildren(this.loading);
+    const stop = new AbortController();
+    const timer = window.setTimeout(() => stop.abort(), PROBE_MS);
+    let reached = false;
+    try {
+      await fetch(this.url, { method: "HEAD", mode: "no-cors", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal: stop.signal });
+      reached = true;
+    } catch {
+      reached = false;
+    } finally {
+      window.clearTimeout(timer);
+      this.probing = false;
+    }
+    if (!reached) {
+      this.stage.replaceChildren(this.offline);
+      this.el.dataset.state = "offline";
+      return;
+    }
+    if (this.frame || !this.visible || !this.online()) return this.sync();
+    this.asked = false;
+    this.loadedFor = root;
+    // Sandbox before src: the first load already runs sandboxed.
+    this.frame = h("iframe", { class: "oligarchy-frame", sandbox: FRAME_SANDBOX, referrerpolicy: "no-referrer", title: "Oligarchy", src: this.url });
+    this.stage.replaceChildren(this.frame);
+    this.el.dataset.state = "frame";
+    // A folder opened or closed while the request ran: load for the folder open now.
+    if (this.host.workspaceRoot() !== root) this.sync();
+  }
+
   private sync() {
     const root = this.host.workspaceRoot();
     for (const b of this.noFolder) b.hidden = !!root;
@@ -133,13 +180,7 @@ export class OligarchyView extends View {
       this.frame = null;
     }
     if (!this.frame) {
-      if (!this.visible) return;
-      this.asked = false;
-      this.loadedFor = root;
-      // Sandbox before src: the first load already runs sandboxed.
-      this.frame = h("iframe", { class: "oligarchy-frame", sandbox: FRAME_SANDBOX, referrerpolicy: "no-referrer", title: "Oligarchy", src: this.url });
-      this.stage.replaceChildren(this.frame);
-      this.el.dataset.state = "frame";
+      if (this.visible) void this.load(root);
       return;
     }
     if (this.stage.firstChild !== this.frame) this.stage.replaceChildren(this.frame);

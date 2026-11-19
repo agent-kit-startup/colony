@@ -2,8 +2,9 @@
 //! oligarchy-web-game-data-contract-colony-pairing, points 6 and 8). The webview refuses every
 //! navigation, in the main frame or in a frame, that is not Colony's own page, an empty frame or
 //! the game's exact origin, so the game frame cannot be taken to another site. The CSP
-//! `frame-src` (tauri.conf.json) names the same origin; no capability names it, so the page gets
-//! no Tauri command.
+//! `frame-src` (tauri.conf.json) names the same origin (and `connect-src` for the view's HEAD
+//! request that tells offline from online); no capability names it, so the page gets no Tauri
+//! command.
 //!
 //! Colony's own page is allowed only until the main frame has committed it once. The frame keeps
 //! its own origin for its storage (`allow-same-origin`), so a frame that reached Colony's page
@@ -122,6 +123,9 @@ mod tests {
         let csp = conf["app"]["security"]["csp"].as_str().unwrap();
         let frame = csp.split(';').map(str::trim).find(|d| d.starts_with("frame-src")).unwrap();
         assert_eq!(frame, format!("frame-src {GAME_ORIGIN}"), "{csp}");
+        // The view's reachability request (HEAD, no-cors) is the one other address it reaches.
+        let connect = csp.split(';').map(str::trim).find(|d| d.starts_with("connect-src")).unwrap();
+        assert_eq!(connect, format!("connect-src 'self' ipc: http://ipc.localhost {GAME_ORIGIN}"), "{csp}");
         for cap in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities")).unwrap() {
             let text = std::fs::read_to_string(cap.unwrap().path()).unwrap();
             assert!(!text.contains("missionkit.io") && !text.contains("\"remote\""), "no capability for a remote origin: {text}");
