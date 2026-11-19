@@ -105,7 +105,7 @@ document.getElementById("app")!.innerHTML = `
       <button class="win-close" title="Close" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
     </span>
   </header>
-  <nav id="rail" aria-label="Views"></nav>
+  <nav id="rail" aria-label="Views"><div id="rail-scroll" class="rail-group"></div><div id="rail-bottom" class="rail-group" role="group" aria-label="Static kit content"></div></nav>
   <aside id="side">
     <div class="side-head"><span>Explorer</span><button id="tree-refresh" class="icon" title="Refresh"></button></div>
     <div id="tree"></div>
@@ -204,16 +204,18 @@ let activeTab = "mission";
 const nav = new NavHistory();
 
 /**
- * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
- * amend 2026-10-28; plan colony-sidebar-native-kit). A rail item shows one view, or a group of
- * views that switch inside the view, never in the tab strip (amend 2026-11-11, point 3): Ship
- * switches Git | CI/CD, Workspace its sections. No item sits behind a More menu: the rail
- * scrolls at any window height. The terminal drawer is not a rail item: its own bar (always on
- * screen) shows and hides it; the Terminals item is a list view.
+ * Primary navigation (ADR 2026-10-24 amend 2026-11-19, dynamic rail): the views whose content
+ * changes as work runs, in one scrolling group, then Workspace (static kit content) alone in a
+ * bottom group that stays on screen at any window height. A rail item shows one view, or a
+ * group of views that switch inside the view, never in the tab strip (amend 2026-11-11,
+ * point 3): Ship switches Git | CI/CD, Workspace its sections. No item sits behind a More
+ * menu: the main group scrolls. The terminal drawer is not a rail item: its own bar (always
+ * on screen) shows and hides it; the Terminals item is a list view.
  */
-interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string }
-/** Workspace's sections, in order: each one a view, switched inside the Workspace view. */
-const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "plans"];
+interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string; bottom?: true }
+/** Workspace's sections, in order: each one a view, switched inside the Workspace view. Plans
+ *  and Memory left for the rail (amend 2026-11-19, point 1). */
+const WORKSPACE_SECTIONS = ["health", "decisions", "agents", "skills", "rules", "commands"];
 const RAIL: RailItem[] = [
   { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
   { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
@@ -223,17 +225,20 @@ const RAIL: RailItem[] = [
   { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+6)", views: ["review"] },
   { id: "ship", label: "Ship", icon: "ship", tip: "Ship: Git (host requests, pull requests, branch flow, commit, push) and CI/CD (Ctrl+7)", views: ["git", "cicd"] },
   { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
-  { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
+  { id: "plans", label: "Plans", icon: "plans", tip: "Plans: the active plan, the backlog and the parked plans (Ctrl+9)", views: ["plans"] },
+  { id: "memory", label: "Memory", icon: "memory", tip: "Memory: the kit's error and decision records", views: ["memory"] },
+  { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window; the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
-  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, plans", views: WORKSPACE_SECTIONS, home: "plans" },
   { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: health, decisions, agents, skills, rules, commands", views: WORKSPACE_SECTIONS, home: "decisions", bottom: true },
 ];
 /** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
 const SHIP_VIEWS: WorkspaceSection[] = [
   { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push" },
   { id: "cicd", label: "CI/CD", icon: "devops", tip: "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs" },
 ];
-/** Ctrl+1..9: the first nine rail items. The rail tooltips name these keys (cargo test
+/** Ctrl+1..9: the first nine rail items, in rail order (the one place the keys are mapped;
+ *  amend 2026-11-19 Ask r0-ctrl-digits). The rail tooltips name these keys (cargo test
  *  terminal_drawer checks both); the terminal drawer toggles with Ctrl+` instead. */
 const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);
 /** The member a group's rail item opens: the one shown last. */
@@ -264,10 +269,11 @@ function badges(t: Tab | undefined): HTMLElement[] {
  *  in place. */
 const railEls = new Map<string, HTMLElement>();
 function renderRail() {
-  const rail = $("rail");
   if (!workspace) {
     railEls.clear();
-    return rail.replaceChildren();
+    $("rail-scroll").replaceChildren();
+    $("rail-bottom").replaceChildren();
+    return;
   }
   if (!railEls.size) {
     const items = RAIL.map((r) => {
@@ -277,7 +283,9 @@ function renderRail() {
       railEls.set(r.id, el);
       return el;
     });
-    rail.replaceChildren(...items);
+    // The main group scrolls; the bottom group (Workspace) stays on screen below it.
+    $("rail-scroll").replaceChildren(...items.filter((_, i) => !RAIL[i].bottom));
+    $("rail-bottom").replaceChildren(...items.filter((_, i) => RAIL[i].bottom));
     railFade();
   }
   let activeEl: HTMLElement | null = null;
@@ -306,10 +314,11 @@ function openRail(r: RailItem) {
   showTab(lastInGroup.get(r.id) ?? r.home ?? r.views[0]);
 }
 
-/** The rail scrolls at any window height: an edge with items out of view gets a fade and a
- *  1px line in the border colour (`.fade-top` / `.fade-bottom`). */
+/** The rail's main group scrolls at any window height: an edge with items out of view gets a
+ *  fade and a 1px line in the border colour (`.fade-top` / `.fade-bottom`). The bottom group
+ *  never scrolls. */
 function railFade() {
-  const rail = $("rail");
+  const rail = $("rail-scroll");
   // Measured on the items, not the scroll range: the rail's own padding may stay out of view
   // while every item is in it (scrollIntoView stops at the item).
   const items = rail.querySelectorAll<HTMLElement>(".rail-item");
@@ -319,10 +328,10 @@ function railFade() {
   rail.classList.toggle("fade-top", top);
   rail.classList.toggle("fade-bottom", bottom);
 }
-$("rail").addEventListener("scroll", railFade, { passive: true });
-new ResizeObserver(railFade).observe($("rail"));
-// Arrow keys move the focus along the rail (Home / End: the first / last item); Enter or
-// Space opens the focused item, as on any button.
+$("rail-scroll").addEventListener("scroll", railFade, { passive: true });
+new ResizeObserver(railFade).observe($("rail-scroll"));
+// Arrow keys move the focus along the rail, main group then Workspace (Home / End: the first /
+// last item); Enter or Space opens the focused item, as on any button.
 $("rail").addEventListener("keydown", (ev) => {
   const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
   const at = items.indexOf(document.activeElement as HTMLElement);
@@ -1941,20 +1950,21 @@ function pinViews() {
   pin("terminals", "Terminals", "terminals", "Every terminal of this window, closed drawer shells included", terminalsView.el, terminalsView);
   pin("processes", "Processes", "processes", "The kit's process list", processesView.el, processesView);
   pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", colonyView.el, colonyView);
+  // Plans and Memory: rail items of their own (amend 2026-11-19), out of Workspace.
+  pin("plans", "Plans", "plans", "Plans: the active plan, the backlog and the parked plans", plans.el, plans);
+  pin("memory", "Memory", "field-report", "Memory: the kit's error and decision records", memoryView.el, memoryView);
   // Workspace: one view per section, the section switch at its head.
   const openSection = (id: string) => showTab(id);
   const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void }) => {
     const info = sectionInfo(id);
     pin(id, info.label, info.icon, info.tip, workspaceSection(id, WORKSPACE_SECTIONS, body, openSection), v);
   };
-  section("memory", memoryView.el, memoryView);
   section("health", healthView.el, healthView);
   section("decisions", decisionsView.el, decisionsView);
   section("agents", agentsView.el, agentsView);
   section("skills", skillsView.el, skillsView);
   section("rules", rulesView.el, rulesView);
   section("commands", commandsView.el, commandsView);
-  section("plans", plans.el, plans);
   // Settings: a view of its own, on no rail item (the top bar gear and File → Settings… show it).
   pin("settings", "Settings", "config", "Settings: skin, title bar, rail, engine, integrations, settings.json", settingsView, { show: () => {}, hide: () => {} });
 }
@@ -3039,7 +3049,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
     st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"]) && !groupRows.Appearance?.cmds.length;
     st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
-    st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 8 && !tabs.has("config") && view("plans").querySelectorAll(".ws-nav-btn").length === 8 && !view("plans").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
+    st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 6 && !tabs.has("config") && view("decisions").querySelectorAll(".ws-nav-btn").length === 6 && !view("decisions").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
     const stPalette = paletteActions();
     st.paletteWhere = menuSpec.config.every((c) => !!c.omarchyOnly && !omarchyDetected() ? !stPalette.some((a) => a.id === c.id) : stPalette.find((a) => a.id === c.id)?.description === "Settings") && stPalette.find((a) => a.id === "settings")?.description === "File menu" && !stPalette.some((a) => a.id === "view:config");
     // Files → Open settings.json: the raw file in an editor tab; closing it returns to Settings.
@@ -3690,46 +3700,56 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const wantActions = paletteActions().map((a) => a.id);
     await log("palette-actions", JSON.stringify(actionRows) === JSON.stringify(wantActions), { rendered: actionRows, want: wantActions });
     palette.hide();
-    // ---- s2 acceptance (plan colony-sidebar-native-kit): the rail -----------------------
-    // Every kit item at first level, in the operator's order, no More menu, nothing hidden.
+    // ---- s2 acceptance (plan colony-sidebar-native-kit; amend 2026-11-19): the rail -------
+    // The dynamic views in the main group, in order, then Workspace alone in the bottom group;
+    // no More menu, nothing hidden.
     const RAIL_WANT: [string, string][] = [
       ["mission", "Cockpit"], ["queue", "Queue"], ["inbox", "Inbox"], ["chats", "Chats"], ["flight", "Flight Log"], ["review", "Review"],
-      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Colony"],
+      ["ship", "Ship"], ["activity", "Activity"], ["plans", "Plans"], ["memory", "Memory"], ["terminals", "Terminals"], ["processes", "Processes"], ["colony", "Colony"],
+      ["workspace", "Workspace"],
     ];
     const railEls = () => [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
     const railGot = railEls().map((el) => [el.dataset.tab ?? "", el.querySelector(".lbl")?.textContent ?? ""]);
+    const bottomIds = [...$("rail-bottom").querySelectorAll<HTMLElement>(".rail-item")].map((el) => el.dataset.tab);
     const noMore = !document.querySelector("#more-menu, #rail-more, .rail-more, [data-cmd='more'], [data-tab='more']") && !menuItems().some((i) => /^more$/i.test(i.id));
-    await log("rail-items", JSON.stringify(railGot) === JSON.stringify(RAIL_WANT) && noMore && railEls().every((el) => !el.hidden && el.getClientRects().length > 0), { got: railGot, noMore });
+    await log("rail-items", JSON.stringify(railGot) === JSON.stringify(RAIL_WANT) && JSON.stringify(bottomIds) === '["workspace"]' && noMore && railEls().every((el) => !el.hidden && el.getClientRects().length > 0), { got: railGot, bottomIds, noMore });
     // 1024x600, emulated: the shell (the grid that sizes the rail) held at 1024x600 px, since
     // the window may be tiled and has no set-size permission. The vh-based item padding keeps
     // the real window's height, so the compact item height itself is a manual check.
     const railAt = async (labels: boolean) => {
       settingsPane.querySelector<HTMLButtonElement>(`button[data-setting=rail-labels][data-labels=${labels ? "on" : "off"}]`)!.click();
       await wait(150);
-      const rail = $("rail");
+      const rail = $("rail-scroll");
       rail.scrollTop = 0;
       railFade();
       const atTop = { fadeTop: rail.classList.contains("fade-top"), fadeBottom: rail.classList.contains("fade-bottom") };
       const overflow = rail.scrollHeight > rail.clientHeight + 1;
+      // Each item in view inside its own group (the main group scrolls, the bottom one never).
       const reach = railEls().map((el) => {
         el.scrollIntoView({ block: "nearest" });
         const r = el.getBoundingClientRect();
-        const b = rail.getBoundingClientRect();
+        const b = el.parentElement!.getBoundingClientRect();
         return r.top >= b.top - 1 && r.bottom <= b.bottom + 1 && r.height >= 18;
       });
       railFade();
       const atEnd = { fadeTop: rail.classList.contains("fade-top") === overflow, fadeBottom: !rail.classList.contains("fade-bottom") };
-      // The active item scrolls into view on a view change (Cockpit, at the top, then Colony).
+      // The active item scrolls into view on a view change (Cockpit, at the top, then Colony,
+      // the last item of the main group).
       showTab("mission");
       rail.scrollTop = 0;
       await wait(50);
+      // The bottom group is on screen with the main group scrolled to its top: Workspace sits
+      // at the rail's bottom edge, below the main group.
+      const ws = $("rail-bottom").querySelector<HTMLElement>(".rail-item")!.getBoundingClientRect();
+      const box = $("rail").getBoundingClientRect();
+      const bottomPinned = ws.bottom <= box.bottom + 1 && ws.top >= rail.getBoundingClientRect().bottom - 1 && box.bottom - ws.bottom < 16;
       showTab("colony");
       await wait(100);
-      const c = railEls().at(-1)!.getBoundingClientRect();
+      const c = railEls().find((el) => el.dataset.tab === "colony")!.getBoundingClientRect();
       const b = rail.getBoundingClientRect();
       const activeInView = c.top >= b.top - 1 && c.bottom <= b.bottom + 1;
       const heights = railEls().map((el) => Math.round(el.getBoundingClientRect().height));
-      return { railHeight: rail.clientHeight, overflow, atTop, atEnd, fadeOk: atTop.fadeTop === false && atTop.fadeBottom === overflow && atEnd.fadeTop && atEnd.fadeBottom, reachable: reach.every(Boolean), activeInView, minItem: Math.min(...heights) };
+      return { railHeight: rail.clientHeight, overflow, atTop, atEnd, fadeOk: atTop.fadeTop === false && atTop.fadeBottom === overflow && atEnd.fadeTop && atEnd.fadeBottom, reachable: reach.every(Boolean), activeInView, bottomPinned, minItem: Math.min(...heights) };
     };
     $("shell").style.width = "1024px";
     $("shell").style.height = "600px";
@@ -3741,7 +3761,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(150);
     railFade();
     showTab("mission");
-    const railSmallOk = Object.values(railSmall).every((v) => v.fadeOk && v.reachable && v.activeInView);
+    const railSmallOk = Object.values(railSmall).every((v) => v.fadeOk && v.reachable && v.activeInView && v.bottomPinned);
     await log("rail-scroll-1024x600", railSmallOk, { emulated: "shell held at 1024x600 px", ...railSmall });
     // Plan colony-rail-labels-whole-words: no label breaks inside a word ("Processe/s"), none
     // runs past its item, and the rail never scrolls sideways, at the window size and at 1024x600.

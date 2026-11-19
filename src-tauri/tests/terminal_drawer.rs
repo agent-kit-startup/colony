@@ -96,13 +96,13 @@ fn the_drawer_bar_has_the_toggle_and_lists_shells_only() {
 
 #[test]
 fn ctrl_digits_match_the_rail_tooltips() {
-    // Ctrl+1..9 are the first nine rail items in rail order (ADR 2026-10-24 amend
-    // 2026-10-28); the drawer toggles with Ctrl+` only, so no digit names it.
+    // Ctrl+1..9 are the first nine rail items in rail order (ADR 2026-10-24 amends
+    // 2026-10-28 and 2026-11-19); the drawer toggles with Ctrl+` only, so no digit names it.
     assert!(MAIN.contains("const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);"), "Ctrl+<n> follows the rail order");
     let rail_start = MAIN.find("const RAIL: RailItem[] = [").expect("RAIL");
     let rail = &MAIN[rail_start..rail_start + MAIN[rail_start..].find("\n];").unwrap()];
     let items: Vec<&str> = rail.lines().filter(|l| l.contains("id: \"")).collect();
-    assert_eq!(items.len(), 12, "every kit item on the rail");
+    assert_eq!(items.len(), 14, "every rail item");
     for (i, line) in items.iter().enumerate() {
         let id = line.split("id: \"").nth(1).unwrap().split('"').next().unwrap();
         if i < 9 {

@@ -153,16 +153,22 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls button.win-close:hover { border-color: var(--red); color: var(--red); }
 #win-controls svg { width: 16px; height: 16px; }
 
-/* Rail: every kit item at first level, no More menu (ADR 2026-10-24 amend 2026-10-28).
+/* Rail (ADR 2026-10-24 amend 2026-11-19): the dynamic views in a main group that scrolls, then
+   Workspace alone in a bottom group set apart by a 1px line, always on screen. No More menu.
    Labels under the icons by default, icons only on request (Settings → Appearance → Rail labels);
-   every item keeps its tooltip and accessible name. At any window height the rail scrolls
-   (wheel, touch, keys): an edge with items out of view fades, and its first pixel stays a
-   1px line in the border colour. Items shrink with the window down to a legible minimum. */
-#rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; background: var(--bg-secondary); border-right: 1px solid var(--border); border-top: 1px solid transparent; border-bottom: 1px solid transparent; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
-#rail::-webkit-scrollbar { display: none; }
-#rail.fade-top { border-top-color: var(--border); -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); }
-#rail.fade-bottom { border-bottom-color: var(--border); -webkit-mask-image: linear-gradient(to top, #000 0, #000 1px, transparent 1px, #000 18px); mask-image: linear-gradient(to top, #000 0, #000 1px, transparent 1px, #000 18px); }
-#rail.fade-top.fade-bottom { -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent calc(100% - 1px), #000 calc(100% - 1px)); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent calc(100% - 1px), #000 calc(100% - 1px)); }
+   every item keeps its tooltip and accessible name. At any window height the main group scrolls
+   (wheel, touch, keys): an edge with items out of view fades, and its first pixel stays a 1px
+   line in the border colour. Items shrink with the window down to a legible minimum. */
+#rail { grid-area: rail; display: flex; flex-direction: column; align-items: stretch; background: var(--bg-secondary); border-right: 1px solid var(--border); min-height: 0; overflow: hidden; }
+.rail-group { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px 4px; }
+#rail-scroll { flex: 1 1 auto; border-top: 1px solid transparent; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+#rail-scroll::-webkit-scrollbar { display: none; }
+#rail-scroll.fade-top { border-top-color: var(--border); -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px); }
+#rail-scroll.fade-bottom { -webkit-mask-image: linear-gradient(to top, transparent 0, #000 18px); mask-image: linear-gradient(to top, transparent 0, #000 18px); }
+#rail-scroll.fade-top.fade-bottom { -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent 100%); mask-image: linear-gradient(to bottom, #000 0, #000 1px, transparent 1px, #000 18px, #000 calc(100% - 18px), transparent 100%); }
+/* The bottom group's own 1px line is the separator (and the fade edge of the main group above it). */
+#rail-bottom { flex: none; border-top: 1px solid var(--border); }
+#rail-bottom:empty { display: none; }
 #shell[data-rail="right"] #rail { border-right: 0; border-left: 1px solid var(--border); }
 #shell.rail-icons .rail-item .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #shell.rail-icons .rail-item { padding: clamp(5px, 1.2vh, 9px) 2px; }
