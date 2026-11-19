@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api, type BackendChoice, errText, h } from "./api";
 import { type Gate, type Run, runs } from "./runs";
 import { preanswerSetting } from "./resolver";
+import posthog, { posthogConfigured, posthogLogger } from "./posthog";
 import { parseBudget } from "./usage";
 
 /**
@@ -132,6 +133,16 @@ export class RunControls {
         onLimit: this.onLimit.value || undefined,
         model: this.model.value.trim() || undefined,
       });
+      if (posthogConfigured) {
+        const attributes = {
+          backend: run.backend,
+          max_ticks: Number(this.ticks.value) || 10,
+          has_on_limit_fallback: !!this.onLimit.value,
+          has_model_override: !!this.model.value.trim(),
+        };
+        posthog.capture("agent_run_started", attributes);
+        posthogLogger.info("agent run started", attributes);
+      }
       this.status(`Agent run #${run.id} started in ${run.name} (${run.backend})`);
       return run;
     } catch (e) {
