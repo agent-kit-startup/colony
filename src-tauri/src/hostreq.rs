@@ -649,8 +649,11 @@ struct Pending {
     action: Action,
     origin: Origin,
     running: bool,
-    /// What the card showed when its context first loaded; Approve acts on exactly that or
-    /// refuses (security review 2026-10-24, findings 4 and 5).
+    /// What Approve acts on, or refuses (security review 2026-10-24, findings 4 and 5). A PR
+    /// card (merge-pr, update-branch, close-pr) pins its PR's head and base when it is filed
+    /// (`filing_pin`; git-cicd ADR amend 2026-11-08 point 3: "as when the card was raised"),
+    /// so a PR that moved before the card first showed it reads as stale. Any other card, or a
+    /// PR card whose forge read failed at filing, pins what its context first loaded.
     pin: Option<Pin>,
 }
 
@@ -859,6 +862,12 @@ impl HostRequests {
 
     /// One pass over the spool. Returns true when the pending list changed.
     fn scan(&self) -> bool {
+        self.scan_with(&forge_pr_view)
+    }
+
+    /// `scan` with the forge read injected (unit tests run it without gh): a new PR card pins
+    /// its PR as the forge reports it now.
+    fn scan_with(&self, read_pr: &dyn Fn(&Path, u64) -> Result<Value, String>) -> bool {
         let Some(spool) = self.spool.as_deref() else { return false };
         let Ok(rd) = std::fs::read_dir(spool) else { return false };
         let known: HashSet<String> = self.items.lock().map(|v| v.iter().map(|p| p.req.id.clone()).collect()).unwrap_or_default();
@@ -876,7 +885,10 @@ impl HostRequests {
                 continue;
             }
             match Self::load(&e.path(), id) {
-                Ok((req, action)) => fresh.push(Pending { req, action, origin: Origin::Agent, running: false, pin: None }),
+                Ok((req, action)) => {
+                    let pin = filing_pin(&action, Path::new(&req.cwd), read_pr);
+                    fresh.push(Pending { req, action, origin: Origin::Agent, running: false, pin });
+                }
                 Err(why) => self.reject(spool, id, &why),
             }
         }
@@ -954,7 +966,7 @@ impl HostRequests {
     /// checked against a fresh forge read first: a PR that changed since the card expires it,
     /// with no typed yes needed, because nothing runs.
     pub fn approve(&self, id: &str, typed_confirm: Option<&str>) -> Result<Decision, String> {
-        self.decide(id, typed_confirm, &|cwd, n| Forge::detect()?.json(cwd, &Op::PrView(n)), &execute)
+        self.decide(id, typed_confirm, &forge_pr_view, &execute)
     }
 
     /// `approve` with the forge read and the action injected (unit tests run it without gh).
@@ -1006,10 +1018,16 @@ impl HostRequests {
 
     /// A request the operator starts in Colony (no CLI waits for it).
     pub fn add_local(&self, action: Action, cwd: &Path) -> Result<String, String> {
+        self.add_local_with(action, cwd, &forge_pr_view)
+    }
+
+    /// `add_local` with the forge read injected: the operator's PR card pins at filing too.
+    fn add_local_with(&self, action: Action, cwd: &Path, read_pr: &dyn Fn(&Path, u64) -> Result<Value, String>) -> Result<String, String> {
         action.validate()?;
         let id = nonce()?;
         let (kind, args) = action.to_parts();
         let req = Request { v: PROTOCOL, id: id.clone(), kind, args, reason: "Started in Colony".into(), cwd: cwd.display().to_string(), pid: std::process::id(), ppid: 0, created_at: now() };
+        let pin = filing_pin(&action, cwd, read_pr);
         {
             let mut items = self.items.lock().map_err(|_| "host request lock poisoned")?;
             if items.iter().any(|p| p.origin == Origin::Colony && p.action == action && p.req.cwd == req.cwd) {
@@ -1019,7 +1037,7 @@ impl HostRequests {
             if items.len() >= MAX_PENDING {
                 return Err(format!("{MAX_PENDING} requests are already waiting: answer some first"));
             }
-            items.push(Pending { req, action, origin: Origin::Colony, running: false, pin: None });
+            items.push(Pending { req, action, origin: Origin::Colony, running: false, pin });
         }
         self.broadcast();
         Ok(id)
@@ -1187,7 +1205,7 @@ pub fn pr_recheck(action: &Action, pr: &Value, pin: Option<&Pin>) -> Result<(), 
         return Err(Recheck::Expired(format!("base changed: PR #{n} now targets {base}, the card showed {b0}")));
     }
     if head != *h0 {
-        return Err(Recheck::Expired(format!("head moved: PR #{n} is at {} now, the card showed {}", &head[..12], h0.get(..12).unwrap_or(h0))));
+        return Err(Recheck::Expired(format!("head moved: PR #{n} is at {} now, the card showed {}", head.get(..12).unwrap_or(&head), h0.get(..12).unwrap_or(h0))));
     }
     if matches!(action, Action::MergePr { .. }) {
         match pr.get("mergeable").and_then(Value::as_str).unwrap_or_default() {
@@ -1410,6 +1428,24 @@ fn merge_pin(pr: &Value) -> Option<(String, String)> {
     Some((head.to_string(), base.to_string()))
 }
 
+/// `gh pr view` of PR `n` through the detected forge.
+fn forge_pr_view(cwd: &Path, n: u64) -> Result<Value, String> {
+    Forge::detect()?.json(cwd, &Op::PrView(n))
+}
+
+/// The pin a PR card takes when it is filed: its PR's head commit and base as the forge
+/// reports them now (git-cicd ADR amend 2026-11-08 point 3). None for other kinds (they pin
+/// at their first context load) and when the read fails or has no 40-hex head; then the
+/// first context load pins, and Approve waits until one has.
+fn filing_pin(action: &Action, cwd: &Path, read_pr: &dyn Fn(&Path, u64) -> Result<Value, String>) -> Option<Pin> {
+    match action {
+        Action::MergePr { number, .. } | Action::UpdateBranch { number } | Action::ClosePr { number } => {
+            read_pr(cwd, *number).ok().as_ref().and_then(merge_pin).map(|(head, base)| Pin::Pr { head, base })
+        }
+        _ => None,
+    }
+}
+
 /// The card's context. `pinned` is the pin an earlier load kept (Approve acts on that one):
 /// a PR that no longer matches it, or that merged, closed or now conflicts, is reported as
 /// `stale` (Approve will expire the card).
@@ -1542,7 +1578,8 @@ pub fn host_request_deny(hr: State<'_, Shared>, id: String, reason: Option<Strin
 }
 
 /// The operator's own request from the UI (e.g. Merge in the PR list), in the opened folder.
-#[tauri::command]
+/// Async: a PR card reads the forge to pin its PR at filing.
+#[tauri::command(async)]
 pub fn host_request_local(hr: State<'_, Shared>, state: State<'_, AppState>, kind: String, args: Value) -> Result<String, String> {
     let root = workspace::workspace_root(&state)?;
     hr.add_local(Action::from_parts(&kind, &args)?, &root)
@@ -1796,12 +1833,22 @@ mod tests {
 
     const FAST: Duration = Duration::from_millis(20);
 
+    /// The forge read of unit tests that do not need one: unreachable, so no card pins at filing.
+    fn no_forge(_: &Path, _: u64) -> Result<Value, String> {
+        Err("no forge in unit tests".into())
+    }
+
     /// Run the CLI in a thread and wait until the host side sees its card.
     fn file(hr: &HostRequests, sp: &Path, cwd: &Path, args: &[&str]) -> (std::thread::JoinHandle<i32>, String) {
+        file_with(hr, sp, cwd, args, &no_forge)
+    }
+
+    /// `file` with the forge read the host sees when it picks the request up.
+    fn file_with(hr: &HostRequests, sp: &Path, cwd: &Path, args: &[&str], read_pr: &dyn Fn(&Path, u64) -> Result<Value, String>) -> (std::thread::JoinHandle<i32>, String) {
         let (args, sp2, cwd2) = (s(args), sp.to_path_buf(), cwd.to_path_buf());
         let cli = std::thread::spawn(move || cli_run(&args, Some(sp2), &cwd2, FAST));
         for _ in 0..250 {
-            hr.scan();
+            hr.scan_with(read_pr);
             if let Some(v) = hr.views().first() {
                 return (cli, v.id.clone());
             }
@@ -1851,7 +1898,7 @@ mod tests {
         let (cli, id) = file(&hr, &sp, &cwd, &["merge-pr", "3", "--timeout", "1"]);
         assert_eq!(cli.join().unwrap(), EXIT_TIMEOUT);
         assert!(!request_path(&sp, &id).exists());
-        hr.scan();
+        hr.scan_with(&no_forge);
         assert!(hr.views().is_empty(), "a withdrawn request leaves the cards");
         assert!(hr.claim(&id).is_err());
     }
@@ -1882,7 +1929,7 @@ mod tests {
         let notrepo = test_dir("notrepo");
         let bad_cwd = json!({ "v": 1, "id": outside, "kind": "merge-pr", "args": { "number": 1 }, "cwd": notrepo, "pid": std::process::id(), "createdAt": now() });
         std::fs::write(request_path(&sp, &outside), bad_cwd.to_string()).unwrap();
-        hr.scan();
+        hr.scan_with(&no_forge);
         assert!(hr.views().is_empty());
         for i in [&id, &outside] {
             let r = take_response(&sp, i).expect("refusal response");
@@ -1893,7 +1940,7 @@ mod tests {
         let (cli, id) = file(&hr, &sp, &cwd, &["merge-pr", "8"]);
         write_response(&sp, &id, Outcome::Succeeded, None, "forged".into()).unwrap();
         assert_eq!(cli.join().unwrap(), EXIT_OK, "the forged answer only fools the requester");
-        hr.scan();
+        hr.scan_with(&no_forge);
         assert!(hr.views().is_empty(), "and the card leaves without anything being executed");
     }
 
@@ -1913,7 +1960,7 @@ mod tests {
         let id = nonce().unwrap();
         let forged = json!({ "v": 1, "id": id, "kind": "stage-resolved", "args": { "path": "a.txt" }, "cwd": cwd, "pid": std::process::id(), "createdAt": now() });
         std::fs::write(request_path(&sp, &id), forged.to_string()).unwrap();
-        hr.scan();
+        hr.scan_with(&no_forge);
         assert!(hr.views().is_empty());
         let r = take_response(&sp, &id).expect("refusal");
         assert!(r.reason.unwrap().contains("conflict window only"));
@@ -2116,5 +2163,58 @@ mod tests {
         // update-branch on an ordinary PR runs without a typed yes.
         let (d, code, ran, _) = approve_with(&["update-branch", "5"], Some(pin("staging")), view("OPEN", "feat/x", "staging", OID, "MERGEABLE"), None);
         assert_eq!((d.unwrap().outcome, code, ran.len()), (Outcome::Succeeded, Some(EXIT_OK), 1));
+    }
+
+    #[test]
+    fn pr_cards_pin_their_pr_when_filed() {
+        // The forge's answer when the host picks the request up: PR #5 at OID on staging.
+        let reads = Mutex::new(0);
+        let at_filing = |_: &Path, n: u64| {
+            *reads.lock().unwrap() += 1;
+            assert_eq!(n, 5);
+            Ok(view("OPEN", "feat/x", "staging", OID, "MERGEABLE"))
+        };
+        let (sp, cwd) = (spool(), repo());
+        let hr = HostRequests::with_spool(sp.clone());
+        let (cli, id) = file_with(&hr, &sp, &cwd, &["merge-pr", "5"], &at_filing);
+        assert_eq!(hr.get(&id).unwrap().pin, Some(pin("staging")), "pinned when filed, before any context load");
+        // The card's first context load, after the head moved, does not move the pin.
+        hr.pin_once(&id, Some(Pin::Pr { head: OID2.into(), base: "staging".into() }));
+        assert_eq!(hr.get(&id).unwrap().pin, Some(pin("staging")));
+        // Approve with the PR at OID2: the card expires and nothing runs.
+        let ran = Mutex::new(Vec::new());
+        let d = hr
+            .decide(&id, None, &|_, _| Ok(view("OPEN", "feat/x", "staging", OID2, "MERGEABLE")), &|a, _, _| {
+                ran.lock().unwrap().push(a.summary());
+                Ok("done".into())
+            })
+            .unwrap();
+        assert_eq!(d.outcome, Outcome::Expired);
+        assert!(d.output.contains("head moved") && d.output.contains(&OID2[..12]) && d.output.contains(&OID[..12]), "{}", d.output);
+        assert!(ran.lock().unwrap().is_empty());
+        assert_eq!(cli.join().unwrap(), EXIT_DENIED);
+
+        // Forge unreachable at filing: no pin yet, the first context load pins (as before).
+        let (cli, id) = file(&hr, &sp, &cwd, &["update-branch", "5"]);
+        assert_eq!(hr.get(&id).unwrap().pin, None);
+        hr.pin_once(&id, Some(pin("staging")));
+        assert_eq!(hr.get(&id).unwrap().pin, Some(pin("staging")));
+        hr.deny(&id, None).unwrap();
+        let _ = cli.join();
+
+        // Other kinds never read the forge at filing.
+        let before = *reads.lock().unwrap();
+        let (cli, id) = file_with(&hr, &sp, &cwd, &["rerun-checks", "77"], &at_filing);
+        assert_eq!((hr.get(&id).unwrap().pin, *reads.lock().unwrap()), (None, before));
+        hr.deny(&id, None).unwrap();
+        let _ = cli.join();
+
+        // The operator's own PR card (the PR list's Merge) pins at filing too.
+        let lid = hr.add_local_with(Action::from_parts("close-pr", &json!({ "number": 5 })).unwrap(), &cwd, &at_filing).unwrap();
+        assert_eq!(hr.get(&lid).unwrap().pin, Some(pin("staging")));
+        // A read without a 40-hex head pins nothing.
+        let bad = |_: &Path, _: u64| Ok(view("OPEN", "feat/x", "staging", "not-a-sha", "MERGEABLE"));
+        let lid2 = hr.add_local_with(Action::from_parts("update-branch", &json!({ "number": 6 })).unwrap(), &cwd, &bad).unwrap();
+        assert_eq!(hr.get(&lid2).unwrap().pin, None);
     }
 }
