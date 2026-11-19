@@ -40,5 +40,8 @@ fn only_plans_and_the_handoff_open_rendered() {
     let open = &MAIN[MAIN.find("openRepoFile: (rel) => {").expect("host.openRepoFile")..];
     let open = &open[..open.find("\n  },").unwrap()];
     assert!(open.contains("isPreviewDoc(path) ? \"preview\" : undefined"), "{open}");
-    assert!(MAIN.contains("new Editors($(\"monaco-host\")"), "Monaco lives under the Preview | Editor bar");
+    // Each pane of the split tree (kit ADR 2026-10-24 amend 2026-11-19) has its own file view:
+    // Monaco lives under that pane's Preview | Editor bar.
+    assert!(MAIN.contains("h(\"div\", { class: \"view pane-editor\", hidden: \"\" }, docBar, docPreview, monacoHost)"), "Monaco lives under the Preview | Editor bar");
+    assert!(MAIN.contains("editors.createView(p.monacoHost)"), "one Monaco view per pane, in its monaco host");
 }

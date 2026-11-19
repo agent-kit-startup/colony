@@ -26,7 +26,8 @@ import { openInBrowser } from "./browser";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
-import { Editors, editorStatus } from "./editor";
+import { type EditorView, Editors, editorStatus } from "./editor";
+import { freshPaneId, heir, isLeaf, leaves, MAX_PANES, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove } from "./panes";
 import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -112,18 +113,13 @@ document.getElementById("app")!.innerHTML = `
   </aside>
   <div id="side-resizer" title="Drag to resize the Explorer"></div>
   <main id="center">
-    <div id="tabs" class="tabbar"><span class="tab-nav" role="group" aria-label="History"><button class="nav-back" data-nav="back" title="Back (Alt+Left)" aria-label="Back" disabled></button><button class="nav-forward" data-nav="forward" title="Forward (Alt+Right)" aria-label="Forward" disabled></button></span><span id="tabs-rest"></span></div>
-    <div id="views">
+    <div id="panes" class="pane-tree"></div>
+    <div id="center-holder" hidden>
       <div id="welcome" class="view">
         <h1><img src="./colony-icon.svg" alt="" width="40" height="40" /> Colony</h1>
         <p class="dim">Open a folder to start. Its Mission Control becomes the cockpit.</p>
         <button id="welcome-open" class="primary">Open folder</button>
         <div id="recents"></div>
-      </div>
-      <div id="view-editor" class="view" hidden>
-        <div id="doc-bar" role="tablist" aria-label="Show this file as" hidden><button data-mode="preview" role="tab" title="The rendered document (plan to-dos as a table)">Preview</button><button data-mode="editor" role="tab" title="Edit the Markdown source (File → Save or Ctrl+S saves)">Editor</button></div>
-        <div id="doc-preview" tabindex="-1" hidden></div>
-        <div id="monaco-host"></div>
       </div>
       <div id="view-review" class="view" hidden></div>
     </div>
@@ -184,8 +180,9 @@ interface Tab {
   /** `extra`: a second, separate count next to the first (the Inbox: gates, then attention). */
   badge?: () => { text: string; cls: string; tip?: string; extra?: { text: string; cls: string; tip?: string } } | null;
   cls?: () => string;
-  show?: () => void;
-  hide?: () => void;
+  /** The pane it is shown in or leaves (a file shows in each pane's own editor). */
+  show?: (pane: Pane) => void;
+  hide?: (pane: Pane) => void;
   /** Return false to keep the tab open. */
   close?: () => Promise<boolean> | boolean;
   /** A Markdown file: shown rendered (preview) or in Monaco (editor). Unset: not Markdown. */
@@ -193,15 +190,368 @@ interface Tab {
 }
 type DocMode = "preview" | "editor";
 const tabs = new Map<string, Tab>();
-const order: string[] = [];
 /** Set once the drawer exists (./terminal.ts): its tabs' gate surfaces, and whether it holds
  *  a terminal tab id. */
 let refreshDrawer = () => {};
 let drawerHas = (_id: string) => false;
+/** What the focused pane shows: a view or a document tab id ("": an empty pane). */
 let activeTab = "mission";
-/** Back / Forward through the views and documents shown in the main pane (ADR 2026-10-24
- *  point 4): the strip holds documents only, so this is the way back to a view. */
-const nav = new NavHistory();
+
+// ---- centre panes: a free split tree (kit ADR 2026-10-24 amend 2026-11-19, free tiling) ----
+// #center holds a split tree of panes (./panes.ts). Each pane has its own strip (Back / Forward,
+// then its document tabs), its own history (point 4, per pane) and its own Monaco view; any
+// document tab kind opens in any pane, and a file may sit in two panes (one model, a view state
+// per pane). Rail views show in the focused pane, never as tabs, in one pane at a time. The
+// focused pane changes only its 1px border colour. The terminal drawer stays outside the tree.
+
+/** One leaf of the tree. */
+interface Pane {
+  id: string;
+  el: HTMLElement;
+  /** The strip: Back / Forward (built once), then `rest` (re-rendered). */
+  bar: HTMLElement;
+  rest: HTMLElement;
+  /** Holds the element of every tab this pane shows (one visible at a time). */
+  host: HTMLElement;
+  /** The pane's file view: the Preview | Editor switch, the rendered document, Monaco. */
+  editorEl: HTMLElement;
+  docBar: HTMLElement;
+  docPreview: HTMLElement;
+  monacoHost: HTMLElement;
+  /** Shown when the pane has nothing to show (a new split). */
+  emptyEl: HTMLElement;
+  /** Created the first time the pane shows a file. */
+  editor: EditorView | null;
+  strip: Strip;
+  /** The tab or view on screen in this pane (null: empty). */
+  shown: string | null;
+  /** Back / Forward through what this pane showed. */
+  nav: NavHistory;
+}
+const panes = new Map<string, Pane>();
+let paneTree: PaneNode = { pane: "p1" };
+/** A file tab has no element of its own: each pane shows it in its own editor view. */
+const fileTabEl = h("div", { class: "file-tab-el", hidden: "" });
+
+/** Panes in reading order (left to right, top to bottom). */
+const paneList = (): Pane[] => leaves(paneTree).map((id) => panes.get(id)!);
+/** The panes whose strip holds `id`. */
+const holders = (id: string): Pane[] => paneList().filter((p) => p.strip.order.includes(id));
+/** The element a pane shows for tab `t`. */
+const viewEl = (p: Pane, t: Tab): HTMLElement => (isFile(t.id) ? p.editorEl : t.el);
+
+function makePane(id: string): Pane {
+  const navBtn = (step: "back" | "forward") => {
+    const label = step === "back" ? "Back" : "Forward";
+    return h("button", { class: `nav-${step}`, "data-nav": step, title: `${label} (Alt+${step === "back" ? "Left" : "Right"})`, "aria-label": label, disabled: "" }, icon(step, "tab-svg"));
+  };
+  const back = navBtn("back");
+  const forward = navBtn("forward");
+  const rest = h("span", { class: "tabs-rest" });
+  const bar = h("div", { class: "tabbar pane-tabs" }, h("span", { class: "tab-nav", role: "group", "aria-label": "History" }, back, forward), rest);
+  const docBar = h(
+    "div",
+    { class: "doc-bar", role: "tablist", "aria-label": "Show this file as", hidden: "" },
+    h("button", { "data-mode": "preview", role: "tab", title: "The rendered document (plan to-dos as a table)" }, "Preview"),
+    h("button", { "data-mode": "editor", role: "tab", title: "Edit the Markdown source (File → Save or Ctrl+S saves)" }, "Editor"),
+  );
+  const docPreview = h("div", { class: "doc-preview", tabindex: "-1", hidden: "" });
+  const monacoHost = h("div", { class: "monaco-host" });
+  const editorEl = h("div", { class: "view pane-editor", hidden: "" }, docBar, docPreview, monacoHost);
+  const closeEmpty = h("button", { "data-act": "pane-close", title: "Close this pane (View → Splits → Close pane)" }, "Close pane");
+  const emptyEl = h(
+    "div",
+    { class: "view pane-empty", hidden: "" },
+    h("p", { class: "dim" }, "Empty pane. A file (Ctrl+P), a terminal (Ctrl+Shift+T), a run or a view opens here while this pane has the focus."),
+    closeEmpty,
+  );
+  const host = h("div", { class: "pane-views" }, editorEl, emptyEl);
+  const el = h("section", { class: "pane", "data-pane": id, "aria-label": "Pane" }, bar, host);
+  const p: Pane = { id, el, bar, rest, host, editorEl, docBar, docPreview, monacoHost, emptyEl, editor: null, strip: { order: [] }, shown: null, nav: new NavHistory() };
+  back.addEventListener("click", () => navigate("back", p));
+  forward.addEventListener("click", () => navigate("forward", p));
+  closeEmpty.addEventListener("click", () => closePane(p));
+  docBar.addEventListener("click", (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-mode]");
+    if (b?.dataset.mode === "preview" || b?.dataset.mode === "editor") setDocMode(b.dataset.mode, p);
+  });
+  // Preview scroll positions by file, recorded as the preview scrolls: by the time a tab's
+  // hide() runs its view has no layout box left.
+  docPreview.addEventListener("scroll", () => {
+    if (docPreview.dataset.path && !docPreview.hidden) docScroll.set(docPreview.dataset.path, docPreview.scrollTop);
+  });
+  // The focused pane is Colony's own record (a click or the focus entering the pane), never
+  // read back from the editors: an editor that missed a blur still thinks it has the focus.
+  el.addEventListener("pointerdown", () => focusPane(p), true);
+  el.addEventListener("focusin", () => focusPane(p));
+  new ResizeObserver(() => {
+    try {
+      if (p.shown) centerTerms.get(p.shown)?.fit();
+    } catch {
+      // Before the terminal section has run (a resize while the module loads).
+    }
+  }).observe(host);
+  return p;
+}
+
+/** The pane's Monaco view, created on first use. */
+function editorViewOf(p: Pane): EditorView {
+  p.editor ??= editors.createView(p.monacoHost);
+  if (p === focused) editors.current = p.editor;
+  return p.editor;
+}
+
+let focused = makePane("p1");
+panes.set(focused.id, focused);
+focused.el.classList.add("focused");
+// The welcome screen and the Review view start in the first pane.
+focused.host.append($("welcome"), $("view-review"));
+$("center-holder").remove();
+renderPaneTree();
+
+/** Draw the tree: nested flex boxes, the panes themselves are kept (a terminal or an editor
+ *  in one is moved, never rebuilt). A divider between two halves resizes them. */
+function renderPaneTree() {
+  const build = (n: PaneNode, path: PanePath): HTMLElement => {
+    if (isLeaf(n)) return panes.get(n.pane)!.el;
+    const a = build(n.a, [...path, "a"]);
+    const b = build(n.b, [...path, "b"]);
+    a.style.flex = `${n.ratio} 1 0`;
+    b.style.flex = `${1 - n.ratio} 1 0`;
+    const divider = h("div", { class: "pane-divider", "data-dir": n.split, title: "Drag to resize the panes" });
+    const box = h("div", { class: "pane-split", "data-dir": n.split }, a, divider, b);
+    paneDivider(divider, box, path, n.split);
+    return box;
+  };
+  const root = build(paneTree, []);
+  root.style.flex = "1 1 0";
+  $("panes").replaceChildren(root);
+  $("panes").classList.toggle("multi", panes.size > 1);
+}
+
+/** A divider drag sets its split's ratio (the drawer's splitter helper, then every visible
+ *  terminal and editor measures again). */
+function paneDivider(divider: HTMLElement, box: HTMLElement, path: PanePath, dir: SplitDir) {
+  let start = 0;
+  let total = 1;
+  divider.addEventListener("pointerdown", () => {
+    const r = box.getBoundingClientRect();
+    const first = (box.firstElementChild as HTMLElement).getBoundingClientRect();
+    const line = dir === "right" ? divider.getBoundingClientRect().width : divider.getBoundingClientRect().height;
+    total = Math.max(1, (dir === "right" ? r.width : r.height) - line);
+    start = dir === "right" ? first.width : first.height;
+  });
+  splitter(divider, (dx, dy) => {
+    paneTree = setRatio(paneTree, path, (start + (dir === "right" ? dx : dy)) / total);
+    const n = nodeAt(paneTree, path) as PaneSplit;
+    (box.firstElementChild as HTMLElement).style.flex = `${n.ratio} 1 0`;
+    (box.lastElementChild as HTMLElement).style.flex = `${1 - n.ratio} 1 0`;
+  });
+}
+
+/** Give the focus to pane `p`: its border colour marks it, and the window's actions (save,
+ *  close tab, Back) act on what it shows. The strips are not redrawn: they do not depend on the
+ *  focus, and a press that moves the focus must land on the tab it pressed (WebKitGTK sends no
+ *  click when the pressed node is replaced before the release). */
+function focusPane(p: Pane, render = true) {
+  if (focused === p || !panes.has(p.id)) return;
+  focused.el.classList.remove("focused");
+  focused = p;
+  p.el.classList.add("focused");
+  editors.current = p.editor;
+  activeTab = p.shown ?? "";
+  if (render) {
+    renderRail();
+    renderTopActions();
+    markSettings();
+  }
+}
+
+/** A view shown in a pane other than `q`. */
+const shownElsewhere = (id: string, q: Pane): boolean => paneList().some((o) => o !== q && o.shown === id);
+
+/** Show only what pane `p` shows. */
+function paintPane(p: Pane) {
+  const t = p.shown ? tabs.get(p.shown) : undefined;
+  const want = t ? viewEl(p, t) : p.emptyEl;
+  for (const c of p.host.children) {
+    const el = c as HTMLElement;
+    if (el !== $("welcome")) el.hidden = el !== want;
+  }
+}
+
+/** Show tab or view `id` in pane `p`. A document tab joins the pane's strip; a view shown in
+ *  another pane leaves it (that pane goes back in its history). */
+function showIn(p: Pane, id: string, focus = true) {
+  const t = tabs.get(id);
+  if (!t) return;
+  // A terminal, a run or a view of a PR sits in one pane: showing it elsewhere moves it.
+  const other = !t.pinned && !isFile(id) ? holders(id).find((q) => q !== p) : undefined;
+  if (other) return moveTabToPane(id, other, p);
+  if (!t.pinned && !p.strip.order.includes(id)) p.strip = stripAdd(p.strip, id);
+  if (t.pinned) for (const q of panes.values()) if (q !== p && q.shown === id) leaveView(q, id);
+  const prev = p.shown && p.shown !== id ? tabs.get(p.shown) : undefined;
+  if (prev) prev.hide?.(p);
+  p.shown = id;
+  // A Back / Forward move has already set the history on `id`: this records nothing then.
+  p.nav.visit(id);
+  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
+  if (group) lastInGroup.set(group.id, id);
+  const el = viewEl(p, t);
+  if (el.parentElement !== p.host) p.host.append(el);
+  paintPane(p);
+  $("welcome").hidden = true;
+  if (focus) focusPane(p, false);
+  if (p === focused) activeTab = id;
+  t.show?.(p);
+  renderTabs();
+}
+
+/** Pane `q` showed view `id`, now shown in another pane: `q` goes back in its history, else
+ *  to its last tab, else it is empty. */
+function leaveView(q: Pane, id: string) {
+  const ok = (x: string) => x !== id && tabs.has(x) && (q.strip.order.includes(x) || (!!tabs.get(x)?.pinned && !shownElsewhere(x, q)));
+  const back = q.nav.back(ok);
+  const next = back ?? q.strip.order[q.strip.order.length - 1] ?? null;
+  q.shown = null;
+  if (next) showIn(q, next, false);
+  else {
+    paintPane(q);
+    if (q === focused) activeTab = "";
+  }
+}
+
+/** Take `id` out of pane `p` (closed there, or moved out): the pane shows what it showed
+ *  before; a pane left with no tab closes when other panes remain (its space goes to its
+ *  neighbour); the last pane shows the Cockpit, as before splits. */
+function dropFromPane(p: Pane, id: string) {
+  const before = p.strip;
+  p.strip = stripRemove(p.strip, id);
+  p.nav.forget(id);
+  if (p.editor && isFile(id)) editors.release(id, p.editor);
+  docCache.delete(`${p.id}\n${id}`);
+  if (!p.strip.order.length && panes.size > 1 && (p.shown === id || !p.shown || !tabs.get(p.shown)?.pinned)) {
+    p.shown = p.shown === id ? null : p.shown;
+    return closePane(p);
+  }
+  if (p.shown !== id) return;
+  const back = p.nav.current();
+  const ok = (x: string | null): x is string => !!x && x !== id && tabs.has(x) && (p.strip.order.includes(x) || (!!tabs.get(x)?.pinned && !shownElsewhere(x, p)));
+  const next = nextShown(before, id, ok(back) ? back : null) ?? (panes.size === 1 ? "mission" : null);
+  p.shown = null;
+  if (next && tabs.has(next)) showIn(p, next, p === focused);
+  else {
+    paintPane(p);
+    if (p === focused) activeTab = "";
+  }
+}
+
+/** View → Splits → Close pane, and an empty pane's own button: the pane goes, its tabs join
+ *  the pane that takes its space (nothing closes, no unsaved edit is at stake). The last pane
+ *  stays. */
+function closePane(p: Pane = focused) {
+  if (panes.size < 2) return status("Close pane: this is the only pane");
+  const to = panes.get(heir(paneTree, p.id) ?? "")!;
+  for (const id of p.strip.order) {
+    if (!to.strip.order.includes(id)) to.strip = stripAdd(to.strip, id);
+    if (p.editor && isFile(id)) editors.release(id, p.editor);
+  }
+  // Tab elements, views and the welcome screen that sit in this pane move to the heir, hidden.
+  for (const c of [...p.host.children]) {
+    if (c === p.editorEl || c === p.emptyEl) continue;
+    (c as HTMLElement).hidden = c !== $("welcome") || !!workspace;
+    to.host.append(c);
+  }
+  const shownView = p.shown && tabs.get(p.shown)?.pinned ? p.shown : null;
+  if (p.editor) editors.disposeView(p.editor);
+  for (const k of [...docCache.keys()]) if (k.startsWith(`${p.id}\n`)) docCache.delete(k);
+  paneTree = removePane(paneTree, p.id) ?? { pane: to.id };
+  panes.delete(p.id);
+  p.el.remove();
+  renderPaneTree();
+  const wasFocused = focused === p;
+  if (wasFocused) {
+    focused = to;
+    to.el.classList.add("focused");
+    editors.current = to.editor;
+    activeTab = to.shown ?? "";
+  }
+  // The heir keeps what it showed; it shows the closed pane's view when it showed nothing.
+  const show = to.shown ?? shownView ?? to.strip.order[to.strip.order.length - 1] ?? (panes.size === 1 ? "mission" : null);
+  if (show && tabs.has(show)) showIn(to, show, wasFocused);
+  else {
+    paintPane(to);
+    renderTabs();
+  }
+  relayout();
+}
+
+/** View → Splits → Split right / Split down: halve the focused pane. A file shows in both
+ *  halves (one model, a view state each); another document tab moves to the new pane when its
+ *  pane keeps a tab; else the new pane starts empty. The new pane takes the focus. */
+function splitFocused(dir: SplitDir) {
+  if (!workspace) return status("Open a folder first");
+  if (panes.size >= MAX_PANES) return status(`Split: at most ${MAX_PANES} panes`);
+  const src = focused;
+  const id = freshPaneId(panes.keys());
+  const p = makePane(id);
+  panes.set(id, p);
+  paneTree = splitPane(paneTree, src.id, dir, id);
+  renderPaneTree();
+  const shown = src.shown;
+  const t = shown ? tabs.get(shown) : undefined;
+  const how = splitContent(shown, !!shown && isFile(shown), src.strip.order.length, !!t && !t.pinned);
+  if (how === "copy" && shown) {
+    // The new view starts where the old one stands in the file.
+    if (src.editor && src.editor.active === shown) editorViewOf(p).states.set(shown, src.editor.editor.saveViewState());
+    showIn(p, shown);
+  } else if (how === "move" && shown) moveTabToPane(shown, src, p);
+  else {
+    focusPane(p, false);
+    paintPane(p);
+    renderTabs();
+  }
+  status(dir === "right" ? "Split right" : "Split down");
+  relayout();
+}
+
+/** A folder opens: one pane again. The tabs that stay (agent runs) gather in it, every view
+ *  and the welcome screen move into it, and its history starts over. */
+function resetPanes() {
+  const all = paneList();
+  const first = all[0];
+  const keep = [...new Set(all.flatMap((p) => p.strip.order))].filter((id) => tabs.has(id) && !tabs.get(id)?.pinned);
+  for (const p of all.slice(1)) {
+    for (const c of [...p.host.children]) {
+      if (c === p.editorEl || c === p.emptyEl) continue;
+      (c as HTMLElement).hidden = true;
+      first.host.append(c);
+    }
+    if (p.editor) editors.disposeView(p.editor);
+    p.el.remove();
+    panes.delete(p.id);
+  }
+  first.strip = { order: keep };
+  first.nav.reset();
+  first.shown = null;
+  paneTree = { pane: first.id };
+  docCache.clear();
+  focused.el.classList.remove("focused");
+  focused = first;
+  first.el.classList.add("focused");
+  editors.current = first.editor;
+  renderPaneTree();
+}
+
+/** Move document tab `id` from pane `from` to pane `to`, where it shows. */
+function moveTabToPane(id: string, from: Pane, to: Pane) {
+  const t = tabs.get(id);
+  if (!t || t.pinned || from === to) return;
+  if (!to.strip.order.includes(id)) to.strip = stripAdd(to.strip, id);
+  if (!isFile(id) && t.el.parentElement !== to.host) to.host.append(t.el);
+  dropFromPane(from, id);
+  if (panes.has(to.id)) showIn(to, id);
+}
 
 /**
  * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
@@ -239,13 +589,18 @@ const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
-function addTab(t: Tab, focus = true) {
-  if (!tabs.has(t.id)) order.push(t.id);
+/** Register tab `t`. A document tab joins the strip of `pane` (default: the focused pane;
+ *  a tab some pane already holds stays there); a view's element waits in the focused pane. */
+function addTab(t: Tab, focus = true, pane: Pane = focused) {
   tabs.set(t.id, t);
-  if (t.el.parentElement !== $("views")) $("views").append(t.el);
-  t.el.classList.add("view");
-  t.el.hidden = true;
-  if (focus) showTab(t.id);
+  const p = t.pinned ? focused : (holders(t.id)[0] ?? pane);
+  if (!t.pinned && !p.strip.order.includes(t.id)) p.strip = stripAdd(p.strip, t.id);
+  if (!isFile(t.id)) {
+    if (!t.el.parentElement?.classList.contains("pane-views")) p.host.append(t.el);
+    t.el.classList.add("view");
+    if (p.shown !== t.id) t.el.hidden = true;
+  }
+  if (focus && workspace) showIn(p, t.id);
   else renderTabs();
 }
 
@@ -378,32 +733,38 @@ function showSettings() {
   if (workspace) return showTab("settings");
   colonyView.hide();
   for (const t of tabs.values()) t.el.hidden = true;
+  for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
   $("welcome").hidden = true;
   settingsView.hidden = false;
   markSettings();
 }
 
-/** The tab strip: Back / Forward (in the markup), then documents only (runs, terminals,
- *  files). It has the same children whether a view or a document is active: a rail group with
- *  more than one view (Ship, Workspace) switches inside its view (workspace.ts groupSection). */
+/** The tab strips, one per pane: Back / Forward (in each pane's markup), then documents only
+ *  (runs, terminals, files). A strip has the same children whether a view or a document is
+ *  shown: a rail group with more than one view (Ship, Workspace) switches inside its view
+ *  (workspace.ts groupSection). */
 function renderTabs() {
   renderRail();
   renderTopActions();
   refreshDrawer();
   markSettings();
-  const bar = $("tabs");
-  const rest = $("tabs-rest");
+  for (const p of paneList()) renderStrip(p);
+}
+
+function renderStrip(p: Pane) {
+  const bar = p.bar;
+  const rest = p.rest;
   // No folder: no strip. With one, the strip stays (Back / Forward head it).
   bar.classList.toggle("tabbar-empty", !workspace);
-  renderNav();
+  renderNav(p);
   if (!workspace) return rest.replaceChildren();
-  const docs = order
+  const docs = p.strip.order
     .map((id) => tabs.get(id))
     .filter((t): t is Tab => !!t && !t.pinned)
     .map((t) => {
       const el = h(
         "button",
-        { class: `tab ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
+        { class: `tab ${p.shown === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
         ...(t.icon ? [h("span", { class: "tab-icon" }, icon(t.icon, "tab-svg"))] : []),
         h("span", { class: "lbl" }, t.label),
         ...badges(t),
@@ -412,10 +773,10 @@ function renderTabs() {
       const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, t.cls?.().includes("dirty") ? "●" : "×");
       close.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        void closeTab(t.id);
+        void closeTab(t.id, p);
       });
       el.append(close);
-      el.addEventListener("click", () => showTab(t.id));
+      el.addEventListener("click", () => showIn(p, t.id));
       return el;
     });
   // Only the document tabs scroll.
@@ -424,64 +785,61 @@ function renderTabs() {
   docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+/** Show tab or view `id`: a document tab in its pane (the focused one when it holds it), a
+ *  view in the focused pane. */
 function showTab(id: string) {
   const t = tabs.get(id);
   // A terminal tab moved to the drawer keeps its id: a focus by id (Inbox, Agent runs, a
   // resumed chat) shows it there (kit ADR 2026-10-24 amend 2026-11-07).
   if (!t && workspace && drawerHas(id)) return void focusPty(id);
   if (!t || !workspace) return;
-  const prev = tabs.get(activeTab);
-  if (prev && prev !== t) {
-    prev.el.hidden = true;
-    prev.hide?.();
-  }
-  for (const other of tabs.values()) if (other !== t && other.el !== t.el) other.el.hidden = true;
-  activeTab = id;
-  // A Back / Forward move has already set the history on `id`: this records nothing then.
-  nav.visit(id);
-  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
-  if (group) lastInGroup.set(group.id, id);
-  t.el.hidden = false;
-  $("welcome").hidden = true;
-  t.show?.();
-  renderTabs();
+  showIn(paneFor(id), id);
 }
 
-async function closeTab(id: string) {
+/** The pane to show `id` in. */
+function paneFor(id: string): Pane {
+  if (tabs.get(id)?.pinned || focused.strip.order.includes(id)) return focused;
+  return holders(id)[0] ?? focused;
+}
+
+/** Close tab `id`. Closed in one pane (`from`: its strip's ×, Ctrl+W) a file open in another
+ *  pane too only leaves that pane: its model and its unsaved edits stay. With no pane named
+ *  (the Explorer's rename, move and trash, a folder switch) it closes in every pane. */
+async function closeTab(id: string, from?: Pane) {
   const t = tabs.get(id);
   if (!t || t.pinned) return;
+  const hs = holders(id);
+  if (from && isFile(id) && hs.length > 1 && hs.includes(from)) {
+    dropFromPane(from, id);
+    return renderTabs();
+  }
   if (t.close && !(await t.close())) return;
-  if (t.el !== $("view-editor")) t.el.remove();
+  if (!isFile(id)) t.el.remove();
   detachTab(id);
 }
 
-/** Take a tab out of the strip without closing it (closed, or moved to the drawer). */
+/** Take a tab out of every strip without closing it (closed, or moved to the drawer). */
 function detachTab(id: string) {
+  for (const p of holders(id)) dropFromPane(p, id);
   tabs.delete(id);
-  order.splice(order.indexOf(id), 1);
-  nav.forget(id);
-  if (activeTab === id) {
-    // Back to what was shown before it; else the last document, else Mission.
-    const back = nav.current();
-    const rest = order.filter((x) => !tabs.get(x)?.pinned);
-    showTab(back && tabs.has(back) ? back : rest.length ? rest[rest.length - 1] : "mission");
-  } else renderTabs();
+  renderTabs();
 }
 
-/** The Back / Forward buttons are built once in the markup (renderTabs replaces only
- *  #tabs-rest, so a press on them is never lost to a re-render); this sets their state. */
-const navOpen = (id: string) => tabs.has(id);
-function renderNav() {
-  for (const [sel, can] of [[".nav-back", nav.canBack(navOpen)], [".nav-forward", nav.canForward(navOpen)]] as const) {
-    const b = $("tabs").querySelector<HTMLButtonElement>(sel)!;
+/** The Back / Forward buttons are built once per pane (renderStrip replaces only its
+ *  `.tabs-rest`, so a press on them is never lost to a re-render); this sets their state. */
+const navOpenIn = (p: Pane) => (id: string) => tabs.has(id) && (!!tabs.get(id)?.pinned || p.strip.order.includes(id));
+function renderNav(p: Pane) {
+  for (const [sel, can] of [[".nav-back", p.nav.canBack(navOpenIn(p))], [".nav-forward", p.nav.canForward(navOpenIn(p))]] as const) {
+    const b = p.bar.querySelector<HTMLButtonElement>(sel)!;
     if (b.disabled === can) b.disabled = !can;
   }
 }
 
-function navigate(step: "back" | "forward"): boolean {
+/** Back / Forward in pane `p` (the focused one: Alt+Left / Alt+Right, Go → Back / Forward). */
+function navigate(step: "back" | "forward", p: Pane = focused): boolean {
   if (!workspace) return false;
-  const id = step === "back" ? nav.back(navOpen) : nav.forward(navOpen);
-  if (id) showTab(id);
+  const id = step === "back" ? p.nav.back(navOpenIn(p)) : p.nav.forward(navOpenIn(p));
+  if (id) showIn(p, id);
   return !!id;
 }
 
@@ -493,7 +851,7 @@ function navAction(step: "back" | "forward") {
 }
 
 // ---- editor ----------------------------------------------------------------------------
-const editors = new Editors($("monaco-host"), () => renderTabs());
+const editors = new Editors(() => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx), {
   rename: (p, isDir) => void renameItem(p, isDir),
   trash: (items) => void trashItems(items),
@@ -548,45 +906,43 @@ function docLink(from: string, href: string, kind: "repo" | "web") {
   host.openRepoFile(abs);
 }
 
-/** Preview scroll positions by file (kept across tab switches and mode changes), recorded
- *  as the preview scrolls: by the time a tab's hide() runs its view has no layout box left. */
+/** Preview scroll positions by file (kept across tab switches and mode changes; each pane's
+ *  preview records them as it scrolls, see makePane). */
 const docScroll = new Map<string, number>();
-$("doc-preview").addEventListener("scroll", () => {
-  const pv = $("doc-preview");
-  if (pv.dataset.path && !pv.hidden) docScroll.set(pv.dataset.path, pv.scrollTop);
-});
-/** The rendered document per file, reused while its text and to-dos are unchanged. */
+/** The rendered document per pane and file (`<pane>\n<path>`: one element sits in one pane),
+ *  reused while its text and to-dos are unchanged. */
 const docCache = new Map<string, { sig: string; el: HTMLElement; ms: string }>();
 
-/** Show the file tab `path` in its mode: the Preview | Editor switch for Markdown, then the
- *  rendered document or Monaco. */
-function renderDocMode(path: string, focus = true) {
+/** Show the file tab `path` in pane `p` in its mode: the Preview | Editor switch for Markdown,
+ *  then the rendered document or Monaco. */
+function renderDocMode(p: Pane, path: string, focus = true) {
   const t = tabs.get(path);
   const mode = t?.mode;
-  const bar = $("doc-bar");
+  const bar = p.docBar;
   bar.hidden = !mode;
   for (const b of bar.querySelectorAll<HTMLElement>("button[data-mode]")) {
     const on = b.dataset.mode === mode;
     b.classList.toggle("active", on);
     b.setAttribute("aria-selected", String(on));
   }
-  const pv = $("doc-preview");
+  const pv = p.docPreview;
   const preview = mode === "preview";
   pv.hidden = !preview;
-  $("monaco-host").hidden = preview;
+  p.monacoHost.hidden = preview;
   if (!preview) {
     pv.replaceChildren();
-    requestAnimationFrame(() => editors.layout());
+    requestAnimationFrame(() => p.editor?.editor.layout());
     return;
   }
   const todos = docTodos(path);
   const sig = `${editors.version(path)}|${JSON.stringify(todos)}`;
-  let c = docCache.get(path);
+  const key = `${p.id}\n${path}`;
+  let c = docCache.get(key);
   if (!c || c.sig !== sig) {
     const started = performance.now();
     const el = renderDoc(editors.text(path) ?? "", todos, (href, kind) => docLink(path, href, kind));
     c = { sig, el, ms: (performance.now() - started).toFixed(1) };
-    docCache.set(path, c);
+    docCache.set(key, c);
   }
   pv.dataset.path = path;
   pv.dataset.renderMs = c.ms;
@@ -597,23 +953,23 @@ function renderDocMode(path: string, focus = true) {
   if (focus && focusPolicy.enabled) pv.focus({ preventScroll: true });
 }
 
-function setDocMode(mode: DocMode) {
-  const t = tabs.get(activeTab);
+/** Switch the file shown in pane `p` between Preview and Editor (every pane that shows it
+ *  follows: the mode belongs to the file's tab). */
+function setDocMode(mode: DocMode, p: Pane = focused) {
+  const t = p.shown ? tabs.get(p.shown) : undefined;
   if (!t?.mode || t.mode === mode) return;
   t.mode = mode;
-  renderDocMode(t.id);
-  if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => editors.editor.focus());
+  for (const q of paneList()) if (q.shown === t.id) renderDocMode(q, t.id, q === p);
+  if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => p.editor?.editor.focus());
 }
-$("doc-bar").addEventListener("click", (ev) => {
-  const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-mode]");
-  if (b?.dataset.mode === "preview" || b?.dataset.mode === "editor") setDocMode(b.dataset.mode);
-});
 
 /** Open `path` in a file tab. `mode` for a Markdown file (default: the editor, with the
  *  switch to the preview); an open tab keeps the mode it has. */
 async function openFile(path: string, mode?: DocMode) {
+  // The pane that holds the file already (the focused one first), else the focused pane.
+  const pane = paneFor(path);
   try {
-    await editors.open(path);
+    await editors.open(path, editorViewOf(pane));
   } catch (e) {
     return status(`${relPath(path)}: ${errText(e)}`);
   }
@@ -625,25 +981,26 @@ async function openFile(path: string, mode?: DocMode) {
         icon: "",
         tip: relPath(path),
         pinned: false,
-        el: $("view-editor"),
+        el: fileTabEl,
         mode: /\.md$/i.test(path) ? (mode ?? "editor") : undefined,
         cls: () => (editors.isDirty(path) ? "dirty" : ""),
-        show: () => {
-          editors.activate(path);
+        show: (p) => {
+          editors.activate(path, editorViewOf(p));
           tree.setActive(path);
-          renderDocMode(path);
+          renderDocMode(p, path);
         },
         close: async () => {
           if (editors.isDirty(path) && !(await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" }))) return false;
           editors.close(path);
           docScroll.delete(path);
-          docCache.delete(path);
+          for (const q of paneList()) docCache.delete(`${q.id}\n${path}`);
           return true;
         },
       },
       true,
+      pane,
     );
-  } else showTab(path);
+  } else showIn(pane, path);
 }
 
 /** File → Save, the palette row and Ctrl+S: the one save path. Every outcome is reported in
@@ -1041,7 +1398,7 @@ let layoutChanged = () => {};
 function relayout() {
   requestAnimationFrame(() => {
     terminals.fitActive();
-    centerTerms.get(activeTab)?.fit();
+    for (const p of paneList()) if (p.shown) centerTerms.get(p.shown)?.fit();
     editors.layout();
   });
 }
@@ -1209,7 +1566,6 @@ splitter($("side-resizer"), (() => {
 // ---- center terminal tabs: interactive vendor CLI, queue runner ------------------------
 const centerTerms = new Map<string, TermView>();
 let termCounter = 0;
-new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 
 /** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
 type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
@@ -1223,7 +1579,7 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
   const pane = h("div", { class: "term-pane" });
   if (agent && workspace) el.append(new ContextStrip(workspace.root, agent.engine, (p) => void openInEditor(p)).el);
   el.append(h("div", { class: "term-wrap" }, pane));
-  $("views").append(el);
+  focused.host.append(el);
   const view = new TermView(pane);
   centerTerms.set(id, view);
   addTab({
@@ -1368,7 +1724,7 @@ function focusPty(id: string): boolean {
 
 /** `auto`: Colony opening a new tab in its remembered bar, not a move by the operator (no
  *  record, no "moved" status). */
-function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean {
+function movePty(id: string, to: Place, opts: { auto?: boolean; pane?: Pane } = {}): boolean {
   const from = ptyPlace(id);
   if (!workspace || !from || from === to) return false;
   if (to === "panel") {
@@ -1410,7 +1766,8 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
     if (!r.hooks && r.tip) shellTips.set(id, r.tip);
     const parked = parkedTabs.get(id);
     parkedTabs.delete(id);
-    if (parked) addTab(parked);
+    const into = opts.pane && panes.has(opts.pane.id) ? opts.pane : focused;
+    if (parked) addTab(parked, true, into);
     else {
       const view = r.view;
       const el = h("div", { class: "term-center" }, h("div", { class: "term-wrap" }, view.pane));
@@ -1432,7 +1789,7 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
           retireShell(id, view);
           return true;
         },
-      });
+      }, true, into);
     }
   }
   ttys.update(id, { place: to === "panel" ? "drawer" : "tab" });
@@ -1452,7 +1809,7 @@ function tabLabelOf(id: string): string {
 
 /** The tab id under a pointer or a right-click in either bar, when it is a terminal tab. */
 function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
-  const b = el?.closest<HTMLElement>("#tabs .tab, #term-tabs > .tab");
+  const b = el?.closest<HTMLElement>(".pane-tabs .tab, #term-tabs > .tab");
   const id = b?.dataset.tab ?? b?.dataset.key ?? "";
   const from = ptyPlace(id);
   return from ? { id, from } : null;
@@ -1461,17 +1818,22 @@ function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
 // Drag: pointer events tracked by tab id on the two bars, like the splitters (the centre
 // strip is rebuilt on every snapshot, and the window keeps its OS file-drop handler). A press
 // that travels less than the threshold stays a click; Escape cancels. The bar under the
-// pointer marks itself as the drop target with its border colour only.
-for (const bar of [$("tabs"), $("term-tabs")]) {
+// pointer marks itself as the drop target with its border colour only. A drawer terminal
+// dropped on a pane's strip opens in that pane (moving tabs between panes is the free tiling
+// plan's t4).
+for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("pointerdown", (down) => {
     if (down.button !== 0 || (down.target as HTMLElement).closest(".tab-close")) return;
     const src = ptyTabAt(down.target as Element);
     if (!src) return;
     let dragging = false;
     let over: Place | null = null;
-    const mark = (p: Place | null) => {
+    let overPane: Pane | null = null;
+    const mark = (p: Place | null, at: Element | null = null) => {
       over = p;
-      $("tabs").classList.toggle("drop-target", p === "editor" && src.from !== "editor");
+      const strip = p === "editor" && src.from !== "editor" ? at?.closest<HTMLElement>(".pane-tabs") : null;
+      overPane = strip ? (paneList().find((x) => x.bar === strip) ?? null) : null;
+      for (const x of paneList()) x.bar.classList.toggle("drop-target", x.bar === strip);
       $("term-tabs").classList.toggle("drop-target", p === "panel" && src.from !== "panel");
     };
     const move = (ev: PointerEvent) => {
@@ -1481,7 +1843,8 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
         shell.classList.add("tab-dragging");
       }
       ev.preventDefault();
-      mark(dropPlace(document.elementFromPoint(ev.clientX, ev.clientY)));
+      const at = document.elementFromPoint(ev.clientX, ev.clientY);
+      mark(dropPlace(at), at);
     };
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", move);
@@ -1490,6 +1853,7 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
       window.removeEventListener("keydown", key, true);
       shell.classList.remove("tab-dragging");
       const to = drop ? moveTarget(src.from, over) : null;
+      const intoPane = overPane;
       mark(null);
       if (!dragging) return;
       // The release after a drag is not a click on whatever is under it (the click, when the
@@ -1497,7 +1861,7 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
       const eat = (ev: MouseEvent) => ev.stopPropagation();
       window.addEventListener("click", eat, true);
       window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
-      if (to) movePty(src.id, to);
+      if (to) movePty(src.id, to, { pane: intoPane ?? undefined });
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -1545,7 +1909,7 @@ function openTabMenu(id: string, from: Place, x: number, y: number) {
   tabMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 4))}px`;
   tabMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 4))}px`;
 }
-for (const bar of [$("tabs"), $("term-tabs")]) {
+for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("contextmenu", (ev) => {
     const src = ptyTabAt(ev.target as Element);
     if (!src) return;
@@ -2267,6 +2631,9 @@ const ACTIONS: Record<string, () => unknown> = {
   "explorer-collapse": () => tree.collapseAll(),
   "explorer-refresh": () => tree.refresh(),
   refresh: () => snapshot.refresh(),
+  "split-right": () => splitFocused("right"),
+  "split-down": () => splitFocused("down"),
+  "pane-close": () => closePane(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
   "explorer-reveal": () => revealInExplorer(),
@@ -2331,7 +2698,13 @@ async function closeWindow() {
 
 /** Every action item of src/menu.json: the menu bar in menu order, then the Settings view. */
 const menuItems = () => [
-  ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
+  ...menuSpec.menus.flatMap((m) =>
+    m.items.flatMap((i): { id: string; label: string; where: string; bar: boolean; omarchyOnly: boolean }[] => {
+      // A submenu (View → Splits) lists its own items, one level deep.
+      if ("items" in i && i.items) return i.items.map((c) => ({ id: c.id, label: c.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }));
+      return "id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : [];
+    }),
+  ),
   ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Settings", bar: false, omarchyOnly: !!i.omarchyOnly })),
 ];
 /** Every item id of the native menu bar, in menu order. */
@@ -2415,7 +2788,7 @@ snapshot.on((why) => {
     // Explorer's git marks (debounced, one git status call).
     tree.refreshMarks();
     // A plan shown rendered: its to-do table follows the snapshot (rebuilt only on a change).
-    if (tabs.get(activeTab)?.mode === "preview") renderDocMode(activeTab, false);
+    for (const p of paneList()) if (p.shown && tabs.get(p.shown)?.mode === "preview") renderDocMode(p, p.shown, false);
   }
 });
 setInterval(renderFeed, 5000);
@@ -2540,11 +2913,6 @@ $("welcome-open").addEventListener("click", () => void pickFolder());
 $("tree-refresh").replaceChildren(icon("refresh", "btn-icon"));
 $("tree-refresh").setAttribute("aria-label", "Refresh the Explorer");
 $("tree-refresh").addEventListener("click", () => void tree.refresh());
-for (const b of $("tabs").querySelectorAll<HTMLButtonElement>("[data-nav]")) {
-  const step = b.dataset.nav as "back" | "forward";
-  b.replaceChildren(icon(step, "tab-svg"));
-  b.addEventListener("click", () => navigate(step));
-}
 // The mouse's back and forward buttons, anywhere in the window. The press is swallowed so WebKit runs no history
 // navigation of its own.
 window.addEventListener("mousedown", (ev) => {
@@ -2569,17 +2937,16 @@ async function openWorkspace(path: string) {
   remember(workspace.root);
   // Files and terminal tabs belong to the folder; agent runs keep their
   // tabs (a run may be in another folder, and closing one would kill it).
-  for (const id of [...order]) {
+  for (const id of [...tabs.keys()]) {
     const t = tabs.get(id);
     if (!t || t.pinned || id.startsWith("run:")) continue;
     centerTerms.get(id)?.dispose();
     if (centerTerms.delete(id)) ttys.closed(id);
     tabs.delete(id);
-    order.splice(order.indexOf(id), 1);
-    if (t.el !== $("view-editor")) t.el.remove();
+    if (!isFile(id)) t.el.remove();
   }
-  // The history belongs to the folder (its tabs just left): Mission becomes its first entry.
-  nav.reset();
+  // The split tree belongs to the folder too: one pane again, holding the runs that stay.
+  resetPanes();
   commandsView.reset();
   document.getElementById("run-dialog")?.remove();
   editors.closeAll();
@@ -2668,7 +3035,7 @@ window.addEventListener(
     else if (key === "o" && !ev.shiftKey && !inTerm) runAction("open-folder");
     else if (key === "p" && !ev.shiftKey && !inTerm) runAction("quick-open");
     else if (key === "p" && ev.shiftKey) runAction("commands");
-    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
+    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab, focused);
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
     else if (key === "n" && ev.shiftKey) runAction("new-window");
@@ -3026,7 +3393,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.gearBorderOnly = gearOn.bars === gearOff.bars && new Set(gearOn.bars.split(",")).size === 1 && gearOn.bg === gearOff.bg && gearOn.shadow === gearOff.shadow ? true : { gearOff, gearOn };
     st.noRailItem = !$("rail").querySelector(".rail-item.active");
     st.heading = stView.querySelector(".settings-head h2")?.textContent === "Settings" && stView.querySelector<HTMLElement>('.settings-head [data-act="welcome"]')?.hidden === true;
-    $("tabs").querySelector<HTMLButtonElement>(".nav-back")!.click();
+    focused.bar.querySelector<HTMLButtonElement>(".nav-back")!.click();
     st.gearBack = activeTab === "mission" && stView.hidden && !gear.hasAttribute("aria-current") ? true : activeTab;
     showTab("inbox");
     await fire("settings");
@@ -3052,7 +3419,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.jsonCloseReturns = activeTab === "settings" ? true : activeTab;
     await wait(200);
     await shot("settings");
-    $("tabs").querySelector<HTMLButtonElement>(".nav-back")!.click();
+    focused.bar.querySelector<HTMLButtonElement>(".nav-back")!.click();
     st.back = activeTab === "mission" ? true : activeTab;
     await log("settings-view", Object.values(st).every((v) => v === true), { ...st, groups: st.groups === true ? true : groupRows, gearOff, gearOn });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
@@ -3140,19 +3507,19 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Markdown in Monaco, Preview the document again.
     {
       const hf = `${root}/.cursor/HANDOFF.md`;
-      const pv = $("doc-preview");
-      const modeBtn = (m: DocMode) => $("doc-bar").querySelector<HTMLElement>(`button[data-mode="${m}"]`);
+      const pv = focused.docPreview;
+      const modeBtn = (m: DocMode) => focused.docBar.querySelector<HTMLElement>(`button[data-mode="${m}"]`);
       host.openRepoFile(".cursor/HANDOFF.md");
-      const shown = await until(() => activeTab === hf && !pv.hidden && !!pv.querySelector(".md-doc") && $("monaco-host").hidden, 4000);
+      const shown = await until(() => activeTab === hf && !pv.hidden && !!pv.querySelector(".md-doc") && focused.monacoHost.hidden, 4000);
       const renderMs = Number(pv.dataset.renderMs);
       modeBtn("editor")?.click();
-      const editorMode = await until(() => !$("monaco-host").hidden && pv.hidden && editors.active === hf && tabs.get(hf)?.mode === "editor", 2000);
+      const editorMode = await until(() => !focused.monacoHost.hidden && pv.hidden && editors.active === hf && tabs.get(hf)?.mode === "editor", 2000);
       modeBtn("preview")?.click();
       const back = await until(() => !pv.hidden && !!pv.querySelector(".md-doc"), 2000);
       await shot("md-preview");
       const readmeBar = (() => {
         showTab(file);
-        return !$("doc-bar").hidden && tabs.get(file)?.mode === "editor";
+        return !focused.docBar.hidden && tabs.get(file)?.mode === "editor";
       })();
       await closeTab(hf);
       await log("md-preview", shown && editorMode && back && readmeBar && renderMs < 500, { shown, renderMs, editorMode, back, readmeBar });
@@ -3261,7 +3628,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const onTree = await drop(row);
       const copied = await api.readTextFile(`${root}/${name}`).catch((e) => `error: ${errText(e)}`);
       showTab(file);
-      const onEditor = await drop($("monaco-host"));
+      const onEditor = await drop(focused.monacoHost);
       const opened = await until(() => editors.active === src && activeTab === src, 3000);
       await log("file-drop", onTerm.zone === "terminal" && typed && onTree.zone === "explorer" && copied === "dropped by the code-path smoke\n" && onEditor.zone === "editor" && opened, {
         terminal: { ...onTerm, typed, input: input.slice(0, 160) },
@@ -3553,14 +3920,14 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Back / Forward (u4): views and a document, the buttons' state, Alt+Left / Alt+Right
     // (dispatched in the page: whether WebKitGTK itself reacts to the real keys is a manual check),
     // and a closed tab leaving the history.
-    const navBtn = (step: string) => $("tabs").querySelector<HTMLButtonElement>(`.nav-${step}`)!;
+    const navBtn = (step: string) => focused.bar.querySelector<HTMLButtonElement>(`.nav-${step}`)!;
     // On the focused element, as a real key press is (the handler reads its target).
     const altKey = (key: string) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }));
     const navDoc = `${root}/smoke-nav.txt`;
     await api.writeTextFile(navDoc, "Back / Forward smoke\n");
     const navSteps: Record<string, unknown> = {};
     const navAt = (k: string, want: string) => (navSteps[k] = activeTab === want ? true : activeTab);
-    nav.reset();
+    focused.nav.reset();
     showTab("mission");
     showTab("inbox");
     showTab("git");
@@ -3585,7 +3952,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Back / Forward it has the same children with a document, a Ship view, the document
     // again and the other Ship view active. Ship switches Git | CI/CD inside its view, the
     // rail item reopens the member shown last, and Ctrl+7 still reaches Ship.
-    const strip = () => [...$("tabs-rest").children].map((el) => (el.classList.contains("tabs-docs") ? `docs[${[...el.children].map((t) => relPath((t as HTMLElement).dataset.tab ?? "")).join(",")}]` : el.className)).join(" ");
+    const strip = () => [...focused.rest.children].map((el) => (el.classList.contains("tabs-docs") ? `docs[${[...el.children].map((t) => relPath((t as HTMLElement).dataset.tab ?? "")).join(",")}]` : el.className)).join(" ");
     await openFile(navDoc);
     const strips: Record<string, string> = { doc: strip() };
     showTab("git");
@@ -3595,7 +3962,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     showTab("cicd");
     strips.otherView = strip();
     navSteps["strip-same-set"] = new Set(Object.values(strips)).size === 1 && strips.doc.includes("docs[") && strips.doc.includes("smoke-nav.txt") ? true : strips;
-    navSteps["strip-no-view-switch"] = !$("tabs").querySelector(".view-switch, [role='tablist']");
+    navSteps["strip-no-view-switch"] = !focused.bar.querySelector(".view-switch, [role='tablist']");
     const shipNav = (id: string) => [...view(id).querySelectorAll<HTMLElement>(".ws-nav-btn")];
     const shipBtns = shipNav("cicd").map((b) => `${b.dataset.section}${b.classList.contains("active") ? "*" : ""}`).join();
     navSteps["ship-inner-switch"] = shipBtns === "git,cicd*" ? true : shipBtns;
@@ -3611,8 +3978,123 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await closeTab(navDoc);
     await log("inner-nav", Object.values(navSteps).every((v) => v === true), navSteps);
     // Leave the history as a fresh folder has it, for the steps after this one.
-    nav.reset();
+    focused.nav.reset();
     showTab("mission");
+    // Free tiling (kit ADR 2026-10-24 amend 2026-11-19; plan colony-free-tiling t2): Split right
+    // on a file shows it in both panes (one model, an editor each); a terminal opens in the
+    // focused pane; Split down moves it when its pane keeps a tab; a view shows in the focused
+    // pane only; Close pane keeps the tabs; closing a pane's last tab gives its space back.
+    {
+      const sp: Record<string, unknown> = {};
+      const splitDoc = `${root}/smoke-split.txt`;
+      await api.writeTextFile(splitDoc, "split smoke\n".repeat(60));
+      await openFile(splitDoc);
+      const p1 = focused;
+      runAction("split-right");
+      await wait(200);
+      const p2 = focused;
+      const box = (p: Pane) => p.el.getBoundingClientRect();
+      const paneState = () => ({ panes: paneList().map((p) => `${p.id}:${p.shown ?? "-"}:[${p.strip.order.map((x) => relPath(x)).join(",")}]`), focused: focused.id, active: relPath(activeTab) });
+      sp.splitRight = panes.size === 2 && p2 !== p1 && p1.shown === splitDoc && p2.shown === splitDoc && activeTab === splitDoc && $("panes").classList.contains("multi");
+      const m1 = p1.editor?.editor.getModel();
+      sp.oneModelTwoEditors = !!m1 && !!p2.editor && p1.editor !== p2.editor && p2.editor.editor.getModel() === m1;
+      sp.sideBySide = box(p1).width > 40 && box(p2).width > 40 && box(p2).left >= box(p1).right - 2 && Math.abs(box(p1).top - box(p2).top) < 2 ? true : { a: box(p1).toJSON(), b: box(p2).toJSON() };
+      sp.focusBorder = p2.el.classList.contains("focused") && !p1.el.classList.contains("focused") && getComputedStyle(p2.el).borderTopColor !== getComputedStyle(p1.el).borderTopColor;
+      p2.editor?.editor.trigger("colony-smoke", "type", { text: "x" });
+      sp.sameFileBothPanes = editors.isDirty(splitDoc) && (m1?.getValue() ?? "").startsWith("x") && focused.bar.querySelector(`.tab.active[data-tab="${CSS.escape(splitDoc)}"]`) !== null;
+      p2.editor?.editor.trigger("colony-smoke", "undo", null);
+      if (editors.isDirty(splitDoc)) await editors.save(splitDoc);
+      // Dragging the line between the panes resizes them (in-page pointer events).
+      {
+        const line = $("panes").querySelector<HTMLElement>('.pane-divider[data-dir="right"]');
+        const r = line?.getBoundingClientRect();
+        const w0 = box(p1).width;
+        if (line && r) {
+          const y = r.top + r.height / 2;
+          line.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left, clientY: y, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left - 120, clientY: y, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left - 120, clientY: y, bubbles: true }));
+        }
+        await wait(100);
+        const ratio = (nodeAt(paneTree, []) as PaneSplit | null)?.ratio ?? 0.5;
+        sp.dividerResizes = !!line && ratio < 0.5 && Math.abs(box(p1).width - (w0 - 120)) < 4 ? true : { line: !!line, ratio, w0, w1: box(p1).width };
+      }
+      // A drawer shell dragged onto the other pane's strip opens in that pane, then goes home.
+      {
+        toggleTerminal(true);
+        await wait(300);
+        if (!terminals.activeKey()) await terminals.create();
+        await wait(300);
+        const key = terminals.activeKey() ?? "";
+        const src = $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"]`);
+        const a = src?.getBoundingClientRect();
+        const b = p1.bar.getBoundingClientRect();
+        if (src && a) {
+          const to = { clientX: b.right - 30, clientY: b.top + b.height / 2, bubbles: true };
+          src.dispatchEvent(new PointerEvent("pointerdown", { clientX: a.left + 8, clientY: a.top + 8, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", to));
+          window.dispatchEvent(new PointerEvent("pointerup", to));
+        }
+        await wait(300);
+        sp.drawerDropIntoPane = !!key && p1.strip.order.includes(key) && !p2.strip.order.includes(key) && !terminals.has(key) && p1.shown === key ? true : { key, ...paneState() };
+        if (p1.strip.order.includes(key)) movePty(key, "panel");
+        await placementSaved;
+        await wait(200);
+        sp.drawerShellHome = terminals.has(key) && !tabs.has(key) && p1.shown === splitDoc ? true : paneState();
+        focusPane(p2);
+      }
+      const term = await openTermTab(["sh"], "smoke split", "COLONY_SMOKE split panes", "terminals");
+      const tid = term?.id ?? "";
+      sp.termInFocusedPane = !!term && p2.strip.order.includes(tid) && !p1.strip.order.includes(tid) && p2.shown === tid && p2.host.contains(tabs.get(tid)!.el);
+      runAction("split-down");
+      await wait(200);
+      const p3 = focused;
+      sp.splitDownMovesTerm = panes.size === 3 && p3.shown === tid && !p2.strip.order.includes(tid) && p2.shown === splitDoc && p3.host.contains(tabs.get(tid)?.el ?? null);
+      sp.stacked = box(p3).top >= box(p2).bottom - 2 && Math.abs(box(p2).left - box(p3).left) < 2 ? true : { b: box(p2).toJSON(), c: box(p3).toJSON() };
+      showTab("inbox");
+      sp.viewInFocusedPane = p3.shown === "inbox" && p3.host.contains(view("inbox")) && !view("inbox").hidden;
+      focusPane(p1);
+      showTab("inbox");
+      sp.viewMovesPanes = p1.shown === "inbox" && p1.host.contains(view("inbox")) && p3.shown === tid;
+      focusPane(p3);
+      runAction("pane-close");
+      await wait(150);
+      sp.closePaneKeepsTabs = panes.size === 2 && !panes.has(p3.id) && tabs.has(tid) && p2.strip.order.includes(tid) && p2.host.contains(tabs.get(tid)?.el ?? null);
+      // A new pane whose only tab is the file: closing that tab there removes the pane, the
+      // file stays open in the pane that takes the space, and that pane takes the focus.
+      focusPane(p2);
+      showIn(p2, splitDoc);
+      runAction("split-right");
+      await wait(150);
+      const p4 = focused;
+      sp.splitAgain = panes.size === 3 && p4 !== p2 && p4.strip.order.length === 1 && p4.shown === splitDoc ? true : paneState();
+      await closeTab(splitDoc, p4);
+      await wait(150);
+      sp.lastTabCollapses = panes.size === 2 && !panes.has(p4.id) && focused === p2 && tabs.has(splitDoc) && p2.shown === splitDoc ? true : paneState();
+      // Its last tabs closed, p2 goes too: one pane again, as before splits (p1 kept its own
+      // tabs, the file among them, and the view it showed). The file then closes in p1.
+      await closeTab(tid);
+      await closeTab(splitDoc, p2);
+      await wait(150);
+      sp.fileStaysInP1 = panes.size === 1 && tabs.has(splitDoc) && p1.strip.order.includes(splitDoc) ? true : paneState();
+      await closeTab(splitDoc);
+      await wait(150);
+      sp.backToOnePane = panes.size === 1 && paneList()[0] === p1 && focused === p1 && !$("panes").classList.contains("multi") && !tabs.has(splitDoc) && !tabs.has(tid) ? true : paneState();
+      // A file in two panes closed with no pane named (the Explorer's rename, move and trash)
+      // closes in both, and the pane it alone held goes.
+      const doc2 = `${root}/smoke-split-2.txt`;
+      await api.writeTextFile(doc2, "split smoke 2\n");
+      await openFile(doc2);
+      runAction("split-down");
+      await wait(150);
+      sp.oneFileTwoPanes = panes.size === 2 && holders(doc2).length === 2 ? true : paneState();
+      await closeTab(doc2);
+      await wait(150);
+      sp.closedInEveryPane = !tabs.has(doc2) && holders(doc2).length === 0 && panes.size === 1 && focused === p1 ? true : paneState();
+      await log("split-panes", Object.values(sp).every((v) => v === true), sp);
+      focused.nav.reset();
+      showTab("mission");
+    }
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
@@ -3943,7 +4425,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         terminals.focusKey(sKey);
         runAction("term-to-editor");
         await wait(300);
-        r.shellInEditor = tabs.has(sKey) && !terminals.has(sKey) && activeTab === sKey && !!$("tabs").querySelector(`.tab[data-tab="${sKey}"]`) && ttys.get(sKey)?.place === "tab";
+        r.shellInEditor = tabs.has(sKey) && !terminals.has(sKey) && activeTab === sKey && !!focused.bar.querySelector(`.tab[data-tab="${sKey}"]`) && ttys.get(sKey)?.place === "tab";
         r.shellEchoes = await echoes(sKey);
         r.shellFitted = fitted(sKey);
         if (pty) {
@@ -3960,12 +4442,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           r.focusById = terminals.activeKey() === pty.id && !shell.classList.contains("no-bottom");
         }
         await shot(`tab-move-${d}`);
-        await menuMove(`#tabs .tab[data-tab="${sKey}"]`, "tab-to-panel");
+        await menuMove(`.pane-tabs .tab[data-tab="${sKey}"]`, "tab-to-panel");
         r.shellBack = terminals.has(sKey) && !tabs.has(sKey) && $("terms").contains(ptyView(sKey)?.pane ?? null) && ttys.get(sKey)?.place === "drawer";
         r.shellBackEchoes = await echoes(sKey);
         if (pty) {
           await menuMove(`#term-tabs > .tab[data-key="${pty.id}"]`, "tab-to-editor");
-          r.ptyBack = tabs.has(pty.id) && !terminals.has(pty.id) && activeTab === pty.id && !!$("views").querySelector(".term-center .ctx-strip") && ttys.get(pty.id)?.place === "tab";
+          r.ptyBack = tabs.has(pty.id) && !terminals.has(pty.id) && activeTab === pty.id && !!$("panes").querySelector(".term-center .ctx-strip") && ttys.get(pty.id)?.place === "tab";
           r.ptyBackEchoes = await echoes(pty.id);
         }
         docks[d] = r;
@@ -4082,7 +4564,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const md = `${root}/.git/HANDOFF.md`;
       await api.writeTextFile(md, `# Links\n\n- [smoke site](${doc})\n- [mail](mailto:smoke@example.com)\n`).catch((e) => (r.mdWrite = errText(e)));
       await openFile(md, "preview");
-      const pv = $("doc-preview");
+      const pv = focused.docPreview;
       const link = await until(() => !pv.hidden && !!pv.querySelector(".md-link"), 4000).then(() => [...pv.querySelectorAll<HTMLElement>(".md-link")].find((a) => a.title.startsWith(doc)));
       r.docLinks = [...pv.querySelectorAll<HTMLElement>(".md-link")].map((a) => a.textContent).join(",");
       link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0, ctrlKey: true }));
@@ -4098,7 +4580,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await api.writeTextFile(edPath, `editor link: ${edUrl}\nfile link: file:///etc/hostname\nlast line\n`).catch((e) => (r.edWrite = errText(e)));
       await openFile(edPath);
       const ed = editors.editor;
-      const edHost = $("monaco-host");
+      const edHost = focused.monacoHost;
       r.edLinksDetected = await until(() => edHost.querySelectorAll(".detected-link").length >= 2, 6000);
       // What Monaco made of each press and release (target type 6 = text, Ctrl, line) and the
       // element each click went to, for the log.
@@ -4552,7 +5034,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       // The queue terminal stays a centre tab (dimmed once it exited); the drawer lists the
       // user's shells only and does not repeat it.
       const qListed = drawerListing();
-      const qCentre = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${qTab}"]`);
+      const qCentre = focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${qTab}"]`);
       await log("terminal-drawer-queue", !qListed.named.length && qListed.shells === terminals.count && !!qCentre?.classList.contains("exited"), { ...qListed, centreTab: qCentre?.className ?? null });
     }
     smokeDryRun = false;
@@ -4670,7 +5152,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       // Mixed sessions: the interactive CLI is a centre tab next to the driver run tab, the
       // drawer holds the user's shells only (no repeat of the centre terminal tabs).
       const iListed = drawerListing();
-      const iCentre = activeTab === iTab && !!$("tabs").querySelector(`.tab.active[data-tab="${iTab}"]`);
+      const iCentre = activeTab === iTab && !!focused.bar.querySelector(`.tab.active[data-tab="${iTab}"]`);
       await shot("terminal-drawer");
       await closeTab(iTab);
       const listOk = !iListed.named.length && iListed.shells === terminals.count && terminals.count > 0 && iCentre && tabs.has(`run:${run.id}`) && !centerTerms.has(iTab);
@@ -4679,8 +5161,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
       const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
       // Its gate badge sits on its centre tab; the drawer still lists the shells only.
-      if (p) await until(() => !!$("tabs").querySelector(`.tab[data-tab="${p.id}"] .badge.warn`), 4000);
-      const pBadge = p ? $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"] .badge.warn`) : null;
+      if (p) await until(() => !!focused.bar.querySelector(`.tab[data-tab="${p.id}"] .badge.warn`), 4000);
+      const pBadge = p ? focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${p.id}"] .badge.warn`) : null;
       const pListed = drawerListing();
       await log("terminal-drawer-list", listOk && pBadge?.textContent === "gate" && !pListed.named.length && pListed.shells === terminals.count, { withInteractive: iListed, withGateTab: pListed, centreTab: iCentre, gateBadge: pBadge?.textContent ?? null, runTab: `run:${run.id}` });
       // A terminal tab that printed a HITL_GATE line: gate marker on its tab, a card in the
@@ -4688,7 +5170,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       if (p) {
         const key = `${p.id}:fake-gate`;
         await until(() => pendingGates().some((g) => g.key === key), 4000);
-        const tabBtn = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
+        const tabBtn = focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
         const tCard = inbox.el.querySelector<HTMLElement>(`.inbox-card[data-tab="${p.id}"]`);
         const n = pendingGates().length;
         await log("terminal-gate", n === 1 && !!tabBtn?.classList.contains("run-gate") && tabBtn.querySelector(".badge")?.textContent === "gate" && tCard?.dataset.key === key && !!tCard.querySelector(".inbox-line")?.textContent?.includes("Go | Wait") && Number($("inbox-badge")?.textContent) === 1 && document.title.startsWith("(1) ") && alerts.log.some((x) => x.key === key && !x.sent), {
@@ -4842,7 +5324,7 @@ async function runPlaySmoke(info: StartupInfo) {
       welcomeHidden: $("welcome").hidden,
       ownBack: !settingsBack.hidden,
       gearMarked: gear.getAttribute("aria-current") === "page",
-      noStrip: $("tabs").classList.contains("tabbar-empty"),
+      noStrip: focused.bar.classList.contains("tabbar-empty"),
     };
     settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
     await wait(400);
@@ -4875,6 +5357,7 @@ function showView(view: string) {
  *  link never ends on a status line; the folder's tabs stay closed until a folder opens. */
 function showPlayWithoutFolder() {
   for (const t of tabs.values()) t.el.hidden = true;
+  for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
   $("welcome").hidden = true;
   colonyView.el.hidden = false;
   colonyView.invalidate();

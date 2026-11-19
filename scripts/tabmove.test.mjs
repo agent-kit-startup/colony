@@ -23,7 +23,7 @@ test("a press becomes a drag only past the threshold", () => {
 
 test("the bar under the pointer names the place", () => {
   assert.equal(dropPlace(at("button", "#term-tabs")), "panel");
-  assert.equal(dropPlace(at("span", "#tabs-rest", "#tabs")), "editor");
+  assert.equal(dropPlace(at("span", ".tabs-rest", ".pane-tabs")), "editor", "any pane's strip");
   assert.equal(dropPlace(at("canvas", ".xterm", "#terms")), null, "the terminal body is not a drop target");
   assert.equal(dropPlace(at("div", "#views")), null);
   assert.equal(dropPlace(null), null);
