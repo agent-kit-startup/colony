@@ -199,7 +199,7 @@ export class TerminalsView extends View {
   }
 }
 
-// ---- Workspace → Memory ----------------------------------------------------------------
+// ---- Memory (a rail item since amend 2026-11-19) ---------------------------------------
 export class MemoryView extends View {
   constructor(host: KitViewsHost, private openDecisions: () => void) {
     super(host, "kv kv-memory");

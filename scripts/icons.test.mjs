@@ -62,12 +62,13 @@ test("every rail, tab, section and button icon kind exists", () => {
   }
   const missing = [...refs].filter((k) => !kinds.has(k));
   assert.deepEqual(missing, [], "kinds referenced but not drawn");
-  // The twelve rail items each have their own glyph; none borrows a section icon.
+  // The fourteen rail items each have their own glyph (Plans keeps the one it had as a
+  // Workspace section; Memory has its own); none borrows another rail item's icon.
   const rail = read("main.ts").match(/const RAIL: RailItem\[\] = \[([\s\S]*?)\n\];/)[1];
   const railKinds = [...rail.matchAll(/icon: "([a-z-]+)"/g)].map((m) => m[1]);
-  assert.equal(railKinds.length, 12);
-  assert.equal(new Set(railKinds).size, 12, "every rail item has a distinct icon");
-  for (const k of ["current-mission", "queue", "inbox", "chats", "flight-log", "review", "ship", "activity", "terminals", "processes", "workspace", "colony"]) assert.ok(railKinds.includes(k), k);
+  assert.equal(railKinds.length, 14);
+  assert.equal(new Set(railKinds).size, 14, "every rail item has a distinct icon");
+  for (const k of ["current-mission", "queue", "inbox", "chats", "flight-log", "review", "ship", "activity", "plans", "memory", "terminals", "processes", "colony", "workspace"]) assert.ok(railKinds.includes(k), k);
   for (const k of ["play", "pause", "stop"]) assert.ok(kinds.has(k), `${k} mark`);
 });
 
