@@ -802,15 +802,15 @@ function paneFor(id: string): Pane {
   return holders(id)[0] ?? focused;
 }
 
-/** Close tab `id` in pane `from` (default: the pane that shows it). A file open in another
- *  pane too only leaves this one: its model and its unsaved edits stay. */
+/** Close tab `id`. Closed in one pane (`from`: its strip's ×, Ctrl+W) a file open in another
+ *  pane too only leaves that pane: its model and its unsaved edits stay. With no pane named
+ *  (the Explorer's rename, move and trash, a folder switch) it closes in every pane. */
 async function closeTab(id: string, from?: Pane) {
   const t = tabs.get(id);
   if (!t || t.pinned) return;
   const hs = holders(id);
-  const p = from && hs.includes(from) ? from : paneFor(id);
-  if (isFile(id) && hs.length > 1) {
-    dropFromPane(p, id);
+  if (from && isFile(id) && hs.length > 1 && hs.includes(from)) {
+    dropFromPane(from, id);
     return renderTabs();
   }
   if (t.close && !(await t.close())) return;
@@ -3035,7 +3035,7 @@ window.addEventListener(
     else if (key === "o" && !ev.shiftKey && !inTerm) runAction("open-folder");
     else if (key === "p" && !ev.shiftKey && !inTerm) runAction("quick-open");
     else if (key === "p" && ev.shiftKey) runAction("commands");
-    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
+    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab, focused);
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
     else if (key === "n" && ev.shiftKey) runAction("new-window");
@@ -4004,6 +4004,45 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       sp.sameFileBothPanes = editors.isDirty(splitDoc) && (m1?.getValue() ?? "").startsWith("x") && focused.bar.querySelector(`.tab.active[data-tab="${CSS.escape(splitDoc)}"]`) !== null;
       p2.editor?.editor.trigger("colony-smoke", "undo", null);
       if (editors.isDirty(splitDoc)) await editors.save(splitDoc);
+      // Dragging the line between the panes resizes them (in-page pointer events).
+      {
+        const line = $("panes").querySelector<HTMLElement>('.pane-divider[data-dir="right"]');
+        const r = line?.getBoundingClientRect();
+        const w0 = box(p1).width;
+        if (line && r) {
+          const y = r.top + r.height / 2;
+          line.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left, clientY: y, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left - 120, clientY: y, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left - 120, clientY: y, bubbles: true }));
+        }
+        await wait(100);
+        const ratio = (nodeAt(paneTree, []) as PaneSplit | null)?.ratio ?? 0.5;
+        sp.dividerResizes = !!line && ratio < 0.5 && Math.abs(box(p1).width - (w0 - 120)) < 4 ? true : { line: !!line, ratio, w0, w1: box(p1).width };
+      }
+      // A drawer shell dragged onto the other pane's strip opens in that pane, then goes home.
+      {
+        toggleTerminal(true);
+        await wait(300);
+        if (!terminals.activeKey()) await terminals.create();
+        await wait(300);
+        const key = terminals.activeKey() ?? "";
+        const src = $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"]`);
+        const a = src?.getBoundingClientRect();
+        const b = p1.bar.getBoundingClientRect();
+        if (src && a) {
+          const to = { clientX: b.right - 30, clientY: b.top + b.height / 2, bubbles: true };
+          src.dispatchEvent(new PointerEvent("pointerdown", { clientX: a.left + 8, clientY: a.top + 8, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", to));
+          window.dispatchEvent(new PointerEvent("pointerup", to));
+        }
+        await wait(300);
+        sp.drawerDropIntoPane = !!key && p1.strip.order.includes(key) && !p2.strip.order.includes(key) && !terminals.has(key) && p1.shown === key ? true : { key, ...paneState() };
+        if (p1.strip.order.includes(key)) movePty(key, "panel");
+        await placementSaved;
+        await wait(200);
+        sp.drawerShellHome = terminals.has(key) && !tabs.has(key) && p1.shown === splitDoc ? true : paneState();
+        focusPane(p2);
+      }
       const term = await openTermTab(["sh"], "smoke split", "COLONY_SMOKE split panes", "terminals");
       const tid = term?.id ?? "";
       sp.termInFocusedPane = !!term && p2.strip.order.includes(tid) && !p1.strip.order.includes(tid) && p2.shown === tid && p2.host.contains(tabs.get(tid)!.el);
@@ -4041,6 +4080,17 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await closeTab(splitDoc);
       await wait(150);
       sp.backToOnePane = panes.size === 1 && paneList()[0] === p1 && focused === p1 && !$("panes").classList.contains("multi") && !tabs.has(splitDoc) && !tabs.has(tid) ? true : paneState();
+      // A file in two panes closed with no pane named (the Explorer's rename, move and trash)
+      // closes in both, and the pane it alone held goes.
+      const doc2 = `${root}/smoke-split-2.txt`;
+      await api.writeTextFile(doc2, "split smoke 2\n");
+      await openFile(doc2);
+      runAction("split-down");
+      await wait(150);
+      sp.oneFileTwoPanes = panes.size === 2 && holders(doc2).length === 2 ? true : paneState();
+      await closeTab(doc2);
+      await wait(150);
+      sp.closedInEveryPane = !tabs.has(doc2) && holders(doc2).length === 0 && panes.size === 1 && focused === p1 ? true : paneState();
       await log("split-panes", Object.values(sp).every((v) => v === true), sp);
       focused.nav.reset();
       showTab("mission");
