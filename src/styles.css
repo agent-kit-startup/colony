@@ -995,42 +995,21 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
 #btn-settings[aria-current="page"] { border-color: var(--border-active); }
 
-/* Native kit views (src/kitviews.ts): list rows, and the Colony game. Active filters and
+/* Native kit views (src/kitviews.ts): list rows. Active filters and
    rows change only their 1px border colour (no bar, no inset, no tint). */
 .kv-row { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-sm) 0; border-top: 1px solid var(--border); min-width: 0; }
 .card-header + .kv-row { border-top: 0; }
 .kv-row .row { padding: 0; }
 .kv-row .now-meta { margin-top: 2px; }
 button.kv-filter.on { background: transparent; border-color: var(--border-active); }
-.colony-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: var(--mc-space-xl); align-items: start; }
-@media (max-width: 1100px) { .colony-layout { grid-template-columns: minmax(0, 1fr); } }
-.colony-map { display: block; width: 100%; max-width: 420px; margin: 0 auto; height: auto; }
-.colony-tile { stroke: var(--bg-primary); stroke-width: 1; }
-.colony-tile[data-tile="fog"] { fill: var(--bg-secondary); }
-.colony-tile[data-tile="barren"] { fill: #4b5563; }
-.colony-tile[data-tile="green"] { fill: #3f7d5a; }
-.colony-tile[data-tile="ground"] { fill: #5b6148; }
-.colony-tile[data-tile="ground"][data-terrain="v"] { fill: #3d4a3a; }
-.colony-tile[data-tile="ground"][data-terrain="s"] { fill: #565e66; }
-.colony-tile[data-tile="ground"][data-terrain="e"] { fill: #66704f; }
-.colony-tile[data-hex] { cursor: default; }
-.colony-tile.selected { stroke: var(--border-active); stroke-width: 1; }
-.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: auto; }
-.colony-glyph[data-mark="queued"] { opacity: 0.55; }
-.colony-glyph[data-mark="offline"] { fill: #e08a6b; }
-.colony-counters { display: flex; flex-wrap: wrap; gap: 6px; }
-.colony-counters button:disabled { cursor: not-allowed; opacity: 0.6; }
-.colony-card-art-none { display: grid; place-items: center; }
-.colony-card-glyph { font: 600 22px var(--mc-font-mono); color: var(--text-secondary); }
-.colony-side { display: flex; flex-direction: column; gap: var(--mc-space-lg); }
-.colony-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--mc-space-md); }
-.colony-resource { border: 1px solid var(--border); border-radius: var(--mc-radius); padding: var(--mc-space-md); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.colony-resource-value { font: 600 20px var(--mc-font-mono); color: var(--text-primary); }
-.colony-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--mc-space-lg); }
-.colony-card { gap: 6px; }
-.colony-card-art { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--mc-radius-chrome); background: var(--bg-secondary); }
-.colony-card button { align-self: flex-start; }
-.colony-card button:disabled { cursor: not-allowed; opacity: 0.6; }
+/* Oligarchy (src/oligarchyview.ts): the web game in a frame that fills the view, a one-line
+   bar above it, and the network-needed state. Border colour only, no fill, no accent bar. */
+.kv-oligarchy { overflow: hidden; }
+.kv-oligarchy .cv-body { height: 100%; padding: 0; gap: 0; }
+.oligarchy-bar { display: flex; align-items: center; gap: var(--mc-space-md); padding: var(--mc-space-sm) var(--mc-space-lg); border-bottom: 1px solid var(--border); min-width: 0; }
+.oligarchy-bar .oligarchy-origin { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oligarchy-frame { flex: 1; display: block; width: 100%; min-height: 0; border: 0; background: var(--bg-primary); }
+.oligarchy-offline { flex: 1; display: grid; place-items: center; padding: var(--mc-space-xl); }
 /* Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
    2026-11-07): while a tab is dragged, the bar it would land on shows a 1px line in the accent
    colour, drawn as an outline so nothing shifts. No fill, no accent bar, no inset shadow. */

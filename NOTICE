@@ -11,13 +11,6 @@ which records each glyph's upstream file and commit):
   2d6c5e68b4ded73c92dac291845ee44e1182d511), Copyright (c) 2014 Jesse Weed, MIT License
   (see licenses/seti-ui.MIT.txt).
 
-This product includes the Oligarchy rules engine @dadado/oligarchy-engine
-(https://www.npmjs.com/package/@dadado/oligarchy-engine), Copyright 2026 The Mission Kit
-Authors, licensed under the Apache License, Version 2.0, with its generic placeholder catalog.
-
-Oligarchy game content is not licensed under the Apache License. The game's story, catalog
-data and art added from 2026-11-06 on are Copyright 2026 The Mission Kit Authors, all rights
-reserved. They are not in this source repository; official Colony releases include the
-catalog, redistributed unmodified with Colony under the rights holder's written grant, and
-builds from these sources play the engine's placeholder catalog. Art already published in
-this repository (assets/art/) keeps the license it shipped with.
+Oligarchy game content is not licensed under the Apache License and is not in this
+repository or in Colony builds: the game is a web page Colony loads from its origin. Art
+already published in this repository (assets/art/) keeps the license it shipped with.

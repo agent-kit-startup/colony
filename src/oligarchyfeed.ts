@@ -23,6 +23,26 @@ export const GAME_DATA_REQUEST = "oligarchy:game-data-request";
  */
 export const OLIGARCHY_ORIGINS: readonly string[] = Object.freeze(["https://oligarchy.missionkit.io"]);
 
+/** The game's page on its origin (the site serves the game at /game/). */
+export const GAME_PATH = "/game/";
+
+/** The address the game view loads: an allowed origin plus GAME_PATH, else null (no fallback). */
+export function gameUrl(origin: string = OLIGARCHY_ORIGINS[0], allowed: readonly string[] = OLIGARCHY_ORIGINS): string | null {
+  return isAllowedOrigin(origin, allowed) ? `${origin}${GAME_PATH}` : null;
+}
+
+/**
+ * The game frame's sandbox (ADR point 6): scripts, and the page's own origin so its storage keeps
+ * the save. Nothing else: no top navigation (the page's `colony://play` links stay inert inside
+ * Colony), no popups, forms, modals, downloads or pointer lock.
+ */
+export const FRAME_SANDBOX = "allow-scripts allow-same-origin";
+
+/** What `colony://play` shows: the game tab of the open folder, or the game with no folder. */
+export function playTarget(hasFolder: boolean): "tab" | "no-folder" {
+  return hasFolder ? "tab" : "no-folder";
+}
+
 /** The kit's `OUTCOME_KINDS` (dashboard/lib/outcome-ledger.mjs), in its order. */
 export const OUTCOME_KINDS = Object.freeze(["todo", "test", "ci", "releaseCut", "plan", "review", "releasePublished"] as const);
 export type OutcomeKind = (typeof OUTCOME_KINDS)[number];
