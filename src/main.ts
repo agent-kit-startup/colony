@@ -61,9 +61,9 @@ import "./styles.css";
 import { retireShell, Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
 import { groupSection, sectionInfo, type WorkspaceSection, workspaceSection } from "./workspace";
-import { hexFor, ledgerOf, playTarget, stateKey as gameStateKey, terrainFor } from "./oligarchy";
-import { catalogSource, rules as gameRules } from "./oligarchycatalog";
-import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { playTarget } from "./oligarchyfeed";
+import { OligarchyView } from "./oligarchyview";
+import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
@@ -576,7 +576,7 @@ const RAIL: RailItem[] = [
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
   { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, plans", views: WORKSPACE_SECTIONS, home: "plans" },
-  { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
+  { id: "colony", label: "Oligarchy", icon: "colony", tip: "Oligarchy: the game, loaded from oligarchy.missionkit.io and fed by this folder's outcome ledger", views: ["colony"] },
 ];
 /** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
 const SHIP_VIEWS: WorkspaceSection[] = [
@@ -731,7 +731,7 @@ function markSettings() {
  *  its own Back). */
 function showSettings() {
   if (workspace) return showTab("settings");
-  colonyView.hide();
+  oligarchyView.hide();
   for (const t of tabs.values()) t.el.hidden = true;
   for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
   $("welcome").hidden = true;
@@ -2124,7 +2124,7 @@ const terminalsView = new TerminalsView(kitHost, {
     void terminals.create(s.argv ?? undefined, s.argv ? s.label : undefined);
   },
 });
-const colonyView = new ColonyView(kitHost, { openFolder: () => void pickFolder(), welcome: () => showWelcome() });
+const oligarchyView = new OligarchyView(kitHost, { openFolder: () => void pickFolder(), welcome: () => showWelcome() });
 const memoryView = new MemoryView(kitHost, () => showTab("decisions"));
 const healthView = new HealthView(kitHost);
 const decisionsView = new DecisionsView(kitHost);
@@ -2133,7 +2133,7 @@ const skillsView = new SkillsView(kitHost);
 const rulesView = new RulesView(kitHost);
 const commandsView = new CommandsView(kitHost);
 /** Every snapshot view, for a folder switch or a server restart. */
-const kitViews = [processesView, colonyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
+const kitViews = [processesView, oligarchyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -2304,7 +2304,7 @@ function pinViews() {
   pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
   pin("terminals", "Terminals", "terminals", "Every terminal of this window, closed drawer shells included", terminalsView.el, terminalsView);
   pin("processes", "Processes", "processes", "The kit's process list", processesView.el, processesView);
-  pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", colonyView.el, colonyView);
+  pin("colony", "Oligarchy", "overview", "The game, loaded from oligarchy.missionkit.io", oligarchyView.el, oligarchyView);
   // Workspace: one view per section, the section switch at its head.
   const openSection = (id: string) => showTab(id);
   const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void }) => {
@@ -2971,8 +2971,8 @@ async function openWorkspace(path: string) {
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
   shell.classList.remove("no-folder");
-  // The game may be on screen with no folder (`colony://play`): it stops folding until shown again.
-  colonyView.hide();
+  // The game may be on screen with no folder (`colony://play`): a folder reloads it with its data.
+  oligarchyView.hide();
   showTab("mission");
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace(workspace.root);
@@ -4176,7 +4176,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Every kit item at first level, in the operator's order, no More menu, nothing hidden.
     const RAIL_WANT: [string, string][] = [
       ["mission", "Cockpit"], ["queue", "Queue"], ["inbox", "Inbox"], ["chats", "Chats"], ["flight", "Flight Log"], ["review", "Review"],
-      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Colony"],
+      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Oligarchy"],
     ];
     const railEls = () => [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
     const railGot = railEls().map((el) => [el.dataset.tab ?? "", el.querySelector(".lbl")?.textContent ?? ""]);
@@ -4264,7 +4264,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const nv: Record<string, unknown> = {};
     const isGate = (id: string) => (view(id).querySelector(".empty-state-headline")?.textContent ?? "") === "Update the engine";
     const ver = snapshot.version;
-    for (const id of ["terminals", "processes", "colony", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
+    for (const id of ["terminals", "processes", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
       showTab(id);
       if (id === "commands") await commandsView.load();
       await wait(250);
@@ -4272,7 +4272,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await shot(`native-${id}`);
     }
     const nvOk = Object.values(nv).every((v) => !(v as { pending: boolean }).pending && (v as { rendered: number }).rendered > 0);
-    await log("native-views", nvOk && !document.querySelector("iframe") && !tabs.has("web") && !menuItems().some((i) => i.id === "web"), { version: ver, views: nv, iframes: document.querySelectorAll("iframe").length });
+    // The one frame Colony may show is the game's (checked in oligarchy-view below), never a kit page.
+    const kitFrames = [...document.querySelectorAll("iframe")].filter((f) => f !== oligarchyView.frameEl).length;
+    await log("native-views", nvOk && kitFrames === 0 && !tabs.has("web") && !menuItems().some((i) => i.id === "web"), { version: ver, views: nv, iframes: kitFrames });
     // Processes: one row per snapshot process (or the All quiet state), Copy PID copies it.
     showTab("processes");
     await wait(100);
@@ -4323,38 +4325,30 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const runBtns = view("commands").querySelectorAll('[data-act="run"]').length;
     wsLists.commands = commandsView.loadError ? isGate("commands") || !!view("commands").querySelector(".empty-state-cta") : rowsIn("commands").length === cmdRows.length && runBtns === cmdRows.filter((r) => r.run).length && !cmdRows.some((r) => (r.name === "git-prod" || r.name === "kit-prod") && r.run);
     await log("native-workspace", Object.values(wsLists).every((v) => v === true), { version: ver, decisionIndex: decIndex?.length ?? null, rules: snapshot.rules?.length ?? null, decOpen, commandsError: commandsView.loadError || null, lists: wsLists });
-    // Oligarchy (the engine): the 61-hex map with the hub on hex 0, one card per catalog
-    // structure, and a build seeded as started two hours ago (one hour long) that settles onto its
-    // hex; the hub, unique, can no longer be built.
-    const gameKey = gameStateKey(root);
-    const savedGame = localStorage.getItem(gameKey);
-    const seedGame = gameRules.newGame();
-    const seedRow = gameRules.structures.find((st) => st.terrain === "plain" && gameRules.spanOf(st.id) === 1) ?? gameRules.structures.find((st) => st.terrain === "plain");
-    const seedHex = seedRow ? hexFor(gameRules, seedGame, ledgerOf(null), seedRow.id, terrainFor(root)) : null;
-    if (seedRow && seedHex !== null) localStorage.setItem(gameKey, JSON.stringify({ ...seedGame, seq: 2, queue: [{ id: 2, structure: seedRow.id, hex: seedHex, startedAt: Date.now() - 2 * 3600_000, durationMs: 3600_000 }], spent: seedRow.cost }));
-    colonyView.invalidate();
+    // Oligarchy (kit ADR 2026-11-17 points 1, 6 and 8): the web game in one sandboxed frame from
+    // its exact origin, no engine view; offline, a new load shows the network-needed state, and
+    // back online the frame loads again. The data channel itself is unit-tested
+    // (scripts/oligarchyfeed.test.mjs); the page that answers it is not this build's to load.
     showTab("colony");
     await wait(150);
-    const cv = view("colony");
-    const hubRow = gameRules.structures.find((st) => st.id === gameRules.hub);
-    const game = snapshot.outcomeLedger
-      ? {
-          catalog: catalogSource,
-          tiles: cv.querySelectorAll(".colony-map polygon").length,
-          cards: cv.querySelectorAll('[data-act="build"]').length,
-          structures: gameRules.structures.length,
-          hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.dataset.glyph === hubRow?.glyph),
-          hubBlocked: cv.querySelector<HTMLButtonElement>(`[data-structure="${gameRules.hub}"]`)?.disabled === true,
-          settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).some((b: { structure?: string; hex?: number }) => b.structure === seedRow?.id && b.hex === seedHex),
-          placeholderChip: !!cv.querySelector('[data-catalog="placeholder"]') === (catalogSource === "placeholder"),
-          art: [...cv.querySelectorAll<HTMLImageElement>("img.colony-card-art")].map((i) => i.getAttribute("src") ?? "").every((s) => !s.startsWith("http")),
-        }
-      : { gate: isGate("colony") };
-    if (savedGame === null) localStorage.removeItem(gameKey);
-    else localStorage.setItem(gameKey, savedGame);
-    colonyView.invalidate();
-    const gameOk = "gate" in game ? game.gate === true : game.tiles === 61 && game.cards === game.structures && game.hubGlyph && game.hubBlocked && game.settled && game.placeholderChip && game.art;
-    await log("native-colony", gameOk, { ledger: snapshot.outcomeLedger ? { entries: snapshot.outcomeLedger.entries, totals: snapshot.outcomeLedger.totals } : null, ...game });
+    const gameFrame = () => oligarchyView.frameEl;
+    const game: Record<string, unknown> = {
+      state: oligarchyView.state,
+      src: gameFrame()?.getAttribute("src") ?? null,
+      sandbox: gameFrame()?.getAttribute("sandbox") ?? null,
+      frames: document.querySelectorAll("iframe").length,
+      noEngineView: !view("colony").querySelector(".colony-map, [data-act='build']"),
+      label: $("rail").querySelector('.rail-item[data-tab="colony"] .lbl')?.textContent ?? "",
+    };
+    window.dispatchEvent(new Event("offline"));
+    view("colony").querySelector<HTMLElement>('[data-act="reload"]')?.click();
+    await wait(100);
+    game.offline = oligarchyView.state === "offline" && !gameFrame() && !!view("colony").querySelector('[data-act="retry"]');
+    window.dispatchEvent(new Event("online"));
+    await wait(100);
+    game.backOnline = oligarchyView.state === "frame" && gameFrame()?.getAttribute("src") === oligarchyView.url;
+    const gameOk = game.state === "frame" && game.src === oligarchyView.url && game.sandbox === "allow-scripts allow-same-origin" && game.frames === 1 && game.noEngineView === true && game.label === "Oligarchy" && game.offline === true && game.backOnline === true;
+    await log("oligarchy-view", gameOk, game);
     // Terminals: a shell closed in the drawer bar stays listed (closed, its folder), Reopen
     // starts a new drawer shell, Focus shows the drawer; the rail item never toggles it.
     toggleTerminal(false);
@@ -5278,41 +5272,40 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
  * COLONY_SMOKE with no folder: the `colony://play` path. Started with `colony://play` it checks the
  * game the link opened; started without it, it waits for a second `colony colony://play` to reach
  * this window over the single-instance socket (COLONY_SMOKE_SOCKET=1 keeps the socket on), then
- * checks the same: the game on a new colony, nothing to build, Open folder in it, nothing saved.
+ * checks the same: the game page (or the network-needed state), Open folder and Back in its bar,
+ * nothing saved by Colony.
  */
 async function runPlaySmoke(info: StartupInfo) {
   const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   try {
     await log("play-wait", true, "no folder: waiting for colony://play");
-    for (let i = 0; i < 300 && !(colonyView.visible && !colonyView.el.hidden); i++) await wait(200);
+    for (let i = 0; i < 300 && !(oligarchyView.visible && !oligarchyView.el.hidden); i++) await wait(200);
     await wait(300);
-    const cv = colonyView.el;
-    const hubRow = gameRules.structures.find((st) => st.id === gameRules.hub);
-    const builds = [...cv.querySelectorAll<HTMLButtonElement>('[data-act="build"]')];
-    const before = Object.keys(localStorage).filter((k) => k.startsWith("oligarchy-")).length;
+    const cv = oligarchyView.el;
+    const shown = (sel: string) => {
+      const el = cv.querySelector<HTMLElement>(sel);
+      return !!el && !el.hidden;
+    };
     const d = {
       via: info.initialView === "play" ? "argv" : "socket",
-      shown: colonyView.visible && !cv.hidden,
+      shown: oligarchyView.visible && !cv.hidden,
       welcomeHidden: $("welcome").hidden,
       noFolderShell: shell.classList.contains("no-folder"),
-      catalog: catalogSource,
-      tiles: cv.querySelectorAll(".colony-map polygon").length,
-      hubGlyph: [...cv.querySelectorAll<SVGTextElement>(".colony-glyph")].some((t) => t.dataset.mark === "built" && t.dataset.glyph === hubRow?.glyph),
-      cards: builds.length,
-      structures: gameRules.structures.length,
-      allBlocked: builds.every((b) => b.disabled),
-      openFolder: !!cv.querySelector('[data-act="open-folder"]'),
-      back: !!cv.querySelector('[data-act="welcome"]'),
-      placeholderChip: !!cv.querySelector('[data-catalog="placeholder"]') === (catalogSource === "placeholder"),
-      saved: before,
+      state: oligarchyView.state,
+      src: oligarchyView.frameEl?.getAttribute("src") ?? null,
+      openFolder: shown('[data-act="open-folder"]'),
+      back: shown('[data-act="welcome"]'),
+      // Colony keeps no game state of its own any more: the page keeps its save on its origin.
+      saved: Object.keys(localStorage).filter((k) => k.startsWith("oligarchy-")).length,
       status: $("st-msg").textContent ?? "",
     };
-    const ok = d.shown && d.welcomeHidden && d.noFolderShell && d.tiles === 61 && d.hubGlyph && d.cards === d.structures && d.allBlocked && d.openFolder && d.back && d.placeholderChip && d.saved === 0 && !/Open a folder first/.test(d.status);
+    const reached = d.state === "frame" ? d.src === oligarchyView.url : d.state === "offline";
+    const ok = d.shown && d.welcomeHidden && d.noFolderShell && reached && d.openFolder && d.back && d.saved === 0 && !/Open a folder first/.test(d.status);
     await log("play-no-folder", ok, d);
     cv.querySelector<HTMLElement>('[data-act="welcome"]')?.click();
     await wait(200);
-    await log("play-back", !$("welcome").hidden && cv.hidden && !colonyView.visible, { welcome: !$("welcome").hidden, gameHidden: cv.hidden });
+    await log("play-back", !$("welcome").hidden && cv.hidden && !oligarchyView.visible, { welcome: !$("welcome").hidden, gameHidden: cv.hidden });
     // Settings with no folder (kit ADR 2026-10-24 amend 2026-11-11, point 2): the gear shows
     // the view over the welcome screen with its own Back (the strip is not on screen), the
     // settings.json row names the file instead of opening a tab, and Back returns to welcome.
@@ -5359,17 +5352,17 @@ function showPlayWithoutFolder() {
   for (const t of tabs.values()) t.el.hidden = true;
   for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
   $("welcome").hidden = true;
-  colonyView.el.hidden = false;
-  colonyView.invalidate();
-  colonyView.show();
+  oligarchyView.el.hidden = false;
+  oligarchyView.invalidate();
+  oligarchyView.show();
   markSettings();
 }
 
 /** Back to the welcome screen from the game or the Settings view with no folder. */
 function showWelcome() {
   if (workspace) return;
-  colonyView.hide();
-  colonyView.el.hidden = true;
+  oligarchyView.hide();
+  oligarchyView.el.hidden = true;
   settingsView.hidden = true;
   $("welcome").hidden = false;
   markSettings();

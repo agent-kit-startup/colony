@@ -35,7 +35,7 @@
         { "id": "view:terminals", "label": "Terminals" },
         { "id": "view:processes", "label": "Processes" },
         { "id": "view:workspace", "label": "Workspace" },
-        { "id": "view:colony", "label": "Colony" },
+        { "id": "view:colony", "label": "Oligarchy" },
         { "id": "view:plans", "label": "Plans" },
         { "separator": true },
         { "id": "explorer", "label": "Show or hide the Explorer" },
