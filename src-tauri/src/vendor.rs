@@ -15,23 +15,33 @@
 //!   command `run-plan-all`), and its gates reach the Inbox.
 //!
 //! The allowlist is the set of kit and factory command names compiled in here; the kit's
-//! catalog can only narrow it (catalog.rs: meta rows outside the factory workspace, project
-//! rows), never add a name. `/git-prod` and `/kit-prod` are interactive only: an interactive
+//! catalog can only narrow it for those names (catalog.rs: meta rows outside the factory
+//! workspace). The one widening is a `project` row, a command file the opened folder added
+//! itself: it runs as an interactive first prompt (operator reply of 2026-11-20, ADR amend
+//! 2026-11-16 decision 6). Its name comes only from the catalog Rust read for that folder
+//! (`set_project_run`), never from the page, it cannot reuse a compiled name, and it takes at
+//! most one plain token after the slash. Repository text can therefore put a command in front
+//! of the agent: that risk was accepted, and the paths below still refuse it. `/git-prod` and `/kit-prod` are interactive only: an interactive
 //! tab may open with them (the page asks its native confirm first, and the routine's own gate
 //! inside the session is the yes), while the driver (agent.rs `agent_start`), the queue
 //! runner and every pre-answer path refuse them (ADR 2026-10-22 commands-catalog contract,
 //! amend 2026-11-16 run with context).
 
-use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use crate::{agent, chats, tools};
+use serde::Serialize;
+use tauri::State;
+
+use crate::{agent, chats, tools, workspace, AppState};
 
 /// Slash commands a cockpit button may hand to an interactive agent as its first prompt:
 /// every kit and factory command (kit `.cursor/commands/`, catalog 1.1.0). Each of them asks
 /// its own questions in the interactive session (plan and backlog write gates, onboard Hard
 /// Stop 3, the CRUD confirmations, the git staging and prod gates), answered there by the
 /// user; Colony never answers or auto-applies them. Which rows the page offers is narrowed by
-/// the catalog (catalog.rs `run`): meta rows only in the factory workspace, project rows never.
+/// the catalog (catalog.rs `run`): meta rows only in the factory workspace. Project rows run
+/// from a separate, per-folder set (`set_project_run`).
 /// The reserved `agent-kit` refresh name is not a command row and stays out.
 const PROMPT_SLASH: &[&str] = &[
     "agent-kit-onboard",
@@ -104,6 +114,31 @@ pub const GOAL_CONTEXT: &[&str] = &["backlog-add", "dogfood", "hotfix", "qa", "s
 /// Byte cap of a goal after `/name `.
 pub const MAX_CONTEXT: usize = 4096;
 
+/// The `project` command names the last catalog read reported as runnable, with the folder it
+/// was read for. Only catalog.rs writes it, from the engine's own output for that folder.
+static PROJECT_RUN: Mutex<Option<(PathBuf, Vec<String>)>> = Mutex::new(None);
+
+/// A name a `project` row may run under: not a compiled kit or factory name (a project file
+/// cannot stand in for one, nor for the prod floor) and not the reserved `agent-kit` refresh.
+pub fn project_runnable(name: &str) -> bool {
+    !PROMPT_SLASH.contains(&name) && !INTERACTIVE_ONLY.contains(&name) && name != "agent-kit"
+}
+
+/// Record the runnable `project` names of `root`'s catalog (an empty list clears them).
+pub fn set_project_run(root: &Path, names: Vec<String>) {
+    if let Ok(mut g) = PROJECT_RUN.lock() {
+        *g = Some((root.to_path_buf(), names.into_iter().filter(|n| project_runnable(n)).collect()));
+    }
+}
+
+/// The runnable `project` names recorded for `root`; none for another folder.
+fn project_run(root: &Path) -> Vec<String> {
+    match PROJECT_RUN.lock() {
+        Ok(g) => g.as_ref().filter(|(r, _)| r == root).map(|(_, n)| n.clone()).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TermLaunch {
@@ -143,15 +178,22 @@ fn valid_token(a: &str) -> bool {
 
 /// `/name`, `/name <goal>` for a `GOAL_CONTEXT` command (free text, `valid_context`), or
 /// `/name <token>` for any other allowlisted command. The whole prompt is one argv element:
-/// no shell ever sees it.
+/// no shell ever sees it. (`valid_prompt_in` with no project rows; the launch path calls that.)
+#[cfg(test)]
 pub fn valid_prompt(p: &str) -> bool {
+    valid_prompt_in(p, &[])
+}
+
+/// `valid_prompt`, plus `/name` or `/name <token>` for a name in `project` (the opened folder's
+/// runnable project rows, `set_project_run`). A project row never takes free text.
+pub fn valid_prompt_in(p: &str, project: &[String]) -> bool {
     let Some(rest) = p.strip_prefix('/') else { return false };
     let (name, arg) = match rest.split_once(' ') {
         Some((n, a)) => (n, Some(a)),
         None => (rest, None),
     };
     if !PROMPT_SLASH.contains(&name) {
-        return false;
+        return project_runnable(name) && project.iter().any(|n| n == name) && arg.is_none_or(valid_token);
     }
     match arg {
         None => true,
@@ -182,7 +224,14 @@ fn vendor_for(engine: &str, find: &dyn Fn(&str) -> Option<String>) -> Result<(St
     Err(format!("{} not found on PATH", order.join(" or ")))
 }
 
+#[cfg(test)]
 fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, resume: Option<&str>, dry_run: bool, find: &dyn Fn(&str) -> Option<String>) -> Result<TermLaunch, String> {
+    plan_in(kind, engine, model, prompt, resume, dry_run, &[], find)
+}
+
+/// `project`: the opened folder's runnable project rows; only an interactive tab reads it.
+#[allow(clippy::too_many_arguments)]
+fn plan_in(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, resume: Option<&str>, dry_run: bool, project: &[String], find: &dyn Fn(&str) -> Option<String>) -> Result<TermLaunch, String> {
     let model = model.map(str::trim).filter(|m| !m.is_empty());
     if let Some(m) = model {
         if !agent::valid_model(m) {
@@ -196,7 +245,7 @@ fn plan(kind: &str, engine: &str, model: Option<&str>, prompt: Option<&str>, res
         "interactive" => {
             let prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
             if let Some(p) = prompt {
-                if !valid_prompt(p) {
+                if !valid_prompt_in(p, project) {
                     return Err(format!("Not an allowlisted kit command: {p}"));
                 }
             }
@@ -263,11 +312,15 @@ fn find_real(name: &str) -> Option<String> {
 /// Resolve the argv for a terminal-tab launch; the page then spawns it with `pty_spawn`
 /// (cwd = the opened folder).
 #[tauri::command]
-pub fn term_launch(kind: String, engine: String, model: Option<String>, prompt: Option<String>, resume: Option<String>, dry_run: Option<bool>) -> Result<TermLaunch, String> {
+pub fn term_launch(state: State<'_, AppState>, kind: String, engine: String, model: Option<String>, prompt: Option<String>, resume: Option<String>, dry_run: Option<bool>) -> Result<TermLaunch, String> {
     if kind == "run-plan-all" {
         agent::check_engine(&engine)?;
     }
-    plan(&kind, &engine, model.as_deref(), prompt.as_deref(), resume.as_deref(), dry_run.unwrap_or(false), &find_real)
+    let project = match (kind.as_str(), workspace::workspace_root(&state)) {
+        ("interactive", Ok(root)) => project_run(&root),
+        _ => Vec::new(),
+    };
+    plan_in(&kind, &engine, model.as_deref(), prompt.as_deref(), resume.as_deref(), dry_run.unwrap_or(false), &project, &find_real)
 }
 
 #[cfg(test)]
@@ -516,5 +569,34 @@ mod tests {
         };
         let l = plan("run-plan-all", "claude", None, None, None, false, &managed).unwrap();
         assert_eq!(l.argv, vec!["/data/runtime/node", "/data/engine/6.3.0/dist/index.js", "run-plan-all", "--backend", "claude"]);
+    }
+
+    /// Project rows (operator reply 2026-11-20): only names from the folder's catalog, never a
+    /// compiled or prod name, never free text, and only for the folder the catalog was read for.
+    #[test]
+    fn project_rows() {
+        use super::{plan_in, project_run, set_project_run, valid_prompt_in};
+        let project = vec!["deploy-site".to_string()];
+        assert!(valid_prompt_in("/deploy-site", &project));
+        assert!(valid_prompt_in("/deploy-site v1.2.0", &project));
+        assert!(!valid_prompt_in("/deploy-site ship it now", &project), "free text");
+        assert!(!valid_prompt_in("/deploy-site ../etc", &project));
+        assert!(!valid_prompt_in("/deploy-site -rf", &project));
+        assert!(!valid_prompt("/deploy-site"), "not without the catalog set");
+        assert!(!valid_prompt_in("/other-thing", &project));
+        // A project set can never carry a compiled name past the compiled grammar.
+        let shadow = vec!["git-prod".to_string(), "agent-kit".to_string(), "run-plan".to_string()];
+        assert!(!valid_prompt_in("/agent-kit", &shadow));
+        assert!(!valid_prompt_in("/run-plan free text here", &shadow));
+        let t = plan_in("interactive", "claude", None, Some("/deploy-site"), None, false, &project, &find).unwrap();
+        assert_eq!(t.argv, ["/bin/claude", "/deploy-site"]);
+        assert!(plan_in("run-plan-all", "claude", None, Some("/deploy-site"), None, false, &project, &find).is_ok_and(|l| !l.argv.iter().any(|a| a.contains("deploy-site"))));
+        // The recorded set is per folder and drops compiled names.
+        let root = std::path::Path::new("/tmp/colony-project-rows-test");
+        set_project_run(root, vec!["deploy-site".into(), "git-prod".into(), "handoff".into()]);
+        assert_eq!(project_run(root), ["deploy-site"]);
+        assert!(project_run(std::path::Path::new("/tmp/elsewhere")).is_empty());
+        set_project_run(root, Vec::new());
+        assert!(project_run(root).is_empty());
     }
 }

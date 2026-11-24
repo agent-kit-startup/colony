@@ -268,6 +268,8 @@ mod tests {
             assert!(e.contains("interactive tab"), "{c}: {e}");
         }
         assert!(super::run_command("git-staging").is_err());
+        // A project row (a command file the folder added) is never a driver command.
+        assert!(super::run_command("deploy-site").is_err() && super::run_command("/deploy-site").is_err());
     }
 
     #[test]

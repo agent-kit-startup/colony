@@ -9,7 +9,10 @@
 //! `context` (what the launch may append after the slash), `interactiveOnly` (`/git-prod`,
 //! `/kit-prod`, also forced by vendor.rs) and `audience`: a `meta` row is hidden and never
 //! runs outside the factory workspace (a catalog with factory-layer rows), and a `project`
-//! row (a file the workspace added) stays copy. An older catalog without those fields keeps
+//! row (a file the workspace added) runs too, under a name that is not a compiled one
+//! (operator reply of 2026-11-20, decision 6 of that amend: repository text can define what
+//! runs, accepted). `commands_catalog` hands those names to vendor.rs for the folder, so
+//! `term_launch` checks the set Rust read, never a name from the page. An older catalog without those fields keeps
 //! the pre-1.1.0 behavior: vendor.rs `LEGACY_RUN`, factory rows copy. Catalog text is untrusted: names
 //! must match the schema pattern (others are dropped), descriptions are plain text with
 //! control characters removed and a length cap; the page renders them as text only.
@@ -110,7 +113,11 @@ pub fn parse(stdout: &str) -> Result<Catalog, String> {
         }
         let audience = if fields { field(r, "audience", &["user", "meta"], "user") } else { "user" };
         let hidden = audience == "meta" && !factory;
-        let run = if fields { layer != "project" && !hidden && vendor::runnable(name) } else { layer != "factory" && vendor::LEGACY_RUN.contains(&name) };
+        let run = match (fields, layer) {
+            (true, "project") => !hidden && vendor::project_runnable(name),
+            (true, _) => !hidden && vendor::runnable(name),
+            (false, _) => layer != "factory" && vendor::LEGACY_RUN.contains(&name),
+        };
         commands.push(CommandRow {
             name: name.to_string(),
             description: clean_text(r.get("description").and_then(Value::as_str).unwrap_or("")),
@@ -152,10 +159,18 @@ fn load(root: &Path) -> Result<Catalog, String> {
     parse(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The runnable `project` rows of a catalog: what `term_launch` may open for its folder.
+fn project_names(c: &Catalog) -> Vec<String> {
+    c.commands.iter().filter(|r| r.layer == "project" && r.run).map(|r| r.name.clone()).collect()
+}
+
 /// The opened folder's commands catalog, each row marked run or copy.
 #[tauri::command(async)]
 pub fn commands_catalog(state: State<'_, AppState>) -> Result<Catalog, String> {
-    load(&workspace::workspace_root(&state)?)
+    let root = workspace::workspace_root(&state)?;
+    let catalog = load(&root);
+    vendor::set_project_run(&root, catalog.as_ref().map(project_names).unwrap_or_default());
+    catalog
 }
 
 #[cfg(test)]
@@ -232,8 +247,9 @@ mod tests {
         assert!(row("git-prod").interactive_only);
         // Meta: hidden and never run outside the factory workspace.
         assert!(row("review-pack").hidden && !row("review-pack").run);
-        // A project row never runs: repo text cannot grant execution.
-        assert!(!row("deploy-site").run && !row("deploy-site").hidden);
+        // A project row runs (operator reply 2026-11-20), and is handed to vendor.rs.
+        assert!(row("deploy-site").run && !row("deploy-site").hidden);
+        assert_eq!(super::project_names(&c), ["deploy-site"]);
         // Unknown values fall back; a non-boolean interactiveOnly is false.
         assert_eq!((row("summary").context.as_str(), row("summary").audience.as_str(), row("summary").interactive_only), ("none", "user", false));
         // The catalog may add interactive-only rows, never remove the prod floor.
@@ -300,5 +316,21 @@ mod tests {
         assert!(row("git-prod").is_some_and(|r| r.interactive_only));
         assert!(c.commands.iter().filter(|r| r.hidden).all(|r| !r.run));
         eprintln!("catalog {} kit {}: {} rows, {} run, {} dropped", c.catalog_version, c.kit_version, c.commands.len(), c.commands.iter().filter(|r| r.run).count(), c.dropped);
+    }
+
+    /// Project rows run, but never under a compiled name and never when hidden as meta.
+    #[test]
+    fn project_rows_run_under_their_own_names() {
+        let c = parse(r#"{ "catalogVersion": "1.1.0", "kitVersion": "6.22.0", "commands": [
+          {"name":"deploy-site","description":"Ship.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"git-prod","description":"Shadow.","layer":"project","headless":false,"context":"sha","interactiveOnly":false,"audience":"user"},
+          {"name":"run-plan","description":"Shadow.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"agent-kit","description":"Reserved.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"internal-tool","description":"Meta.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"meta"}
+        ] }"#).unwrap();
+        let run: Vec<&str> = c.commands.iter().filter(|r| r.run).map(|r| r.name.as_str()).collect();
+        assert_eq!(run, ["deploy-site"]);
+        assert_eq!(super::project_names(&c), ["deploy-site"]);
+        assert!(c.commands.iter().any(|r| r.name == "git-prod" && r.interactive_only && !r.run));
     }
 }
