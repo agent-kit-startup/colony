@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "6.2.0",
+  "version": "6.22.0",
   "protected": [
     ".claude/commands/agent-kit-onboard.md",
     ".claude/commands/agent-kit.md",
@@ -43,17 +43,15 @@
     "CLAUDE.md"
   ],
   "profile": "default",
+  "personalization": {
+    "contractVersion": 1,
+    "generatorVersion": "6.22.0",
+    "origin": "repository-profile",
+    "resultPath": ".cursor/context/personalization.json"
+  },
   "registry": {
     "url": "https://github.com/agent-kit-startup/agent-kit",
     "ref": "main"
   },
-  "packs": [],
-  "skills": [],
-  "personalization": {
-    "contractVersion": 1,
-    "generatorVersion": "6.2.0",
-    "origin": "repository-profile",
-    "resultPath": ".cursor/context/personalization.json"
-  },
-  "installedAt": "2026-10-18T14:29:38.664Z"
+  "installedAt": "2026-11-24T10:58:55.331Z"
 }

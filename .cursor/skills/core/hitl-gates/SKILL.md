@@ -8,17 +8,18 @@ disable-model-invocation: true
 
 # HITL gates
 
-Kit-wide human-in-the-loop. Commands stay Goal + five hard stops + Ask labels + a link here. Per-command procedures, one hop each: [run-plan-tick-contract.md](run-plan-tick-contract.md), [start-project-intake.md](start-project-intake.md), [run-plan-all-queue.md](run-plan-all-queue.md), [pending-ticket.md](pending-ticket.md); `/continue-plan` is inline in its own command file (`procedures.md` is a redirect stub only). Always-applied short rule: `.cursor/rules/hitl-ask-questions.mdc`.
+Kit-wide human-in-the-loop. Commands stay Goal + five hard stops + Ask labels + a link here. Per-command procedures, one hop each: [run-plan-tick-contract.md](run-plan-tick-contract.md), [start-project-intake.md](start-project-intake.md), [run-plan-all-queue.md](run-plan-all-queue.md), [pending-ticket.md](pending-ticket.md); `/continue-plan` is inline in its own command file. Always-applied short rule: `.cursor/rules/hitl-ask-questions.mdc`.
 
 ## Contract
 
 1. Any confirmation, choice, or clarification before acting uses **Ask questions** (`AskQuestion` / ACP `cursor/ask_question`). Do not ask the user to type yes.
 2. Prefer one question at a time.
 3. Options are concrete labels (tables below). Do not invent a fake tool call.
-4. **Numbered-list fallback is path 1** when the tool is not in the session toolset. Say the tool is missing once, print one `HITL_GATE: <ask-id> | <labels>` line and the same labels as a numbered list (block below), accept number or label, and treat a typed answer as Other. Do not invent a fake tool call. Tip: switch to a model that exposes Ask questions for the clickable UI. Matrix: `.cursor/memory/decisions/2026-07-20_ask-questions-model-availability.md`.
+4. **Numbered-list fallback is path 1** when the tool is not in the session toolset. Say the tool is missing once, print one `HITL_GATE: <ask-id> | <labels>` line and the same labels as a numbered list (block below), accept number or label, and treat a typed answer as Other. Matrix: `.cursor/memory/decisions/2026-07-20_ask-questions-model-availability.md`.
 5. Skipped or cancelled answers mean **stop** (same as no yes).
 6. Do not fabricate HITL in HANDOFF. Parked / approved / deferred / confirmed / stopped-by-operator need Ask id, operator reply, or `agent-inferred`. In a headless run the operator reply arrives as a `HITL_REPLY: <ask-id> | operator reply <n> | <label>` line; cite that line.
 7. CLI `agent-kit init` keeps `@clack/prompts`. Do not call IDE Ask questions from the CLI.
+8. **Check in** before each Ask and plan write: `agent-kit queue lease`; `Queue lease held:` means stop and report it ([tick contract](run-plan-tick-contract.md)).
 
 ## Default-path Ask inventory
 
@@ -68,9 +69,11 @@ Never steal `/git-prod`. Exhaustion Ask/arm is after Final HANDOFF and the prod 
 | Confirm queue | `queue-confirm` | `Run as proposed` / `Run plans only` / `Edit order` / `Apply merges & drops only` / `Keep all plans as-is` / `Include Gate-B plans` / `Cancel` |
 | Context checkpoint (plan boundary, ~50% window) | `context-checkpoint` | `Continue queue` / `Stop and prepare handoff` / `Change queue` |
 | Novel error / expired wait | `novel-failure` | `Retry recovery once` / `Hold and document` / `Stop the queue` |
+| Queue end, deferred rows (after Final HANDOFF) | `queue-end-gates` | `Resolve gates now` / `Print resolution prompt` / `Later` |
+| Promote PR merge wait cap | `promote-merge-wait` | `Keep waiting` / `Show the merge box reason` / `Stop and hand off` |
 | Malformed Task summary | `malformed-summary` | Ask before advancing the cursor |
 
-Asks only at queue confirm, context checkpoint, and novel error / expired wait (ADR `2026-09-25_run-plan-all-three-hitl-points.md`). Drift Ask only when a Backlog plan appeared after the last queue confirm (`- **Confirmed backlog:**`); a stable Backlog already present at confirm is not drift. No mid-queue triage Ask. Queue-end `/plan-review-triage` then `/git-prod` suggestion as separate HITL.
+Asks only at these rows (ADR `2026-09-25_run-plan-all-three-hitl-points.md`, Amend 2026-10-26). Drift only for Backlog new since `- **Confirmed backlog:**`. No mid-queue triage Ask. Queue end: `queue-end-gates`, `/plan-review-triage`, `/git-prod` suggestion, separately.
 
 ### Other surfaces
 
@@ -81,16 +84,18 @@ Asks only at queue confirm, context checkpoint, and novel error / expired wait (
 | `/backlog-edit` | `Edit [plan-file]` / `Cancel` |
 | `/backlog-delete` | `Delete [plan-file] from backlog` / `Cancel` |
 | `/backlog-cancel` | `Cancel [plan-file] on backlog` / `Keep on backlog` |
+| `/cancel-plan` | Id `cancel-plan`: `Cancel active plan [plan-file]` / `Keep the active plan` |
 | `/git-prod` | `Proceed with production deploy` / `Review changes first` / `Cancel`. Claude lane (or recorded classifier denial): `I pushed main` / `Open staging→main PR instead` / `Cancel` |
 | `/hotfix` | `Write mini plan and run` / `Write mini plan only (stop)` / `Modify proposal first` / `Cancel` |
 | `/qa` | Mode (when ambiguous): `QA this release` / `Repro this bug` / `Claims only` / `Cancel`. Scratch install: `Use a scratch git repo` / `QA this checkout only` / `Cancel`. Playbook: `.cursor/skills/core/qa/SKILL.md` |
 | `/plan-review-triage` | Write residuals / Fix nits only / Ack and stop. Residuals write uses backlog-add labels. Multi-path: one Ask when remaining monitors share a uniform class |
+| `/field-report-resolve` | Cadence id, per owed plan (id `plan-verdict`): `Delivered nothing` / `Superseded` / `Keep owed` |
 | `/handoff` / guardian | `Automatic handoff` / `Manual handoff` (first time) |
 | `install.md` | Registry URL/ref; migrate nested `agent-kit/`; optional git-hooks |
 | `/agent-kit-onboard` | One unresolved essential at a time. Domain skills: `Scaffold domain skills` / `Defer (record reason)` / `Skip` |
 | Pending ticket (preflight, only while `.cursor/context/gate-exit.json` has a pending entry) | Id `ticket`: `Read the ticket` / `Accept` / `Discard` / `Later`. Unattended: list stamps, no Ask. Commands and effects: [pending-ticket.md](pending-ticket.md) |
 
-`/git-prod` and factory `/kit-prod`: one `Proceed with production deploy` is one ship (one SemVer close, one annotated `v*` tag, one promote). A red or unfinished post-prod verification (tag CI, or the wrapper's release checks) is a STOP. The next patch needs a new Ask. Labels in the table stay exact. A `/run-plan-all` queue confirm that sets Ship auth `per-plan-release` is that yes for one ship per completed plan. It does not open this Ask again, and a red post-prod verification still stops the queue.
+`/git-prod` and factory `/kit-prod`: one `Proceed with production deploy` is one ship (one SemVer close, one annotated `v*` tag, one promote). A red or unfinished post-prod verification (tag CI, or the wrapper's release checks) is a STOP. The next patch needs a new Ask. A `/run-plan-all` queue confirm that sets Ship auth `per-plan-release` is that yes for one ship per completed plan. It does not open this Ask again, and a red post-prod verification still stops the queue.
 
 ### Wrapper commands (not consumer L0)
 
@@ -98,7 +103,7 @@ A project may wrap `/git-staging` / `/git-prod` (the kit factory keeps `/kit-sta
 
 ## Numbered fallback (path 1)
 
-When Ask questions is absent, the numbered list is **mandatory** (path 1, not optional). Do not invent a fake tool call. Print the `HITL_GATE:` sentinel line immediately before the list, in the same message: it is how a headless run (`agent-kit run`, `run-plan`, `run-plan-all`) detects the gate and relays the operator's answer (ADR `2026-09-19_headless-hitl-transport-and-live-tui.md`).
+When Ask questions is absent, the numbered list is **mandatory** (path 1). Print the `HITL_GATE:` sentinel line immediately before the list, in the same message: it is how a headless run (`agent-kit run`, `run-plan`, `run-plan-all`) detects the gate and relays the operator's answer (ADR `2026-09-19_headless-hitl-transport-and-live-tui.md`).
 
 ```text
 Ask questions is not available in this session. Reply with the number or the label. You can also type your own answer (Other).
@@ -109,10 +114,10 @@ HITL_GATE: <ask-id> | <label-a> | <label-b> | <label-c>
 3. <label-c>
 ```
 
-One numbered list per message. Accept number or label. A typed answer that is not a number or label is Other.
+One numbered list per message.
 
 Sentinel rules: one line, column 0, `HITL_GATE: <ask-id> | <label 1> | ... | <label n>`.
-`<ask-id>` is the kebab-case id from the tables above (`gate-a`, `gate-b`, `risk`, `inbox`, `exhaustion`, `owed-close`, `queue-drift`, `queue-confirm`, `context-checkpoint`, `novel-failure`, `malformed-summary`, `next-unit`, `backlog-write`, `ticket`); labels are the exact table labels, in list order, separated by ` | ` (no label contains `|`).
+`<ask-id>` is the kebab-case id from the tables above (`gate-a`, `gate-b`, `risk`, `inbox`, `exhaustion`, `owed-close`, `queue-drift`, `queue-confirm`, `context-checkpoint`, `novel-failure`, `queue-end-gates`, `promote-merge-wait`, `malformed-summary`, `next-unit`, `plan-verdict`, `backlog-write`, `cancel-plan`, `ticket`); labels are the exact table labels, in list order, separated by ` | ` (no label contains `|`).
 Surfaces without a listed id keep the numbered list without a sentinel (the headless runner detects them by the wording above as a prose fallback). `git-prod` and `kit-prod` are never relayed headless: the run stops and points at the operator slash.
 The operator's answer comes back as one line, `HITL_REPLY: <ask-id> | operator reply <n> | <label>` (or `operator reply other | <typed text>`); cite it as the Ask provenance in HANDOFF. Never assume a reply: no answer means stop.
 
@@ -130,7 +135,7 @@ Inline-first allowlist, findings authorship, worker prompt, headless runner, and
 
 ## /continue-plan compressed
 
-Read HANDOFF first. Plans inventory is index + HANDOFF only (ADR `2026-07-26_command-orchestration-delegation-pattern.md`). Default-path Ask is the next-unit confirm (or the multi-plan picker when more than one resumable plan exists). Persona chrome after the entry Ask. One unit per chat unless `/run-plan`. Full procedure: `.cursor/commands/continue-plan.md` (inline, no separate skill page).
+Read HANDOFF first. Plans inventory is index + HANDOFF only. Default-path Ask: next-unit confirm (multi-plan picker first when several plans resume). Persona chrome after the entry Ask. One unit per chat unless `/run-plan`. Procedure: `.cursor/commands/continue-plan.md`.
 
 ## /start-project compressed
 
@@ -138,5 +143,5 @@ Broad Intake (index + HANDOFF only; no `.cursor/plans/*.plan.md` glob) → Gate 
 
 ## /run-plan-all compressed
 
-Pure orchestrator. PO synthesis (Task explore) → start-vs-resume or queue confirm (write `- **Confirmed backlog:**`) → one Task per plan. Context checkpoint at plan boundaries when window self-estimate is ~50%+ (`Continue queue` / `Stop and prepare handoff` / `Change queue`). Novel error / expired wait: `Retry recovery once` / `Hold and document` / `Stop the queue`.
+Pure orchestrator. PO synthesis (Task explore) → start-vs-resume or queue confirm (write `- **Confirmed backlog:**`) → one Task per plan. Checkpoint (~50%+ window), novel error / expired wait, promote merge wait cap: labels above.
 When Ship auth is `per-plan-release`, one release per completed plan before the next. `Run plans only` does not promote. Mid-batch audits wait, no triage Ask. Queue-end wait then `/plan-review-triage`. Details: [run-plan-all-queue.md](run-plan-all-queue.md).
