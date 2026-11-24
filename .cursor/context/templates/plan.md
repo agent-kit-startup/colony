@@ -43,6 +43,7 @@ Optional fields in the frontmatter of each `todos` item (see `autogit/plan-routi
 | `worker_type` | string | Preferred Task `subagent_type` (orchestrated strategy); omit = routing table in `/run-plan` |
 | `inline_first` | boolean | Opt-in signal for orchestrated `/run-plan` in-session implement. **Not force-inline.** Ignored unless every lightweight check passes (see `/run-plan` and authoring note below) |
 | `force_task` | boolean | Always Task dispatch; overrides inline-first even when lightweight |
+| `evidence` | string | Written at close on a delivered to-do. Lead with structured delivery refs: `<repo>#<n>` per PR (`my-app#42`, `my-lib#7`, no space before `#`) and `merged <sha>` per merge commit; prose after. The Field Report owed classifier reads the refs (older plans with bare `#n` fall back to prose refs) |
 
 ### Authoring `inline_first` (do not mislead)
 
@@ -87,9 +88,9 @@ When `/start-project`, `/backlog-add`, or `/run-plan` (first tick) encounters op
 
 Closes the parked use case in `decisions/2026-08-13_plan-intake-persist-originals.md`.
 
-### Ledger regeneration boundary
+### Knowledge-classification gate
 
-Do not confuse "a companion plan owns the stale-ledger residual" with "ledger regeneration is forbidden here." The knowledge-classification evidence gate resolves Audits targets against git-tracked files, so any change that introduces or reclassifies a tracked `.cursor/memory/**` file must regenerate `docs/evidence/knowledge-classification.json` in the same commit. Regeneration is required for the technical necessity of tracking new files; it is only forbidden as a duplicate residual-cleanup to-do when another plan has already committed to that specific stale-ledger residual. ADR: `decisions/2026-08-08_ledger-regen-policy.md`.
+The knowledge-classification evidence gate validates a fresh census of the tracked tree; the ledger is not committed, so no to-do regenerates it. A change that adds an `_index` row must track its target in the same commit (R14), or the gate fails on `missingIndexTargets`. ADR: `decisions/2026-10-19_knowledge-classification-untracked.md`.
 
 ### Split docs-only vs product ticks
 
