@@ -3,9 +3,10 @@
 //! contract). Colony keeps no list of its own: the rows come from the engine that runs
 //! agent-kit, read from the opened folder's `.cursor/commands/`.
 //!
-//! Every row is either "run" or "copy". A row runs only when its name is in vendor.rs
-//! `PROMPT_SLASH` (the same check `term_launch` repeats); the catalog can only narrow that
-//! (ADR 2026-10-22 amend 2026-11-16, run with context). From catalog 1.1.0 a row also carries
+//! Every row is either "run" or "copy". A kit or factory row runs only when its name is in
+//! vendor.rs `PROMPT_SLASH` (the same check `term_launch` repeats), and the catalog can only
+//! narrow that (ADR 2026-10-22 amend 2026-11-16, run with context); project rows are the one
+//! widening, below. From catalog 1.1.0 a row also carries
 //! `context` (what the launch may append after the slash), `interactiveOnly` (`/git-prod`,
 //! `/kit-prod`, also forced by vendor.rs) and `audience`: a `meta` row is hidden and never
 //! runs outside the factory workspace (a catalog with factory-layer rows), and a `project`
@@ -44,7 +45,8 @@ pub struct CommandRow {
     pub layer: String,
     /// The kit can dispatch it headless: shown as a hint only.
     pub headless: bool,
-    /// Colony may hand `/<name>` to an interactive agent (PROMPT_SLASH); otherwise copy.
+    /// Colony may hand `/<name>` to an interactive agent (a `PROMPT_SLASH` name, or a project
+    /// row under its own name); otherwise copy.
     pub run: bool,
     /// What a launch may append after the slash: none, goal, plan, branch, pr or sha.
     pub context: String,
@@ -72,6 +74,12 @@ const CONTEXTS: &[&str] = &["none", "goal", "plan", "branch", "pr", "sha"];
 
 fn field<'a>(r: &'a Value, key: &str, allowed: &[&str], default: &'a str) -> &'a str {
     r.get(key).and_then(Value::as_str).filter(|v| allowed.contains(v)).unwrap_or(default)
+}
+
+/// A project row takes at most one token (vendor.rs `valid_prompt_in`): a declared goal would
+/// make the page build a launch Rust refuses, so it reads as none.
+fn context<'a>(layer: &str, declared: &'a str) -> &'a str {
+    if layer == "project" && declared == "goal" { "none" } else { declared }
 }
 
 /// Schema pattern `^[a-z0-9][a-z0-9-]{0,63}$`.
@@ -124,7 +132,7 @@ pub fn parse(stdout: &str) -> Result<Catalog, String> {
             layer: layer.to_string(),
             headless: r.get("headless").and_then(Value::as_bool).unwrap_or(false),
             run,
-            context: if fields { field(r, "context", CONTEXTS, "none") } else { "none" }.to_string(),
+            context: if fields { context(layer, field(r, "context", CONTEXTS, "none")) } else { "none" }.to_string(),
             interactive_only: vendor::interactive_only(name) || (fields && r.get("interactiveOnly").and_then(Value::as_bool).unwrap_or(false)),
             audience: audience.to_string(),
             hidden,
@@ -250,6 +258,9 @@ mod tests {
         // A project row runs (operator reply 2026-11-20), and is handed to vendor.rs.
         assert!(row("deploy-site").run && !row("deploy-site").hidden);
         assert_eq!(super::project_names(&c), ["deploy-site"]);
+        // Its declared goal reads as none: a project row never takes free text.
+        assert_eq!(row("deploy-site").context, "none");
+        assert!(!crate::vendor::valid_prompt_in("/deploy-site ship it", &super::project_names(&c)));
         // Unknown values fall back; a non-boolean interactiveOnly is false.
         assert_eq!((row("summary").context.as_str(), row("summary").audience.as_str(), row("summary").interactive_only), ("none", "user", false));
         // The catalog may add interactive-only rows, never remove the prod floor.
