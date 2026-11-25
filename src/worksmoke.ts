@@ -447,9 +447,14 @@ export async function workbenchSmoke(c: WorkSmokeCtx) {
           const card = () => c.view("git").querySelector<HTMLElement>(`.hostreq-card[data-id="${id}"]`);
           await c.until(() => !!card()?.querySelector<HTMLButtonElement>('button[data-act="approve"]:not([disabled])'), 8000);
           card()?.querySelector<HTMLButtonElement>('button[data-act="approve"]')?.click();
+          // Wait for the host's answer before reading git status: a `git status` running while
+          // the host's `git add` holds the index lock makes the add fail.
+          const decided = await c.until(() => /^stage the resolved file .*: (succeeded|failed|denied|expired)$/.test(c.statusText()) && c.statusText().includes(path), 8000);
           const staged = await untilAsync(async () => (await api.gitStatus()).files.some((f) => f.path === path && f.xy === "M "), 8000);
+          // A red run names its cause: the host's decision output for this file.
+          const out = staged ? undefined : [...c.view("git").querySelectorAll(".hostreq-done-out")].map((e) => (e.textContent ?? "").slice(0, 300)).find((t) => t.includes(path)) ?? c.statusText();
           c.showTab("conflicts");
-          return { req, staged };
+          return { req, decided, staged, out };
         };
         r.opened = sel().includes(cfg);
         r.sides = (w.querySelector(".cf-sides")?.textContent ?? "").replace(/\s+/g, " ").slice(0, 160);
