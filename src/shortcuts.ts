@@ -24,7 +24,7 @@ export function openShortcutsPanel(rows: readonly ShortcutRow[]) {
     { class: "engine-box", role: "dialog", "aria-label": "Keyboard shortcuts" },
     h("div", { class: "card-title" }, "Keyboard shortcuts", h("span", { class: "spacer" }), btn("✕", closeShortcutsPanel, { class: "icon", title: "Close" })),
     ...rows.map((r) => h("div", { class: "engine-row shortcut-row" }, h("kbd", { class: "palette-key" }, r.keys), h("span", {}, r.name))),
-    h("div", { class: "engine-msg dim" }, "Inside a terminal, the editor or a text field, Alt+Left and Alt+Right move the cursor instead. With a terminal focused, Ctrl+O, Ctrl+P, Ctrl+W and Ctrl+1 to Ctrl+9 go to the terminal."),
+    h("div", { class: "engine-msg dim" }, "Inside a terminal, the editor or a text field, Alt+Left and Alt+Right move the cursor instead. With a terminal focused, Ctrl+O, Ctrl+P, Ctrl+W and Ctrl+1 to Ctrl+9 go to the terminal. With the editor focused, Ctrl+Alt+Shift+Up and Down copy the line (Monaco) instead of moving the tab."),
   );
   overlay = h("div", { id: "shortcuts-panel" }, box);
   overlay.addEventListener("click", (ev) => {
