@@ -7,12 +7,14 @@
 # is a bot PR behind its base, PR 14 conflicts, PR 15 has checks running, PR 16 fails a check,
 # PR 17 has merged already). `api graphql` answers the kit
 # ship lane collector (Mission Control data 1.8.0) with PR 11 open and tag CI run 4300 failed;
+# for data 1.11.0 its Ref.compare of main and staging is 3 ahead (one feat, one merge, one docs
+# commit: release pending 1) and 1 behind (staging sync due), and no promote PR merged yet.
 # put this file first on PATH as `gh` so the engine's collector reads it too.
 # It reads no credentials and makes no network call.
 if [ "$1" = api ]; then
   echo "api $2" >> gh-proof.txt
   [ "$2" = graphql ] || { echo "fake gh: unsupported: api $2" >&2; exit 2; }
-  printf '%s' '{"data":{"repo":{"pullRequests":{"totalCount":1,"nodes":[{"number":11,"title":"chore: close release 6.9.1 <img src=x onerror=alert(1)>","isDraft":false,"baseRefName":"staging","headRefName":"chore/close-release-6.9.1","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"signature-scan","status":"COMPLETED","conclusion":"SUCCESS"}]}}}}]}}]},'
+  printf '%s' '{"data":{"repo":{"base":{"compare":{"aheadBy":3,"behindBy":1,"commits":{"totalCount":3,"nodes":[{"oid":"1111111111111111111111111111111111111111","messageHeadline":"feat: smoke feature","parents":{"totalCount":1}},{"oid":"2222222222222222222222222222222222222222","messageHeadline":"Merge pull request #5 from smoke/feat","parents":{"totalCount":2}},{"oid":"3333333333333333333333333333333333333333","messageHeadline":"docs: smoke note","parents":{"totalCount":1}}]}}},"promoted":{"nodes":[]},"pullRequests":{"totalCount":1,"nodes":[{"number":11,"title":"chore: close release 6.9.1 <img src=x onerror=alert(1)>","isDraft":false,"baseRefName":"staging","headRefName":"chore/close-release-6.9.1","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"signature-scan","status":"COMPLETED","conclusion":"SUCCESS"}]}}}}]}}]},'
   printf '%s\n' '"latestRelease":{"tagName":"v6.9.0","publishedAt":"2026-10-24T00:00:00Z"},"tag":{"name":"v6.9.0","target":{"__typename":"Commit","checkSuites":{"nodes":[{"workflowRun":{"databaseId":4300,"event":"push","workflow":{"name":"Release"}},"checkRuns":{"nodes":[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"sync-public","status":"COMPLETED","conclusion":"FAILURE"}]}}]}}}}}}'
   exit 0
 fi

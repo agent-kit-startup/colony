@@ -10,3 +10,7 @@ which records each glyph's upstream file and commit):
 - Seti-UI (https://github.com/jesseweed/seti-ui, commit
   2d6c5e68b4ded73c92dac291845ee44e1182d511), Copyright (c) 2014 Jesse Weed, MIT License
   (see licenses/seti-ui.MIT.txt).
+
+Oligarchy game content is not licensed under the Apache License and is not in this
+repository or in Colony builds: the game is a web page Colony loads from its origin. Art
+already published in this repository (assets/art/) keeps the license it shipped with.

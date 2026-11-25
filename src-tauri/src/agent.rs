@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::{review, tools, workspace, AppState};
+use crate::{proctree, review, tools, workspace, AppState};
 
 /// `agent-kit run-plan --backend` values (kit 6.6.0: packages/cli/src/plan-loop/detect.ts).
 /// `openrouter` needs an engine that knows the id; an older kit refuses it.
@@ -64,7 +64,7 @@ fn queue_mode_for(protocol: Option<String>) -> QueueMode {
         "Queue runner as a driver run: its gates reach the Inbox".to_string()
     } else {
         format!(
-            "Engine driver protocol {} has no run-plan-all driver mode (needs {QUEUE_DRIVER_PROTOCOL}): the queue opens in a terminal tab; update the engine in Run → Engine…",
+            "Engine driver protocol {} has no run-plan-all driver mode (needs {QUEUE_DRIVER_PROTOCOL}): the queue opens in a terminal tab; update the engine in Settings → Engine…",
             protocol.as_deref().unwrap_or("unknown")
         )
     };
@@ -94,7 +94,7 @@ fn needs_engine(backend: &str, version: Option<&str>) -> Option<&'static str> {
 fn engine_too_old(backend: &str, version: Option<&str>) -> Result<(), String> {
     match needs_engine(backend, version) {
         Some(min) => Err(format!(
-            "{} needs engine {min} or newer (current {}): update it in Run → Engine…",
+            "{} needs engine {min} or newer (current {}): update it in Settings → Engine…",
             if backend == "openrouter" { "OpenRouter" } else { backend },
             version.unwrap_or("?")
         )),
@@ -183,18 +183,43 @@ pub struct AgentRun {
     root: PathBuf,
     child: Arc<Mutex<Child>>,
     stdin: Option<ChildStdin>,
+    /// The engine's process group (its pid: `proctree::own_group`), which the agent CLI and
+    /// its tool subprocesses inherit, and the engine's start time: an ended run stays in the
+    /// map until the next start prunes it, and its pid may name another process by then.
+    group: i32,
+    start: Option<u64>,
 }
 
 impl AgentRun {
+    /// Hard stop of one run (Kill…): the whole tree, off the calling thread so the window
+    /// does not wait for the grace period.
     pub fn kill(&mut self) {
         self.stdin = None;
-        if let Ok(mut c) = self.child.lock() {
-            let _ = c.kill();
-        }
+        let (group, start, child) = (self.group, self.start, self.child.clone());
+        std::thread::spawn(move || end_tree(&[(group, start, child)]));
     }
 
     fn alive(&self) -> bool {
         matches!(self.child.lock().map(|mut c| c.try_wait()), Ok(Ok(None)))
+    }
+}
+
+/// SIGTERM to each engine group and its descendants, the grace period, SIGKILL to what is
+/// left (kit ADR 2026-10-19 amend 2026-11-16 point 7), then the direct kill as a backstop.
+fn end_tree(runs: &[(i32, Option<u64>, Arc<Mutex<Child>>)]) {
+    let groups: Vec<(i32, Option<u64>)> = runs.iter().map(|(g, s, _)| (*g, *s)).collect();
+    proctree::end_trees(&groups, proctree::GRACE, || {
+        for (_, _, c) in runs {
+            if let Ok(mut c) = c.lock() {
+                let _ = c.try_wait();
+            }
+        }
+    });
+    for (_, _, c) in runs {
+        if let Ok(mut c) = c.lock() {
+            let _ = c.kill();
+            let _ = c.try_wait();
+        }
     }
 }
 
@@ -205,12 +230,15 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// App exit: every run's tree, all at once, before Colony returns (closing Colony kills
+    /// everything and keeps the state: the engine and the agent write it as they go).
     pub fn kill_all(&self) {
-        if let Ok(mut map) = self.runs.lock() {
-            for (_, mut run) in map.drain() {
-                run.kill();
-            }
-        }
+        let runs: Vec<AgentRun> = match self.runs.lock() {
+            Ok(mut map) => map.drain().map(|(_, r)| r).collect(),
+            Err(_) => return,
+        };
+        let trees: Vec<(i32, Option<u64>, Arc<Mutex<Child>>)> = runs.into_iter().map(|r| (r.group, r.start, r.child)).collect();
+        end_tree(&trees);
     }
 }
 
@@ -228,6 +256,48 @@ pub enum AgentEvent {
 
 #[cfg(test)]
 mod tests {
+    /// The app-exit path: a stub engine (own group, like agent_start) with an agent child and
+    /// a detached tool subprocess; `kill_all` leaves no descendant alive and empties the map.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn driver_refuses_prod() {
+        assert_eq!(super::run_command("run-plan"), Ok(false));
+        assert_eq!(super::run_command("run-plan-all"), Ok(true));
+        for c in ["git-prod", "/git-prod", "kit-prod", "/kit-prod"] {
+            let e = super::run_command(c).unwrap_err();
+            assert!(e.contains("interactive tab"), "{c}: {e}");
+        }
+        assert!(super::run_command("git-staging").is_err());
+        // A project row (a command file the folder added) is never a driver command.
+        assert!(super::run_command("deploy-site").is_err() && super::run_command("/deploy-site").is_err());
+    }
+
+    #[test]
+    fn kill_all_ends_every_run_tree() {
+        use super::{AgentRegistry, AgentRun};
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        use std::sync::{Arc, Mutex};
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sh -c 'setsid sleep 300 & echo $!; sleep 300' & echo $!; wait").stdout(Stdio::piped()).stdin(Stdio::piped());
+        crate::proctree::own_group(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let group = child.id() as i32;
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let pids: Vec<u32> = (0..2).map(|_| lines.next().unwrap().unwrap().trim().parse().unwrap()).collect();
+        let stdin = child.stdin.take();
+        let reg = AgentRegistry::default();
+        let start = crate::proctree::start_of(group);
+        reg.runs.lock().unwrap().insert(1, AgentRun { root: "/".into(), child: Arc::new(Mutex::new(child)), stdin, group, start });
+        let live = |p: u32| std::fs::read_to_string(format!("/proc/{p}/stat")).is_ok_and(|s| !s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'));
+        assert!(pids.iter().all(|p| live(*p)));
+        reg.kill_all();
+        assert!(reg.runs.lock().unwrap().is_empty());
+        for p in pids {
+            assert!(!live(p), "pid {p} survived kill_all");
+        }
+    }
+
     #[test]
     fn resolution_note_is_context_never_an_answer() {
         use super::check_note;
@@ -302,6 +372,14 @@ mod tests {
         }
     }
 
+    /// The stop after the tick is one exact line of driver protocol 1.5.0: never an answer.
+    #[test]
+    fn stop_after_tick_line() {
+        let v = super::stop_after_tick_message();
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#"{"type":"stop_after_tick"}"#);
+        assert!(v.get("askId").is_none() && v.get("reply").is_none());
+    }
+
     #[test]
     fn model_ids() {
         for ok in ["claude-opus-5-5", "gpt-5.1-codex", "sonnet[1m]", "us.anthropic.x:0"] {
@@ -324,7 +402,7 @@ mod tests {
         assert_eq!(needs_engine("openrouter", Some("?")), None);
         assert_eq!(needs_engine("claude", Some("5.0.0")), None);
         let e = engine_too_old("openrouter", Some("6.4.0")).unwrap_err();
-        assert!(e.contains("OpenRouter needs engine 6.6.0") && e.contains("current 6.4.0") && e.contains("Run → Engine…"), "{e}");
+        assert!(e.contains("OpenRouter needs engine 6.6.0") && e.contains("current 6.4.0") && e.contains("Settings → Engine…"), "{e}");
         assert!(engine_too_old("codex", Some("6.4.0")).is_ok());
     }
 
@@ -350,7 +428,9 @@ mod tests {
     /// Run queue behaves like `agent-kit run-plan-all`, which needs no stored queue and no
     /// active plan (it proposes a queue and asks queue-confirm): the top bar always offers it
     /// next to Run plan, Open interactive, Start a project and the Plans dropdown (shell ADR
-    /// amend 2026-10-26 point 1), the Mission hero keeps only Open plan and Open HANDOFF, the
+    /// amend 2026-10-26 point 1). The Mission hero's row is the card's (amend 2026-10-29: Play
+    /// is the one deliberate duplicate of the top bar's Run plan, `host.runPlan()`; Run queue
+    /// and Open interactive stay in the top bar only; Open HANDOFF is a header link), the
     /// Queue card adds no second Run queue, and no empty state sends the operator to an
     /// interactive `/run-plan-all` instead.
     #[test]
@@ -364,10 +444,11 @@ mod tests {
         let hero = slice("private hero(): HTMLElement {", "private gateStrip(");
         let button = slice("function runQueueBtn(", "\n}\n");
         assert!(button.contains("host.runQueue()") && button.contains("\"data-act\": \"run-queue\""), "runQueueBtn starts the queue runner");
-        for gone in ["runQueueBtn(", "host.runPlan()", "host.interactive()", "\"data-act\": \"run-plan\"", "\"data-act\": \"interactive\""] {
+        for gone in ["runQueueBtn(", "host.runQueue()", "host.interactive()", "planCrudButton(", "\"data-act\": \"run-plan\"", "\"data-act\": \"interactive\""] {
             assert!(!hero.contains(gone), "Mission hero still has {gone}");
         }
-        assert!(hero.contains("\"Open plan\"") && hero.contains("\"Open HANDOFF\""), "Mission hero keeps Open plan and Open HANDOFF");
+        assert_eq!(hero.matches("host.runPlan()").count(), 1, "Play on the card is the one Run plan in the hero");
+        assert!(hero.contains("cardButtons(") && hero.contains("\"Open HANDOFF\"") && hero.contains("\"data-act\": \"card-handoff\""), "Mission hero has the card row and the Open HANDOFF link");
         let card = slice("private queueCard(): HTMLElement {", "private flightCard(");
         assert!(!card.contains("runQueue()"), "Queue card adds no second Run queue in Mission");
         assert!(!card.contains("queue.length ? [acts]"), "Queue card actions do not depend on a stored queue");
@@ -452,6 +533,18 @@ pub(crate) fn check_note(note: &str) -> Result<&str, String> {
     Ok(n)
 }
 
+/// The driver runs `run-plan` (false) or `run-plan-all` (true) and nothing else. `/git-prod`
+/// and `/kit-prod` are interactive only (vendor.rs `INTERACTIVE_ONLY`): the driver refuses
+/// them by name, before the generic refusal, so the reason is explicit.
+fn run_command(command: &str) -> Result<bool, String> {
+    match command {
+        "run-plan" => Ok(false),
+        "run-plan-all" => Ok(true),
+        c if crate::vendor::interactive_only(c.trim_start_matches('/')) => Err(format!("{c} runs only in an interactive tab, never from the driver")),
+        other => Err(format!("Unknown run command: {other}")),
+    }
+}
+
 /// Start a driver run in the opened folder, or in `cwd` (another folder the operator
 /// picked, e.g. a second repository or a worktree). `command` is `run-plan` (default) or
 /// `run-plan-all`, the queue runner, which needs driver protocol 1.2.0 (`queue_mode`).
@@ -473,11 +566,7 @@ pub fn agent_start(
     }
     check_engine(&backend)?;
     let command = command.unwrap_or_else(|| "run-plan".into());
-    let queue = match command.as_str() {
-        "run-plan" => false,
-        "run-plan-all" => true,
-        other => return Err(format!("Unknown run command: {other}")),
-    };
+    let queue = run_command(&command)?;
     let note = match note.filter(|n| !n.trim().is_empty()) {
         Some(_) if !queue => return Err("--note only applies to run-plan-all".into()),
         Some(n) => Some(check_note(&n)?.to_string()),
@@ -533,7 +622,10 @@ pub fn agent_start(
         args
     };
     let mut cmd = Command::new(&kit.program);
+    // agent_start is a synchronous command, so this runs on the main thread: the parent-death
+    // signal stays armed for the life of the app. Own group: closing Colony ends the tree.
     tools::die_with_parent(&mut cmd);
+    proctree::own_group(&mut cmd);
     let mut child = cmd
         .args(&kit.args)
         .args(&args)
@@ -548,6 +640,8 @@ pub fn agent_start(
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let stdin = child.stdin.take();
+    let group = child.id() as i32;
+    let start = proctree::start_of(group);
     let child = Arc::new(Mutex::new(child));
 
     let ch_out = on_event.clone();
@@ -588,7 +682,7 @@ pub fn agent_start(
         let _ = on_event.send(AgentEvent::Exit { code });
     });
 
-    runs.insert(id, AgentRun { root: root.clone(), child, stdin });
+    runs.insert(id, AgentRun { root: root.clone(), child, stdin, group, start });
     // The note can be long and multi-line: the shown command names it, the run keeps it.
     let shown: Vec<String> = match args.iter().position(|a| a == "--note") {
         Some(i) => args[..=i].iter().cloned().chain(std::iter::once("<note>".to_string())).chain(args[i + 2..].iter().cloned()).collect(),
@@ -656,6 +750,20 @@ pub fn agent_stop(state: State<'_, AppState>, run_id: u32) -> Result<(), String>
     send_line(&state, run_id, serde_json::json!({ "type": "stop" }))
 }
 
+/// The driver protocol 1.5.0 request to end the run at the next tick boundary.
+pub(crate) fn stop_after_tick_message() -> serde_json::Value {
+    serde_json::json!({ "type": "stop_after_tick" })
+}
+
+/// `{"type":"stop_after_tick"}` (driver protocol 1.5.0): the current tick finishes, then the
+/// run ends with `run_end.reason` `stopped by request after tick <n>`, exit 0; at an open gate
+/// it is a `driver stop`, exit 4. An older engine takes it as a protocol error, so the page
+/// sends it only when the run's `run_start.protocol` is 1.5.0 or newer (src/missioncard.ts).
+#[tauri::command]
+pub fn agent_stop_after_tick(state: State<'_, AppState>, run_id: u32) -> Result<(), String> {
+    send_line(&state, run_id, stop_after_tick_message())
+}
+
 /// The deferred operator gates of the folder's last `run-plan-all` queue, read by the kit
 /// helpers with no agent and no model call (driver chat ADR 2026-10-26 point 3):
 /// `agent-kit queue gates --json` and `--prompt`. `supported` is false when the engine has
@@ -700,7 +808,7 @@ fn queue_gates_in(root: &std::path::Path, backend: &str) -> QueueGates {
         Err(e) => return unsupported(e),
     };
     let Some(decision) = out.status.success().then(|| parse_gates(&out.stdout)).flatten() else {
-        return unsupported("This engine has no `agent-kit queue gates` (and ignores `run-plan-all --note`): update it in Run → Engine… to relaunch the queue with a resolution note".into());
+        return unsupported("This engine has no `agent-kit queue gates` (and ignores `run-plan-all --note`): update it in Settings → Engine… to relaunch the queue with a resolution note".into());
     };
     let prompt = match kit_output(root, &["queue", "gates", "--prompt", "--backend", backend]) {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),

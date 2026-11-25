@@ -72,6 +72,15 @@ pub fn pr_worktree(root: &Path, pr: &Value) -> Result<PrWorktree, String> {
     // A missing field counts as a fork: Colony then never names a branch after its head.
     let fork = pr.get("isCrossRepository").and_then(Value::as_bool) != Some(false);
     let top = PathBuf::from(gitops::git(root, &["rev-parse", "--show-toplevel"])?.trim()).canonicalize().map_err(|e| e.to_string())?;
+    // The base merge below is a commit: without a committer identity git refuses it. Checked
+    // before anything is fetched or created, so a refusal leaves no half-made worktree; Colony
+    // never invents an identity for the operator.
+    if gitops::git(&top, &["var", "GIT_COMMITTER_IDENT"]).is_err() {
+        return Err(format!(
+            "Git has no committer identity (user.name and user.email) for {}, and Resolve merges origin/{base} into the PR branch. Set it with git config --global user.name \"Your Name\" and git config --global user.email you@example.com (drop --global for this repository only), then Resolve again",
+            top.display()
+        ));
+    }
     let name = top.file_name().map(|s| s.to_string_lossy().to_string()).ok_or("The repository has no folder name")?;
     let path = top.parent().ok_or("The repository has no parent folder")?.join(format!("{name}-pr-{n}"));
     let pr_ref = format!("refs/remotes/origin/pr/{n}");
@@ -150,7 +159,7 @@ mod tests {
     use serde_json::json;
 
     fn g(dir: &Path, args: &[&str]) -> String {
-        gitops::git(dir, &[&["-c", "user.name=t", "-c", "user.email=t@example.com"], args].concat()).unwrap().trim().to_string()
+        gitops::git(dir, args).unwrap().trim().to_string()
     }
 
     /// origin (bare) with main and staging; PR 5 is feat/x into staging, conflicting on a.txt.
@@ -160,6 +169,10 @@ mod tests {
         let work = d.join("repo");
         gitops::git(&d, &["init", "-q", "--bare", "-b", "main", &origin.display().to_string()]).unwrap();
         gitops::git(&d, &["clone", "-q", &origin.display().to_string(), &work.display().to_string()]).unwrap();
+        // The identity lives in the repository config (shared with its worktrees), so the base
+        // merge pr_worktree runs works on a machine with no global identity (CI runners).
+        g(&work, &["config", "user.name", "t"]);
+        g(&work, &["config", "user.email", "t@example.com"]);
         std::fs::write(work.join("a.txt"), "base\n").unwrap();
         g(&work, &["add", "-A"]);
         g(&work, &["commit", "-q", "-m", "base"]);
@@ -220,6 +233,19 @@ mod tests {
         assert!(pr_worktree(&work, &view(false)).unwrap_err().contains("not a worktree"));
         // Hostile names never reach git.
         assert!(pr_worktree(&work, &json!({ "number": 5, "headRefName": "--upload-pack=x", "baseRefName": "staging", "isCrossRepository": false })).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn no_committer_identity_is_refused_before_any_worktree() {
+        let (d, work) = setup();
+        // Empty values in the repository config override any global identity, so this stands
+        // for a machine with none (exported GIT_COMMITTER_NAME/EMAIL would still win over it).
+        g(&work, &["config", "user.name", ""]);
+        g(&work, &["config", "user.email", ""]);
+        let e = pr_worktree(&work, &view(false)).unwrap_err();
+        assert!(e.contains("no committer identity") && e.contains("git config --global user.name") && e.contains("user.email"), "{e}");
+        assert!(!d.join("repo-pr-5").exists(), "nothing created");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

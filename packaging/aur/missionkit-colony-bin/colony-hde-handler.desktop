@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Colony
+Comment=Opens the game in Colony from a colony://play link
+Exec=colony-hde %u
+Icon=colony-hde
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/colony;

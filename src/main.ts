@@ -1,7 +1,8 @@
 // Colony window: the cockpit. A vertical rail holds every kit item at first level (Cockpit,
 // Queue, Inbox, Chats, Flight Log, Review, Ship, Activity, Terminals, Processes, Workspace,
 // Colony; ADR 2026-10-24 amend 2026-10-28): it scrolls at any window height, and the
-// settings live in Workspace → Config. Every command lives in the menu bar (src/menu.json).
+// settings live in the Settings view (the top bar gear and File → Settings…; amend 2026-11-11,
+// point 2). Every command lives in the menu bar (src/menu.json).
 // The top bar carries the agent actions (Run plan, Run queue, Open interactive, Start a
 // project, a Plans dropdown) next to Go to file and Open in editor; Cockpit keeps the plan's
 // own documents. The tab strip holds documents only: one tab per agent run (its transcript), terminal tabs for
@@ -17,7 +18,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, Channel, errText, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, errText, type FileManagerLaunch, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { DriverChat, type DriverChatHost } from "./driverchat";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
@@ -25,8 +26,9 @@ import { openInBrowser } from "./browser";
 import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
-import { Editors } from "./editor";
-import { openAboutPanel } from "./about";
+import { type EditorView, Editors, editorStatus } from "./editor";
+import { freshPaneId, heir, isLeaf, leaves, MAX_PANES, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove } from "./panes";
+import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
 import { type Move, outermost } from "./treenav";
@@ -44,10 +46,13 @@ import { launches, promptPlan } from "./launches";
 import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
-import { SHORTCUTS, saveAsInitial, saveAsTarget } from "./savepath";
+import { SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
+import { closeShortcutsPanel, openShortcutsPanel } from "./shortcuts";
 import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
+import { runState } from "./drivermotion";
+import { motionSmoke } from "./motionsmoke";
 import { loadSkin, omarchyDetected, omarchyTheme, onSkin, setSkin, type Skin, SKINS, skin, termFont } from "./skin";
 import { smokeLive } from "./smoke-live";
 import { workbenchSmoke } from "./worksmoke";
@@ -55,8 +60,10 @@ import { snapshot } from "./snapshot";
 import "./styles.css";
 import { retireShell, Terminals } from "./terminal";
 import { NavHistory } from "./nav-history";
-import { sectionInfo, workspaceSection } from "./workspace";
-import { AgentsView, ColonyView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { groupSection, sectionInfo, type WorkspaceSection, workspaceSection } from "./workspace";
+import { playTarget } from "./oligarchyfeed";
+import { OligarchyView } from "./oligarchyview";
+import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
@@ -92,7 +99,7 @@ document.getElementById("app")!.innerHTML = `
     </span>
     <button id="btn-quick" title="Quick open (Ctrl+P)">Go to file</button>
     <button id="btn-editor" title="Open the current file (or the folder) in your editor (Ctrl+Shift+E). Right-click a file in the Explorer for that file.">Open in editor</button>
-    <button id="btn-settings" class="icon" title="Colony settings (settings.json)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+    <button id="btn-settings" class="icon" title="Settings: skin, title bar, rail, engine, integrations, settings.json" aria-label="Settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
     <span id="win-controls" hidden>
       <button class="win-min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 8h10"/></svg></button>
       <button class="win-max" title="Maximize" aria-label="Maximize"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button>
@@ -106,18 +113,13 @@ document.getElementById("app")!.innerHTML = `
   </aside>
   <div id="side-resizer" title="Drag to resize the Explorer"></div>
   <main id="center">
-    <div id="tabs" class="tabbar"><span class="tab-nav" role="group" aria-label="History"><button class="nav-back" data-nav="back" title="Back (Alt+Left)" aria-label="Back" disabled></button><button class="nav-forward" data-nav="forward" title="Forward (Alt+Right)" aria-label="Forward" disabled></button></span><span id="tabs-rest"></span></div>
-    <div id="views">
+    <div id="panes" class="pane-tree"></div>
+    <div id="center-holder" hidden>
       <div id="welcome" class="view">
         <h1><img src="./colony-icon.svg" alt="" width="40" height="40" /> Colony</h1>
         <p class="dim">Open a folder to start. Its Mission Control becomes the cockpit.</p>
         <button id="welcome-open" class="primary">Open folder</button>
         <div id="recents"></div>
-      </div>
-      <div id="view-editor" class="view" hidden>
-        <div id="doc-bar" role="tablist" aria-label="Show this file as" hidden><button data-mode="preview" role="tab" title="The rendered document (plan to-dos as a table)">Preview</button><button data-mode="editor" role="tab" title="Edit the Markdown source (File → Save or Ctrl+S saves)">Editor</button></div>
-        <div id="doc-preview" tabindex="-1" hidden></div>
-        <div id="monaco-host"></div>
       </div>
       <div id="view-review" class="view" hidden></div>
     </div>
@@ -130,20 +132,22 @@ document.getElementById("app")!.innerHTML = `
   <footer id="status"><span id="st-ws"></span><span id="st-msg"></span><span class="spacer"></span><span id="st-mc"></span><span id="st-engine" class="clickable"></span><span id="st-env"></span></footer>
 </div>
 <div id="settings-pane" class="settings-pane" role="group" aria-label="Colony settings">
-  <div class="menu-label">Skin</div>
-  <button data-setting="skin" data-skin="bare-metal">Bare Metal</button>
-  <button data-setting="skin" data-skin="legacy">Legacy</button>
-  <button data-setting="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
-  <div class="menu-sep" data-title-bar-menu></div>
-  <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
-  <button data-setting="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
-  <button data-setting="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
-  <div class="menu-sep"></div>
-  <div class="menu-label">Rail</div>
-  <button data-setting="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
-  <button data-setting="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
-  <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
-  <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+  <section class="settings-group" data-group="Appearance" aria-label="Appearance">
+    <h3 class="settings-group-title">Appearance</h3>
+    <div class="menu-label">Skin</div>
+    <button data-setting="skin" data-skin="bare-metal">Bare Metal</button>
+    <button data-setting="skin" data-skin="legacy">Legacy</button>
+    <button data-setting="skin" data-skin="omarchy" hidden title="The Omarchy theme and monospace font, live">Omarchy (system theme)</button>
+    <div class="menu-label" data-title-bar-menu>Title bar (on the next start)</div>
+    <button data-setting="title-bar" data-title-bar-menu data-mode="native" title="The system or window manager draws the title bar and the window controls; the menu bar sits under it">Native</button>
+    <button data-setting="title-bar" data-title-bar-menu data-mode="custom" title="Colony draws the title bar: menus, drag, double-click to maximize, minimize / maximize / close">Custom</button>
+    <div class="menu-label">Rail position</div>
+    <button data-setting="rail-position" data-pos="left" title="The rail at the left edge of the window (default)">Left</button>
+    <button data-setting="rail-position" data-pos="right" title="The rail at the right edge of the window">Right</button>
+    <div class="menu-label">Rail labels</div>
+    <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
+    <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+  </section>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>
 <div id="prompt" hidden><div class="quick-box"><label id="prompt-label" for="prompt-input"></label><input id="prompt-input" autocomplete="off" spellcheck="false" /><div id="prompt-hint" class="dim small">Enter saves, Escape cancels</div></div></div>`;
@@ -176,8 +180,9 @@ interface Tab {
   /** `extra`: a second, separate count next to the first (the Inbox: gates, then attention). */
   badge?: () => { text: string; cls: string; tip?: string; extra?: { text: string; cls: string; tip?: string } } | null;
   cls?: () => string;
-  show?: () => void;
-  hide?: () => void;
+  /** The pane it is shown in or leaves (a file shows in each pane's own editor). */
+  show?: (pane: Pane) => void;
+  hide?: (pane: Pane) => void;
   /** Return false to keep the tab open. */
   close?: () => Promise<boolean> | boolean;
   /** A Markdown file: shown rendered (preview) or in Monaco (editor). Unset: not Markdown. */
@@ -185,27 +190,380 @@ interface Tab {
 }
 type DocMode = "preview" | "editor";
 const tabs = new Map<string, Tab>();
-const order: string[] = [];
 /** Set once the drawer exists (./terminal.ts): its tabs' gate surfaces, and whether it holds
  *  a terminal tab id. */
 let refreshDrawer = () => {};
 let drawerHas = (_id: string) => false;
+/** What the focused pane shows: a view or a document tab id ("": an empty pane). */
 let activeTab = "mission";
-/** Back / Forward through the views and documents shown in the main pane (ADR 2026-10-24
- *  point 4): the strip holds documents only, so this is the way back to a view. */
-const nav = new NavHistory();
+
+// ---- centre panes: a free split tree (kit ADR 2026-10-24 amend 2026-11-19, free tiling) ----
+// #center holds a split tree of panes (./panes.ts). Each pane has its own strip (Back / Forward,
+// then its document tabs), its own history (point 4, per pane) and its own Monaco view; any
+// document tab kind opens in any pane, and a file may sit in two panes (one model, a view state
+// per pane). Rail views show in the focused pane, never as tabs, in one pane at a time. The
+// focused pane changes only its 1px border colour. The terminal drawer stays outside the tree.
+
+/** One leaf of the tree. */
+interface Pane {
+  id: string;
+  el: HTMLElement;
+  /** The strip: Back / Forward (built once), then `rest` (re-rendered). */
+  bar: HTMLElement;
+  rest: HTMLElement;
+  /** Holds the element of every tab this pane shows (one visible at a time). */
+  host: HTMLElement;
+  /** The pane's file view: the Preview | Editor switch, the rendered document, Monaco. */
+  editorEl: HTMLElement;
+  docBar: HTMLElement;
+  docPreview: HTMLElement;
+  monacoHost: HTMLElement;
+  /** Shown when the pane has nothing to show (a new split). */
+  emptyEl: HTMLElement;
+  /** Created the first time the pane shows a file. */
+  editor: EditorView | null;
+  strip: Strip;
+  /** The tab or view on screen in this pane (null: empty). */
+  shown: string | null;
+  /** Back / Forward through what this pane showed. */
+  nav: NavHistory;
+}
+const panes = new Map<string, Pane>();
+let paneTree: PaneNode = { pane: "p1" };
+/** A file tab has no element of its own: each pane shows it in its own editor view. */
+const fileTabEl = h("div", { class: "file-tab-el", hidden: "" });
+
+/** Panes in reading order (left to right, top to bottom). */
+const paneList = (): Pane[] => leaves(paneTree).map((id) => panes.get(id)!);
+/** The panes whose strip holds `id`. */
+const holders = (id: string): Pane[] => paneList().filter((p) => p.strip.order.includes(id));
+/** The element a pane shows for tab `t`. */
+const viewEl = (p: Pane, t: Tab): HTMLElement => (isFile(t.id) ? p.editorEl : t.el);
+
+function makePane(id: string): Pane {
+  const navBtn = (step: "back" | "forward") => {
+    const label = step === "back" ? "Back" : "Forward";
+    return h("button", { class: `nav-${step}`, "data-nav": step, title: `${label} (Alt+${step === "back" ? "Left" : "Right"})`, "aria-label": label, disabled: "" }, icon(step, "tab-svg"));
+  };
+  const back = navBtn("back");
+  const forward = navBtn("forward");
+  const rest = h("span", { class: "tabs-rest" });
+  const bar = h("div", { class: "tabbar pane-tabs" }, h("span", { class: "tab-nav", role: "group", "aria-label": "History" }, back, forward), rest);
+  const docBar = h(
+    "div",
+    { class: "doc-bar", role: "tablist", "aria-label": "Show this file as", hidden: "" },
+    h("button", { "data-mode": "preview", role: "tab", title: "The rendered document (plan to-dos as a table)" }, "Preview"),
+    h("button", { "data-mode": "editor", role: "tab", title: "Edit the Markdown source (File → Save or Ctrl+S saves)" }, "Editor"),
+  );
+  const docPreview = h("div", { class: "doc-preview", tabindex: "-1", hidden: "" });
+  const monacoHost = h("div", { class: "monaco-host" });
+  const editorEl = h("div", { class: "view pane-editor", hidden: "" }, docBar, docPreview, monacoHost);
+  const closeEmpty = h("button", { "data-act": "pane-close", title: "Close this pane (View → Splits → Close pane)" }, "Close pane");
+  const emptyEl = h(
+    "div",
+    { class: "view pane-empty", hidden: "" },
+    h("p", { class: "dim" }, "Empty pane. A file (Ctrl+P), a terminal (Ctrl+Shift+T), a run or a view opens here while this pane has the focus."),
+    closeEmpty,
+  );
+  const host = h("div", { class: "pane-views" }, editorEl, emptyEl);
+  const el = h("section", { class: "pane", "data-pane": id, "aria-label": "Pane" }, bar, host);
+  const p: Pane = { id, el, bar, rest, host, editorEl, docBar, docPreview, monacoHost, emptyEl, editor: null, strip: { order: [] }, shown: null, nav: new NavHistory() };
+  back.addEventListener("click", () => navigate("back", p));
+  forward.addEventListener("click", () => navigate("forward", p));
+  closeEmpty.addEventListener("click", () => closePane(p));
+  docBar.addEventListener("click", (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-mode]");
+    if (b?.dataset.mode === "preview" || b?.dataset.mode === "editor") setDocMode(b.dataset.mode, p);
+  });
+  // Preview scroll positions by file, recorded as the preview scrolls: by the time a tab's
+  // hide() runs its view has no layout box left.
+  docPreview.addEventListener("scroll", () => {
+    if (docPreview.dataset.path && !docPreview.hidden) docScroll.set(docPreview.dataset.path, docPreview.scrollTop);
+  });
+  // The focused pane is Colony's own record (a click or the focus entering the pane), never
+  // read back from the editors: an editor that missed a blur still thinks it has the focus.
+  el.addEventListener("pointerdown", () => focusPane(p), true);
+  el.addEventListener("focusin", () => focusPane(p));
+  new ResizeObserver(() => {
+    try {
+      if (p.shown) centerTerms.get(p.shown)?.fit();
+    } catch {
+      // Before the terminal section has run (a resize while the module loads).
+    }
+  }).observe(host);
+  return p;
+}
+
+/** The pane's Monaco view, created on first use. */
+function editorViewOf(p: Pane): EditorView {
+  p.editor ??= editors.createView(p.monacoHost);
+  if (p === focused) editors.current = p.editor;
+  return p.editor;
+}
+
+let focused = makePane("p1");
+panes.set(focused.id, focused);
+focused.el.classList.add("focused");
+// The welcome screen and the Review view start in the first pane.
+focused.host.append($("welcome"), $("view-review"));
+$("center-holder").remove();
+renderPaneTree();
+
+/** Draw the tree: nested flex boxes, the panes themselves are kept (a terminal or an editor
+ *  in one is moved, never rebuilt). A divider between two halves resizes them. */
+function renderPaneTree() {
+  const build = (n: PaneNode, path: PanePath): HTMLElement => {
+    if (isLeaf(n)) return panes.get(n.pane)!.el;
+    const a = build(n.a, [...path, "a"]);
+    const b = build(n.b, [...path, "b"]);
+    a.style.flex = `${n.ratio} 1 0`;
+    b.style.flex = `${1 - n.ratio} 1 0`;
+    const divider = h("div", { class: "pane-divider", "data-dir": n.split, title: "Drag to resize the panes" });
+    const box = h("div", { class: "pane-split", "data-dir": n.split }, a, divider, b);
+    paneDivider(divider, box, path, n.split);
+    return box;
+  };
+  const root = build(paneTree, []);
+  root.style.flex = "1 1 0";
+  $("panes").replaceChildren(root);
+  $("panes").classList.toggle("multi", panes.size > 1);
+}
+
+/** A divider drag sets its split's ratio (the drawer's splitter helper, then every visible
+ *  terminal and editor measures again). */
+function paneDivider(divider: HTMLElement, box: HTMLElement, path: PanePath, dir: SplitDir) {
+  let start = 0;
+  let total = 1;
+  divider.addEventListener("pointerdown", () => {
+    const r = box.getBoundingClientRect();
+    const first = (box.firstElementChild as HTMLElement).getBoundingClientRect();
+    const line = dir === "right" ? divider.getBoundingClientRect().width : divider.getBoundingClientRect().height;
+    total = Math.max(1, (dir === "right" ? r.width : r.height) - line);
+    start = dir === "right" ? first.width : first.height;
+  });
+  splitter(divider, (dx, dy) => {
+    paneTree = setRatio(paneTree, path, (start + (dir === "right" ? dx : dy)) / total);
+    const n = nodeAt(paneTree, path) as PaneSplit;
+    (box.firstElementChild as HTMLElement).style.flex = `${n.ratio} 1 0`;
+    (box.lastElementChild as HTMLElement).style.flex = `${1 - n.ratio} 1 0`;
+  });
+}
+
+/** Give the focus to pane `p`: its border colour marks it, and the window's actions (save,
+ *  close tab, Back) act on what it shows. The strips are not redrawn: they do not depend on the
+ *  focus, and a press that moves the focus must land on the tab it pressed (WebKitGTK sends no
+ *  click when the pressed node is replaced before the release). */
+function focusPane(p: Pane, render = true) {
+  if (focused === p || !panes.has(p.id)) return;
+  focused.el.classList.remove("focused");
+  focused = p;
+  p.el.classList.add("focused");
+  editors.current = p.editor;
+  activeTab = p.shown ?? "";
+  if (render) {
+    renderRail();
+    renderTopActions();
+    markSettings();
+  }
+}
+
+/** A view shown in a pane other than `q`. */
+const shownElsewhere = (id: string, q: Pane): boolean => paneList().some((o) => o !== q && o.shown === id);
+
+/** Show only what pane `p` shows. */
+function paintPane(p: Pane) {
+  const t = p.shown ? tabs.get(p.shown) : undefined;
+  const want = t ? viewEl(p, t) : p.emptyEl;
+  for (const c of p.host.children) {
+    const el = c as HTMLElement;
+    if (el !== $("welcome")) el.hidden = el !== want;
+  }
+}
+
+/** Show tab or view `id` in pane `p`. A document tab joins the pane's strip; a view shown in
+ *  another pane leaves it (that pane goes back in its history). */
+function showIn(p: Pane, id: string, focus = true) {
+  const t = tabs.get(id);
+  if (!t) return;
+  // A terminal, a run or a view of a PR sits in one pane: showing it elsewhere moves it.
+  const other = !t.pinned && !isFile(id) ? holders(id).find((q) => q !== p) : undefined;
+  if (other) return moveTabToPane(id, other, p);
+  if (!t.pinned && !p.strip.order.includes(id)) p.strip = stripAdd(p.strip, id);
+  if (t.pinned) for (const q of panes.values()) if (q !== p && q.shown === id) leaveView(q, id);
+  const prev = p.shown && p.shown !== id ? tabs.get(p.shown) : undefined;
+  if (prev) prev.hide?.(p);
+  p.shown = id;
+  // A Back / Forward move has already set the history on `id`: this records nothing then.
+  p.nav.visit(id);
+  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
+  if (group) lastInGroup.set(group.id, id);
+  const el = viewEl(p, t);
+  if (el.parentElement !== p.host) p.host.append(el);
+  paintPane(p);
+  $("welcome").hidden = true;
+  if (focus) focusPane(p, false);
+  if (p === focused) activeTab = id;
+  t.show?.(p);
+  renderTabs();
+}
+
+/** Pane `q` showed view `id`, now shown in another pane: `q` goes back in its history, else
+ *  to its last tab, else it is empty. */
+function leaveView(q: Pane, id: string) {
+  const ok = (x: string) => x !== id && tabs.has(x) && (q.strip.order.includes(x) || (!!tabs.get(x)?.pinned && !shownElsewhere(x, q)));
+  const back = q.nav.back(ok);
+  const next = back ?? q.strip.order[q.strip.order.length - 1] ?? null;
+  q.shown = null;
+  if (next) showIn(q, next, false);
+  else {
+    paintPane(q);
+    if (q === focused) activeTab = "";
+  }
+}
+
+/** Take `id` out of pane `p` (closed there, or moved out): the pane shows what it showed
+ *  before; a pane left with no tab closes when other panes remain (its space goes to its
+ *  neighbour); the last pane shows the Cockpit, as before splits. */
+function dropFromPane(p: Pane, id: string) {
+  const before = p.strip;
+  p.strip = stripRemove(p.strip, id);
+  p.nav.forget(id);
+  if (p.editor && isFile(id)) editors.release(id, p.editor);
+  docCache.delete(`${p.id}\n${id}`);
+  if (!p.strip.order.length && panes.size > 1 && (p.shown === id || !p.shown || !tabs.get(p.shown)?.pinned)) {
+    p.shown = p.shown === id ? null : p.shown;
+    return closePane(p);
+  }
+  if (p.shown !== id) return;
+  const back = p.nav.current();
+  const ok = (x: string | null): x is string => !!x && x !== id && tabs.has(x) && (p.strip.order.includes(x) || (!!tabs.get(x)?.pinned && !shownElsewhere(x, p)));
+  const next = nextShown(before, id, ok(back) ? back : null) ?? (panes.size === 1 ? "mission" : null);
+  p.shown = null;
+  if (next && tabs.has(next)) showIn(p, next, p === focused);
+  else {
+    paintPane(p);
+    if (p === focused) activeTab = "";
+  }
+}
+
+/** View → Splits → Close pane, and an empty pane's own button: the pane goes, its tabs join
+ *  the pane that takes its space (nothing closes, no unsaved edit is at stake). The last pane
+ *  stays. */
+function closePane(p: Pane = focused) {
+  if (panes.size < 2) return status("Close pane: this is the only pane");
+  const to = panes.get(heir(paneTree, p.id) ?? "")!;
+  for (const id of p.strip.order) {
+    if (!to.strip.order.includes(id)) to.strip = stripAdd(to.strip, id);
+    if (p.editor && isFile(id)) editors.release(id, p.editor);
+  }
+  // Tab elements, views and the welcome screen that sit in this pane move to the heir, hidden.
+  for (const c of [...p.host.children]) {
+    if (c === p.editorEl || c === p.emptyEl) continue;
+    (c as HTMLElement).hidden = c !== $("welcome") || !!workspace;
+    to.host.append(c);
+  }
+  const shownView = p.shown && tabs.get(p.shown)?.pinned ? p.shown : null;
+  if (p.editor) editors.disposeView(p.editor);
+  for (const k of [...docCache.keys()]) if (k.startsWith(`${p.id}\n`)) docCache.delete(k);
+  paneTree = removePane(paneTree, p.id) ?? { pane: to.id };
+  panes.delete(p.id);
+  p.el.remove();
+  renderPaneTree();
+  const wasFocused = focused === p;
+  if (wasFocused) {
+    focused = to;
+    to.el.classList.add("focused");
+    editors.current = to.editor;
+    activeTab = to.shown ?? "";
+  }
+  // The heir keeps what it showed; it shows the closed pane's view when it showed nothing.
+  const show = to.shown ?? shownView ?? to.strip.order[to.strip.order.length - 1] ?? (panes.size === 1 ? "mission" : null);
+  if (show && tabs.has(show)) showIn(to, show, wasFocused);
+  else {
+    paintPane(to);
+    renderTabs();
+  }
+  relayout();
+}
+
+/** View → Splits → Split right / Split down: halve the focused pane. A file shows in both
+ *  halves (one model, a view state each); another document tab moves to the new pane when its
+ *  pane keeps a tab; else the new pane starts empty. The new pane takes the focus. */
+function splitFocused(dir: SplitDir) {
+  if (!workspace) return status("Open a folder first");
+  if (panes.size >= MAX_PANES) return status(`Split: at most ${MAX_PANES} panes`);
+  const src = focused;
+  const id = freshPaneId(panes.keys());
+  const p = makePane(id);
+  panes.set(id, p);
+  paneTree = splitPane(paneTree, src.id, dir, id);
+  renderPaneTree();
+  const shown = src.shown;
+  const t = shown ? tabs.get(shown) : undefined;
+  const how = splitContent(shown, !!shown && isFile(shown), src.strip.order.length, !!t && !t.pinned);
+  if (how === "copy" && shown) {
+    // The new view starts where the old one stands in the file.
+    if (src.editor && src.editor.active === shown) editorViewOf(p).states.set(shown, src.editor.editor.saveViewState());
+    showIn(p, shown);
+  } else if (how === "move" && shown) moveTabToPane(shown, src, p);
+  else {
+    focusPane(p, false);
+    paintPane(p);
+    renderTabs();
+  }
+  status(dir === "right" ? "Split right" : "Split down");
+  relayout();
+}
+
+/** A folder opens: one pane again. The tabs that stay (agent runs) gather in it, every view
+ *  and the welcome screen move into it, and its history starts over. */
+function resetPanes() {
+  const all = paneList();
+  const first = all[0];
+  const keep = [...new Set(all.flatMap((p) => p.strip.order))].filter((id) => tabs.has(id) && !tabs.get(id)?.pinned);
+  for (const p of all.slice(1)) {
+    for (const c of [...p.host.children]) {
+      if (c === p.editorEl || c === p.emptyEl) continue;
+      (c as HTMLElement).hidden = true;
+      first.host.append(c);
+    }
+    if (p.editor) editors.disposeView(p.editor);
+    p.el.remove();
+    panes.delete(p.id);
+  }
+  first.strip = { order: keep };
+  first.nav.reset();
+  first.shown = null;
+  paneTree = { pane: first.id };
+  docCache.clear();
+  focused.el.classList.remove("focused");
+  focused = first;
+  first.el.classList.add("focused");
+  editors.current = first.editor;
+  renderPaneTree();
+}
+
+/** Move document tab `id` from pane `from` to pane `to`, where it shows. */
+function moveTabToPane(id: string, from: Pane, to: Pane) {
+  const t = tabs.get(id);
+  if (!t || t.pinned || from === to) return;
+  if (!to.strip.order.includes(id)) to.strip = stripAdd(to.strip, id);
+  if (!isFile(id) && t.el.parentElement !== to.host) to.host.append(t.el);
+  dropFromPane(from, id);
+  if (panes.has(to.id)) showIn(to, id);
+}
 
 /**
  * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
  * amend 2026-10-28; plan colony-sidebar-native-kit). A rail item shows one view, or a group of
- * views: Ship switches Git | CI/CD at the head of the tab strip; Workspace's sections switch
- * inside the view (`inner`), never in the strip. No item sits behind a More menu: the rail
+ * views that switch inside the view, never in the tab strip (amend 2026-11-11, point 3): Ship
+ * switches Git | CI/CD, Workspace its sections. No item sits behind a More menu: the rail
  * scrolls at any window height. The terminal drawer is not a rail item: its own bar (always on
  * screen) shows and hides it; the Terminals item is a list view.
  */
-interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; inner?: boolean; home?: string }
+interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string }
 /** Workspace's sections, in order: each one a view, switched inside the Workspace view. */
-const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "config", "plans"];
+const WORKSPACE_SECTIONS = ["memory", "health", "decisions", "agents", "skills", "rules", "commands", "plans"];
 const RAIL: RailItem[] = [
   { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
   { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
@@ -217,8 +575,13 @@ const RAIL: RailItem[] = [
   { id: "activity", label: "Activity", icon: "activity", tip: "Activity: the kit's recent activity and health checks (Ctrl+8)", views: ["activity"] },
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window (Ctrl+9); the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
-  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, config, plans", views: WORKSPACE_SECTIONS, inner: true, home: "plans" },
-  { id: "colony", label: "Colony", icon: "colony", tip: "Colony: the game over the kit's outcome ledger", views: ["colony"] },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: memory, health, decisions, agents, skills, rules, commands, plans", views: WORKSPACE_SECTIONS, home: "plans" },
+  { id: "colony", label: "Oligarchy", icon: "colony", tip: "Oligarchy: the game, loaded from oligarchy.missionkit.io and fed by this folder's outcome ledger", views: ["colony"] },
+];
+/** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
+const SHIP_VIEWS: WorkspaceSection[] = [
+  { id: "git", label: "Git", icon: "git", tip: "Git: host requests, pull requests, branch flow, working tree, commit, push" },
+  { id: "cicd", label: "CI/CD", icon: "devops", tip: "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs" },
 ];
 /** Ctrl+1..9: the first nine rail items. The rail tooltips name these keys (cargo test
  *  terminal_drawer checks both); the terminal drawer toggles with Ctrl+` instead. */
@@ -226,13 +589,18 @@ const CTRL_DIGITS = RAIL.slice(0, 9).map((r) => r.id);
 /** The member a group's rail item opens: the one shown last. */
 const lastInGroup = new Map<string, string>();
 
-function addTab(t: Tab, focus = true) {
-  if (!tabs.has(t.id)) order.push(t.id);
+/** Register tab `t`. A document tab joins the strip of `pane` (default: the focused pane;
+ *  a tab some pane already holds stays there); a view's element waits in the focused pane. */
+function addTab(t: Tab, focus = true, pane: Pane = focused) {
   tabs.set(t.id, t);
-  if (t.el.parentElement !== $("views")) $("views").append(t.el);
-  t.el.classList.add("view");
-  t.el.hidden = true;
-  if (focus) showTab(t.id);
+  const p = t.pinned ? focused : (holders(t.id)[0] ?? pane);
+  if (!t.pinned && !p.strip.order.includes(t.id)) p.strip = stripAdd(p.strip, t.id);
+  if (!isFile(t.id)) {
+    if (!t.el.parentElement?.classList.contains("pane-views")) p.host.append(t.el);
+    t.el.classList.add("view");
+    if (p.shown !== t.id) t.el.hidden = true;
+  }
+  if (focus && workspace) showIn(p, t.id);
   else renderTabs();
 }
 
@@ -322,26 +690,81 @@ $("rail").addEventListener("keydown", (ev) => {
   el.scrollIntoView({ block: "nearest" });
 });
 
-/** The tab strip: documents only (runs, terminals, files), after the switch of
- *  a rail group with more than one view (Ship: Git | CI/CD). Workspace switches its sections
- *  inside the view, not here. */
+// ---- Settings: Colony's settings, one view ---------------------------------------------
+// The one Settings surface (ADR 2026-10-24 amend 2026-11-11, point 2): the top bar gear and
+// File → Settings… show this view, and Back returns from it. Its rows sit under plain group
+// labels: Appearance (Skin, Title bar, Rail position, Rail labels: the pane's markup), then
+// the action rows of src/menu.json `config`, each under its `group` (Engine, Integrations,
+// Files; never in the menu bar; menu.rs tests). `omarchyOnly` rows stay hidden until
+// renderSkinMenu() knows Omarchy is there, and a group with no row on screen hides with them.
+// (Declared before renderTabs, which marks the gear: the Inbox view reports its counts while
+// this module loads, and that already renders the tabs.)
+const settingsPane = $("settings-pane");
+for (const group of [...new Set(menuSpec.config.map((i) => i.group))]) {
+  settingsPane.append(
+    h(
+      "section",
+      { class: "settings-group", "data-group": group, "aria-label": group },
+      h("h3", { class: "settings-group-title" }, group),
+      ...menuSpec.config.filter((i) => i.group === group).map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)),
+    ),
+  );
+}
+/** With no folder open the strip (and its Back) is not on screen: this button returns to the
+ *  welcome screen instead. */
+const settingsBack = h("button", { "data-act": "welcome", title: "Back to the welcome screen", hidden: "" }, "Back");
+settingsBack.addEventListener("click", () => showWelcome());
+const settingsView = h("div", { id: "view-settings", class: "settings-view", hidden: "" }, h("div", { class: "settings-head" }, h("h2", {}, "Settings"), settingsBack), settingsPane);
+
+/** The gear shows where the window is: marked while the Settings view is on screen (only its
+ *  1px border colour changes). */
+function markSettings() {
+  const on = !settingsView.hidden;
+  const gear = $("btn-settings");
+  if (on) gear.setAttribute("aria-current", "page");
+  else gear.removeAttribute("aria-current");
+  settingsBack.hidden = !!workspace;
+}
+
+/** The top bar gear and File → Settings…: the Settings view. Its settings belong to Colony,
+ *  not to a folder, so it shows with no folder open too (then over the welcome screen, with
+ *  its own Back). */
+function showSettings() {
+  if (workspace) return showTab("settings");
+  oligarchyView.hide();
+  for (const t of tabs.values()) t.el.hidden = true;
+  for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
+  $("welcome").hidden = true;
+  settingsView.hidden = false;
+  markSettings();
+}
+
+/** The tab strips, one per pane: Back / Forward (in each pane's markup), then documents only
+ *  (runs, terminals, files). A strip has the same children whether a view or a document is
+ *  shown: a rail group with more than one view (Ship, Workspace) switches inside its view
+ *  (workspace.ts groupSection). */
 function renderTabs() {
   renderRail();
   renderTopActions();
   refreshDrawer();
-  const bar = $("tabs");
-  const rest = $("tabs-rest");
+  markSettings();
+  for (const p of paneList()) renderStrip(p);
+}
+
+function renderStrip(p: Pane) {
+  const bar = p.bar;
+  const rest = p.rest;
   // No folder: no strip. With one, the strip stays (Back / Forward head it).
   bar.classList.toggle("tabbar-empty", !workspace);
-  renderNav();
+  renderNav(p);
   if (!workspace) return rest.replaceChildren();
-  const docs = order
+  const docs = p.strip.order
     .map((id) => tabs.get(id))
     .filter((t): t is Tab => !!t && !t.pinned)
     .map((t) => {
       const el = h(
         "button",
-        { class: `tab ${activeTab === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
+        { class: `tab ${p.shown === t.id ? "active" : ""} ${t.cls?.() ?? ""}`, title: t.tip },
         ...(t.icon ? [h("span", { class: "tab-icon" }, icon(t.icon, "tab-svg"))] : []),
         h("span", { class: "lbl" }, t.label),
         ...badges(t),
@@ -350,97 +773,85 @@ function renderTabs() {
       const close = h("span", { class: "tab-close", title: "Close (Ctrl+W)" }, t.cls?.().includes("dirty") ? "●" : "×");
       close.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        void closeTab(t.id);
+        void closeTab(t.id, p);
       });
       el.append(close);
-      el.addEventListener("click", () => showTab(t.id));
+      el.addEventListener("click", () => showIn(p, t.id));
       return el;
     });
-  const group = RAIL.find((r) => r.views.length > 1 && !r.inner && r.views.includes(activeTab));
-  const sw = group
-    ? [
-        h(
-          "div",
-          { class: "view-switch", role: "tablist", "aria-label": group.label },
-          ...group.views.map((id) => {
-            const t = tabs.get(id);
-            const b = h("button", { class: `view-switch-btn ${activeTab === id ? "active" : ""}`, role: "tab", "aria-selected": String(activeTab === id), title: t?.tip ?? id }, ...(t?.icon ? [icon(t.icon, "tab-svg")] : []), t?.label ?? id);
-            b.dataset.view = id;
-            b.addEventListener("click", () => showTab(id));
-            return b;
-          }),
-        ),
-      ]
-    : [];
   // Only the document tabs scroll.
   const docBar = h("div", { class: "tabs-docs" }, ...docs);
-  const sep = () => h("span", { class: "tab-sep" });
-  rest.replaceChildren(...(sw.length ? [sep(), ...sw] : []), ...(docs.length ? [sep()] : []), docBar);
+  rest.replaceChildren(...(docs.length ? [h("span", { class: "tab-sep" })] : []), docBar);
   docBar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+/** Show tab or view `id`: a document tab in its pane (the focused one when it holds it), a
+ *  view in the focused pane. */
 function showTab(id: string) {
   const t = tabs.get(id);
   // A terminal tab moved to the drawer keeps its id: a focus by id (Inbox, Agent runs, a
   // resumed chat) shows it there (kit ADR 2026-10-24 amend 2026-11-07).
   if (!t && workspace && drawerHas(id)) return void focusPty(id);
   if (!t || !workspace) return;
-  const prev = tabs.get(activeTab);
-  if (prev && prev !== t) {
-    prev.el.hidden = true;
-    prev.hide?.();
-  }
-  for (const other of tabs.values()) if (other !== t && other.el !== t.el) other.el.hidden = true;
-  activeTab = id;
-  // A Back / Forward move has already set the history on `id`: this records nothing then.
-  nav.visit(id);
-  const group = RAIL.find((r) => r.views.length > 1 && r.views.includes(id));
-  if (group) lastInGroup.set(group.id, id);
-  t.el.hidden = false;
-  $("welcome").hidden = true;
-  t.show?.();
-  renderTabs();
+  showIn(paneFor(id), id);
 }
 
-async function closeTab(id: string) {
+/** The pane to show `id` in. */
+function paneFor(id: string): Pane {
+  if (tabs.get(id)?.pinned || focused.strip.order.includes(id)) return focused;
+  return holders(id)[0] ?? focused;
+}
+
+/** Close tab `id`. Closed in one pane (`from`: its strip's ×, Ctrl+W) a file open in another
+ *  pane too only leaves that pane: its model and its unsaved edits stay. With no pane named
+ *  (the Explorer's rename, move and trash, a folder switch) it closes in every pane. */
+async function closeTab(id: string, from?: Pane) {
   const t = tabs.get(id);
   if (!t || t.pinned) return;
+  const hs = holders(id);
+  if (from && isFile(id) && hs.length > 1 && hs.includes(from)) {
+    dropFromPane(from, id);
+    return renderTabs();
+  }
   if (t.close && !(await t.close())) return;
-  if (t.el !== $("view-editor")) t.el.remove();
+  if (!isFile(id)) t.el.remove();
   detachTab(id);
 }
 
-/** Take a tab out of the strip without closing it (closed, or moved to the drawer). */
+/** Take a tab out of every strip without closing it (closed, or moved to the drawer). */
 function detachTab(id: string) {
+  for (const p of holders(id)) dropFromPane(p, id);
   tabs.delete(id);
-  order.splice(order.indexOf(id), 1);
-  nav.forget(id);
-  if (activeTab === id) {
-    // Back to what was shown before it; else the last document, else Mission.
-    const back = nav.current();
-    const rest = order.filter((x) => !tabs.get(x)?.pinned);
-    showTab(back && tabs.has(back) ? back : rest.length ? rest[rest.length - 1] : "mission");
-  } else renderTabs();
+  renderTabs();
 }
 
-/** The Back / Forward buttons are built once in the markup (renderTabs replaces only
- *  #tabs-rest, so a press on them is never lost to a re-render); this sets their state. */
-const navOpen = (id: string) => tabs.has(id);
-function renderNav() {
-  for (const [sel, can] of [[".nav-back", nav.canBack(navOpen)], [".nav-forward", nav.canForward(navOpen)]] as const) {
-    const b = $("tabs").querySelector<HTMLButtonElement>(sel)!;
+/** The Back / Forward buttons are built once per pane (renderStrip replaces only its
+ *  `.tabs-rest`, so a press on them is never lost to a re-render); this sets their state. */
+const navOpenIn = (p: Pane) => (id: string) => tabs.has(id) && (!!tabs.get(id)?.pinned || p.strip.order.includes(id));
+function renderNav(p: Pane) {
+  for (const [sel, can] of [[".nav-back", p.nav.canBack(navOpenIn(p))], [".nav-forward", p.nav.canForward(navOpenIn(p))]] as const) {
+    const b = p.bar.querySelector<HTMLButtonElement>(sel)!;
     if (b.disabled === can) b.disabled = !can;
   }
 }
 
-function navigate(step: "back" | "forward") {
-  if (!workspace) return;
-  const id = step === "back" ? nav.back(navOpen) : nav.forward(navOpen);
-  if (id) showTab(id);
+/** Back / Forward in pane `p` (the focused one: Alt+Left / Alt+Right, Go → Back / Forward). */
+function navigate(step: "back" | "forward", p: Pane = focused): boolean {
+  if (!workspace) return false;
+  const id = step === "back" ? p.nav.back(navOpenIn(p)) : p.nav.forward(navOpenIn(p));
+  if (id) showIn(p, id);
+  return !!id;
+}
+
+/** Go → Back / Forward (also in the palette): the same move as the strip's buttons and
+ *  Alt+Left / Alt+Right, with a notice when there is nowhere to go. */
+function navAction(step: "back" | "forward") {
+  if (!workspace) return status("Open a folder first");
+  if (!navigate(step)) status(step === "back" ? "Nothing to go back to" : "Nothing to go forward to");
 }
 
 // ---- editor ----------------------------------------------------------------------------
-const editors = new Editors($("monaco-host"), () => renderTabs());
+const editors = new Editors(() => renderTabs());
 const tree = new FileTree($("tree"), (p) => void openFile(p), status, (ctx) => openTreeMenu(ctx), {
   rename: (p, isDir) => void renameItem(p, isDir),
   trash: (items) => void trashItems(items),
@@ -495,45 +906,43 @@ function docLink(from: string, href: string, kind: "repo" | "web") {
   host.openRepoFile(abs);
 }
 
-/** Preview scroll positions by file (kept across tab switches and mode changes), recorded
- *  as the preview scrolls: by the time a tab's hide() runs its view has no layout box left. */
+/** Preview scroll positions by file (kept across tab switches and mode changes; each pane's
+ *  preview records them as it scrolls, see makePane). */
 const docScroll = new Map<string, number>();
-$("doc-preview").addEventListener("scroll", () => {
-  const pv = $("doc-preview");
-  if (pv.dataset.path && !pv.hidden) docScroll.set(pv.dataset.path, pv.scrollTop);
-});
-/** The rendered document per file, reused while its text and to-dos are unchanged. */
+/** The rendered document per pane and file (`<pane>\n<path>`: one element sits in one pane),
+ *  reused while its text and to-dos are unchanged. */
 const docCache = new Map<string, { sig: string; el: HTMLElement; ms: string }>();
 
-/** Show the file tab `path` in its mode: the Preview | Editor switch for Markdown, then the
- *  rendered document or Monaco. */
-function renderDocMode(path: string, focus = true) {
+/** Show the file tab `path` in pane `p` in its mode: the Preview | Editor switch for Markdown,
+ *  then the rendered document or Monaco. */
+function renderDocMode(p: Pane, path: string, focus = true) {
   const t = tabs.get(path);
   const mode = t?.mode;
-  const bar = $("doc-bar");
+  const bar = p.docBar;
   bar.hidden = !mode;
   for (const b of bar.querySelectorAll<HTMLElement>("button[data-mode]")) {
     const on = b.dataset.mode === mode;
     b.classList.toggle("active", on);
     b.setAttribute("aria-selected", String(on));
   }
-  const pv = $("doc-preview");
+  const pv = p.docPreview;
   const preview = mode === "preview";
   pv.hidden = !preview;
-  $("monaco-host").hidden = preview;
+  p.monacoHost.hidden = preview;
   if (!preview) {
     pv.replaceChildren();
-    requestAnimationFrame(() => editors.layout());
+    requestAnimationFrame(() => p.editor?.editor.layout());
     return;
   }
   const todos = docTodos(path);
   const sig = `${editors.version(path)}|${JSON.stringify(todos)}`;
-  let c = docCache.get(path);
+  const key = `${p.id}\n${path}`;
+  let c = docCache.get(key);
   if (!c || c.sig !== sig) {
     const started = performance.now();
     const el = renderDoc(editors.text(path) ?? "", todos, (href, kind) => docLink(path, href, kind));
     c = { sig, el, ms: (performance.now() - started).toFixed(1) };
-    docCache.set(path, c);
+    docCache.set(key, c);
   }
   pv.dataset.path = path;
   pv.dataset.renderMs = c.ms;
@@ -544,23 +953,23 @@ function renderDocMode(path: string, focus = true) {
   if (focus && focusPolicy.enabled) pv.focus({ preventScroll: true });
 }
 
-function setDocMode(mode: DocMode) {
-  const t = tabs.get(activeTab);
+/** Switch the file shown in pane `p` between Preview and Editor (every pane that shows it
+ *  follows: the mode belongs to the file's tab). */
+function setDocMode(mode: DocMode, p: Pane = focused) {
+  const t = p.shown ? tabs.get(p.shown) : undefined;
   if (!t?.mode || t.mode === mode) return;
   t.mode = mode;
-  renderDocMode(t.id);
-  if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => editors.editor.focus());
+  for (const q of paneList()) if (q.shown === t.id) renderDocMode(q, t.id, q === p);
+  if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => p.editor?.editor.focus());
 }
-$("doc-bar").addEventListener("click", (ev) => {
-  const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-mode]");
-  if (b?.dataset.mode === "preview" || b?.dataset.mode === "editor") setDocMode(b.dataset.mode);
-});
 
 /** Open `path` in a file tab. `mode` for a Markdown file (default: the editor, with the
  *  switch to the preview); an open tab keeps the mode it has. */
 async function openFile(path: string, mode?: DocMode) {
+  // The pane that holds the file already (the focused one first), else the focused pane.
+  const pane = paneFor(path);
   try {
-    await editors.open(path);
+    await editors.open(path, editorViewOf(pane));
   } catch (e) {
     return status(`${relPath(path)}: ${errText(e)}`);
   }
@@ -572,31 +981,32 @@ async function openFile(path: string, mode?: DocMode) {
         icon: "",
         tip: relPath(path),
         pinned: false,
-        el: $("view-editor"),
+        el: fileTabEl,
         mode: /\.md$/i.test(path) ? (mode ?? "editor") : undefined,
         cls: () => (editors.isDirty(path) ? "dirty" : ""),
-        show: () => {
-          editors.activate(path);
+        show: (p) => {
+          editors.activate(path, editorViewOf(p));
           tree.setActive(path);
-          renderDocMode(path);
+          renderDocMode(p, path);
         },
         close: async () => {
           if (editors.isDirty(path) && !(await ask(`${relPath(path)} has unsaved changes. Close without saving?`, { title: "Colony", kind: "warning" }))) return false;
           editors.close(path);
           docScroll.delete(path);
-          docCache.delete(path);
+          for (const q of paneList()) docCache.delete(`${q.id}\n${path}`);
           return true;
         },
       },
       true,
+      pane,
     );
-  } else showTab(path);
+  } else showIn(pane, path);
 }
 
 /** File → Save, the palette row and Ctrl+S: the one save path. Every outcome is reported in
  *  the status bar; nothing returns silently (ADR 2026-10-24 amend 2026-10-29 point 2). */
 async function saveActive() {
-  // The settings file opens without a folder (File → Settings), so no workspace is required.
+  // The settings file is no file of the folder (Settings → Open settings.json), so no workspace is required.
   if (!isFile(activeTab)) return status(workspace ? "Nothing to save: no file is active (open one from the Explorer or with Ctrl+P)" : "Nothing to save: open a folder first");
   try {
     const p = await editors.save(activeTab);
@@ -817,6 +1227,24 @@ async function terminalHere(dir: string) {
   await made;
 }
 
+/** Open in terminal file manager (File menu, the Explorer's menu, the palette; shell ADR amend
+ *  2026-10-29 points 1 and 4): the `fileManager` setting or the first of yazi, lf, nnn, ranger
+ *  and broot on PATH, as a drawer tab in `dir` (default: the Explorer's selected folder, else
+ *  the root), with the host environment (no AppImage libraries). The Explorer refreshes when
+ *  that tab loses the focus or exits. None installed: the status line names what to install.
+ *  `lookup`: the code-path smoke's own PATH (api.smokeFileManagerLaunch); never set otherwise. */
+async function fileManagerHere(dir?: string, lookup: () => Promise<FileManagerLaunch> = api.fileManagerLaunch) {
+  if (!workspace) return status("Open a folder first");
+  const into = dir ?? tree.targetDir();
+  const launch = await lookup();
+  if (!launch.argv.length) return status(launch.hint);
+  const where = into === workspace.root ? workspace.name : relPath(into);
+  const made = terminals.create(launch.argv, `${launch.label} ${where.slice(where.lastIndexOf("/") + 1)}`, into, { hostEnv: true, onLeave: () => void tree.refresh() });
+  if (shell.classList.contains("no-bottom")) toggleTerminal(true);
+  await made;
+  status(`Opened ${launch.label} in ${where} (${launch.source === "settings" ? "settings.json fileManager" : "found on PATH"}); the Explorer refreshes when you leave it`);
+}
+
 /** The Explorer's own menu (right-click on a row or on the empty Explorer): contextual rows
  *  bound to the clicked path. New file / New folder are the File menu's actions with the row's
  *  folder as the target; the other rows need a path, so they have no menu-bar entry. */
@@ -870,6 +1298,7 @@ function openTreeMenu(ctx: TreeContext) {
   }
   rows.push(
     row("tree-terminal", "Open terminal here", `New shell in ${where}`, () => terminalHere(dir)),
+    row("tree-file-manager", "Open in terminal file manager", `Your terminal file manager (yazi, lf, nnn, ranger or broot, or settings.json fileManager) in ${where}`, () => fileManagerHere(dir)),
     row("tree-editor", "Open in editor", `Open ${path ? relPath(path) : workspace.name} in your editor`, () => openInEditor(path ?? root)),
   );
   treeMenu.replaceChildren(...rows);
@@ -878,15 +1307,19 @@ function openTreeMenu(ctx: TreeContext) {
   treeMenu.style.left = `${Math.max(4, Math.min(ctx.x, window.innerWidth - r.width - 4))}px`;
   treeMenu.style.top = `${Math.max(4, Math.min(ctx.y, window.innerHeight - r.height - 4))}px`;
 }
+/** Settings → Open settings.json: the raw settings file in an editor tab. Editor tabs belong
+ *  to a folder (showTab), so with no folder open the row names the file instead. */
 async function openSettings() {
   try {
-    await openFile(await api.settingsEnsure());
-    status("Colony settings: editor.command / editor.terminal; workspaces.<folder>.backend is remembered by the engine picker");
+    const path = await api.settingsEnsure();
+    if (!workspace) return status(`Open a folder to edit settings.json here; the file is ${path}`);
+    await openFile(path);
+    status("Colony settings: editor.command / editor.terminal; fileManager (Open in terminal file manager); workspaces.<folder>.backend is remembered by the engine picker");
   } catch (e) {
     status(`Settings: ${errText(e)}`);
   }
 }
-$("btn-settings").addEventListener("click", () => void openSettings());
+$("btn-settings").addEventListener("click", () => showSettings());
 
 // ---- terminals (the drawer) -----------------------------------------------------------
 // The drawer holds the user's shells, plus any centre terminal tab moved there (kit ADR
@@ -965,7 +1398,7 @@ let layoutChanged = () => {};
 function relayout() {
   requestAnimationFrame(() => {
     terminals.fitActive();
-    centerTerms.get(activeTab)?.fit();
+    for (const p of paneList()) if (p.shown) centerTerms.get(p.shown)?.fit();
     editors.layout();
   });
 }
@@ -995,7 +1428,7 @@ function toggleExplorer(force?: boolean) {
   layoutChanged();
 }
 
-/** View → Reveal active file in the Explorer: show the Explorer, open the file's folders,
+/** Go → Reveal active file in the Explorer: show the Explorer, open the file's folders,
  *  select it and give the tree the keyboard focus. */
 async function revealInExplorer() {
   if (!workspace) return status("Reveal: open a folder first");
@@ -1004,7 +1437,8 @@ async function revealInExplorer() {
   $("tree").focus({ preventScroll: true });
 }
 
-// The rail (Workspace → Config → Rail): its side of the window and labels or icons only.
+// The rail (Settings → Appearance → Rail position, Rail labels): its side of the window and
+// labels or icons only.
 type RailPosition = "left" | "right";
 const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
 const railLabels = () => !shell.classList.contains("rail-icons");
@@ -1090,7 +1524,7 @@ $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest<HTMLElement>("button[data-dock]");
   if (b?.dataset.dock) runAction(`dock:${b.dataset.dock}`);
 });
-// Show / hide, next to the dock buttons: the same action as View > Show or hide the terminal,
+// Show / hide, next to the dock buttons: the same action as Terminal > Show or hide the terminal,
 // and Ctrl+` (the title bar stays native under Hyprland).
 $("term-tabs").querySelector(".term-toggle")!.addEventListener("click", () => runAction("terminal"));
 
@@ -1132,7 +1566,6 @@ splitter($("side-resizer"), (() => {
 // ---- center terminal tabs: interactive vendor CLI, queue runner ------------------------
 const centerTerms = new Map<string, TermView>();
 let termCounter = 0;
-new ResizeObserver(() => centerTerms.get(activeTab)?.fit()).observe($("views"));
 
 /** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
 type TermAgent = { kind: "interactive" | "queue"; plan: string; backend: string; engine: string };
@@ -1146,7 +1579,7 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
   const pane = h("div", { class: "term-pane" });
   if (agent && workspace) el.append(new ContextStrip(workspace.root, agent.engine, (p) => void openInEditor(p)).el);
   el.append(h("div", { class: "term-wrap" }, pane));
-  $("views").append(el);
+  focused.host.append(el);
   const view = new TermView(pane);
   centerTerms.set(id, view);
   addTab({
@@ -1256,7 +1689,7 @@ async function newShell() {
 
 // ---- terminal tabs move between the editor area and the panel ------------------------------
 // Kit ADR 2026-10-24 amend 2026-11-07: a drawer shell or a centre PTY moves to the other bar
-// by drag, by its context-menu row, or by View → Move terminal to … (also in the palette).
+// by drag, by its context-menu row, or by Terminal → Move terminal to … (also in the palette).
 // The session is reparented, never restarted: same process, scrollback and tab id. A centre
 // PTY keeps its element (context strip included), its gate badge and border, and its own
 // close; a drawer shell keeps its last-folder close. A moved tab stays until it closes, and
@@ -1291,7 +1724,7 @@ function focusPty(id: string): boolean {
 
 /** `auto`: Colony opening a new tab in its remembered bar, not a move by the operator (no
  *  record, no "moved" status). */
-function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean {
+function movePty(id: string, to: Place, opts: { auto?: boolean; pane?: Pane } = {}): boolean {
   const from = ptyPlace(id);
   if (!workspace || !from || from === to) return false;
   if (to === "panel") {
@@ -1333,7 +1766,8 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
     if (!r.hooks && r.tip) shellTips.set(id, r.tip);
     const parked = parkedTabs.get(id);
     parkedTabs.delete(id);
-    if (parked) addTab(parked);
+    const into = opts.pane && panes.has(opts.pane.id) ? opts.pane : focused;
+    if (parked) addTab(parked, true, into);
     else {
       const view = r.view;
       const el = h("div", { class: "term-center" }, h("div", { class: "term-wrap" }, view.pane));
@@ -1341,7 +1775,7 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
         id,
         label: r.label,
         icon: "terminals",
-        tip: `${r.label} (a drawer shell; View → Move terminal to the panel puts it back)`,
+        tip: `${r.label} (a drawer shell; Terminal → Move terminal to the panel puts it back)`,
         pinned: false,
         el,
         cls: () => (view.exited ? "exited" : ""),
@@ -1355,13 +1789,13 @@ function movePty(id: string, to: Place, opts: { auto?: boolean } = {}): boolean 
           retireShell(id, view);
           return true;
         },
-      });
+      }, true, into);
     }
   }
   ttys.update(id, { place: to === "panel" ? "drawer" : "tab" });
   relayout();
   const where = to === "panel" ? "panel" : "editor area";
-  if (opts.auto) status(`${tabLabelOf(id)} opened in the ${where}, where this kind of terminal was last moved (View → Reset terminal placements)`);
+  if (opts.auto) status(`${tabLabelOf(id)} opened in the ${where}, where this kind of terminal was last moved (Terminal → Reset terminal placements)`);
   else {
     recordPlacement(id, to);
     status(`${tabLabelOf(id)} moved to the ${where}; new ones of this kind open there`);
@@ -1375,7 +1809,7 @@ function tabLabelOf(id: string): string {
 
 /** The tab id under a pointer or a right-click in either bar, when it is a terminal tab. */
 function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
-  const b = el?.closest<HTMLElement>("#tabs .tab, #term-tabs > .tab");
+  const b = el?.closest<HTMLElement>(".pane-tabs .tab, #term-tabs > .tab");
   const id = b?.dataset.tab ?? b?.dataset.key ?? "";
   const from = ptyPlace(id);
   return from ? { id, from } : null;
@@ -1384,17 +1818,22 @@ function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
 // Drag: pointer events tracked by tab id on the two bars, like the splitters (the centre
 // strip is rebuilt on every snapshot, and the window keeps its OS file-drop handler). A press
 // that travels less than the threshold stays a click; Escape cancels. The bar under the
-// pointer marks itself as the drop target with its border colour only.
-for (const bar of [$("tabs"), $("term-tabs")]) {
+// pointer marks itself as the drop target with its border colour only. A drawer terminal
+// dropped on a pane's strip opens in that pane (moving tabs between panes is the free tiling
+// plan's t4).
+for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("pointerdown", (down) => {
     if (down.button !== 0 || (down.target as HTMLElement).closest(".tab-close")) return;
     const src = ptyTabAt(down.target as Element);
     if (!src) return;
     let dragging = false;
     let over: Place | null = null;
-    const mark = (p: Place | null) => {
+    let overPane: Pane | null = null;
+    const mark = (p: Place | null, at: Element | null = null) => {
       over = p;
-      $("tabs").classList.toggle("drop-target", p === "editor" && src.from !== "editor");
+      const strip = p === "editor" && src.from !== "editor" ? at?.closest<HTMLElement>(".pane-tabs") : null;
+      overPane = strip ? (paneList().find((x) => x.bar === strip) ?? null) : null;
+      for (const x of paneList()) x.bar.classList.toggle("drop-target", x.bar === strip);
       $("term-tabs").classList.toggle("drop-target", p === "panel" && src.from !== "panel");
     };
     const move = (ev: PointerEvent) => {
@@ -1404,7 +1843,8 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
         shell.classList.add("tab-dragging");
       }
       ev.preventDefault();
-      mark(dropPlace(document.elementFromPoint(ev.clientX, ev.clientY)));
+      const at = document.elementFromPoint(ev.clientX, ev.clientY);
+      mark(dropPlace(at), at);
     };
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", move);
@@ -1413,6 +1853,7 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
       window.removeEventListener("keydown", key, true);
       shell.classList.remove("tab-dragging");
       const to = drop ? moveTarget(src.from, over) : null;
+      const intoPane = overPane;
       mark(null);
       if (!dragging) return;
       // The release after a drag is not a click on whatever is under it (the click, when the
@@ -1420,7 +1861,7 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
       const eat = (ev: MouseEvent) => ev.stopPropagation();
       window.addEventListener("click", eat, true);
       window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
-      if (to) movePty(src.id, to);
+      if (to) movePty(src.id, to, { pane: intoPane ?? undefined });
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -1468,7 +1909,7 @@ function openTabMenu(id: string, from: Place, x: number, y: number) {
   tabMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 4))}px`;
   tabMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 4))}px`;
 }
-for (const bar of [$("tabs"), $("term-tabs")]) {
+for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("contextmenu", (ev) => {
     const src = ptyTabAt(ev.target as Element);
     if (!src) return;
@@ -1477,11 +1918,11 @@ for (const bar of [$("tabs"), $("term-tabs")]) {
   });
 }
 
-/** View → Move terminal to the panel: the active centre tab, when it is a terminal. */
+/** Terminal → Move terminal to the panel: the active centre tab, when it is a terminal. */
 function moveActiveToPanel() {
   if (!movePty(activeTab, "panel")) status("Move terminal to the panel: the active tab is not a terminal in the editor area");
 }
-/** View → Move terminal to the editor area: the drawer's active terminal. */
+/** Terminal → Move terminal to the editor area: the drawer's active terminal. */
 function moveActiveToEditor() {
   const key = terminals.activeKey();
   if (!key || !movePty(key, "editor")) status("Move terminal to the editor area: the panel has no terminal");
@@ -1539,6 +1980,26 @@ const host: DriverChatHost = {
     if (!workspace) return status("Open a folder first");
     // The engine form is a dialog now (not in the Mission hero); Start in it runs the plan.
     controls.openDialog({ plan: snapshot.activePlanFile });
+  },
+  stopRun: async (runId, how) => {
+    const run = runs.runs.get(runId);
+    if (!run?.running) return status("That run is no longer active");
+    try {
+      if (how === "gate") {
+        await runs.stop(runId);
+        return status(`Run #${runId}: stop sent at gate ${run.gate?.askId ?? ""} (the run ends there, exit 4)`);
+      }
+      if (how === "after-tick") {
+        await runs.stopAfterTick(runId);
+        return status(run.command === "run-plan-all" ? `Queue run #${runId}: it ends at its next gate` : `Run #${runId}: it ends after the current tick`);
+      }
+      const ok = await confirmAction(`Kill run #${runId} (${run.backend}) now? The agent stops mid-tick: whatever the tick already wrote stays on disk, unfinished, and the driver sends no run_end. Stop at a gate or after the tick ends it cleanly.`, "Kill run");
+      if (!ok) return status("Run not killed");
+      await runs.kill(runId);
+      return status(`Run #${runId} killed`);
+    } catch (e) {
+      status(`Stop run #${runId}: ${errText(e)}`);
+    }
   },
   runQueue: async () => {
     if (!workspace) return status("Open a folder first");
@@ -1663,7 +2124,7 @@ const terminalsView = new TerminalsView(kitHost, {
     void terminals.create(s.argv ?? undefined, s.argv ? s.label : undefined);
   },
 });
-const colonyView = new ColonyView(kitHost);
+const oligarchyView = new OligarchyView(kitHost, { openFolder: () => void pickFolder(), welcome: () => showWelcome() });
 const memoryView = new MemoryView(kitHost, () => showTab("decisions"));
 const healthView = new HealthView(kitHost);
 const decisionsView = new DecisionsView(kitHost);
@@ -1672,7 +2133,7 @@ const skillsView = new SkillsView(kitHost);
 const rulesView = new RulesView(kitHost);
 const commandsView = new CommandsView(kitHost);
 /** Every snapshot view, for a folder switch or a server restart. */
-const kitViews = [processesView, colonyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
+const kitViews = [processesView, oligarchyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -1832,17 +2293,18 @@ function pinViews() {
     { show: () => requestAnimationFrame(() => reviewView.layout()), hide: () => {} },
     () => (reviewCount ? { text: String(reviewCount), cls: "" } : null),
   );
-  pin("git", "Git", "git", "Git: host requests, pull requests, branch flow, working tree, commit, push", gitView.el, gitView, () =>
-    hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null,
-  );
+  // Ship: Git and CI/CD, the switch at the head of each view (never in the tab strip).
+  const ship = (info: WorkspaceSection, body: HTMLElement, v: { show(): void; hide(): void }, badge?: Tab["badge"]) =>
+    pin(info.id, info.label, info.icon, info.tip, groupSection("Ship", SHIP_VIEWS, info.id, body, (id) => showTab(id)), v, badge);
+  ship(SHIP_VIEWS[0], gitView.el, gitView, () => (hostRequests.count ? { text: String(hostRequests.count), cls: "warn" } : null));
   pin("queue", "Queue", "queue", "run-plan-all queue", queue.el, queue);
-  pin("cicd", "CI/CD", "devops", "CI/CD: workflow runs of this branch and the open pull requests, rerun failed jobs", cicd.el, cicd);
+  ship(SHIP_VIEWS[1], cicd.el, cicd);
   pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
   pin("activity", "Activity", "activity", "The kit's recent activity and health checks", activity.el, activity);
   pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
   pin("terminals", "Terminals", "terminals", "Every terminal of this window, closed drawer shells included", terminalsView.el, terminalsView);
   pin("processes", "Processes", "processes", "The kit's process list", processesView.el, processesView);
-  pin("colony", "Colony", "overview", "The game over the kit's outcome ledger", colonyView.el, colonyView);
+  pin("colony", "Oligarchy", "overview", "The game, loaded from oligarchy.missionkit.io", oligarchyView.el, oligarchyView);
   // Workspace: one view per section, the section switch at its head.
   const openSection = (id: string) => showTab(id);
   const section = (id: string, body: HTMLElement, v: { show(): void; hide(): void }) => {
@@ -1856,8 +2318,9 @@ function pinViews() {
   section("skills", skillsView.el, skillsView);
   section("rules", rulesView.el, rulesView);
   section("commands", commandsView.el, commandsView);
-  section("config", settingsPane, { show: () => {}, hide: () => {} });
   section("plans", plans.el, plans);
+  // Settings: a view of its own, on no rail item (the top bar gear and File → Settings… show it).
+  pin("settings", "Settings", "config", "Settings: skin, title bar, rail, engine, integrations, settings.json", settingsView, { show: () => {}, hide: () => {} });
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -1910,14 +2373,8 @@ runs.on((c) => {
   }
 });
 
-// ---- Workspace → Config: Colony's settings ---------------------------------------------
-// The settings the rail's More menu used to hold (ADR 2026-10-24 amend 2026-10-28 point 1):
-// Skin, Title bar, Rail side and labels, then the action rows of src/menu.json `config`
-// (never in the menu bar; menu.rs tests); `omarchyOnly` rows stay hidden until
-// renderSkinMenu() knows Omarchy is there.
-const settingsPane = $("settings-pane");
-const configActionsSep = h("div", { class: "menu-sep", hidden: "" });
-settingsPane.append(configActionsSep, ...menuSpec.config.map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)));
+// The Settings view's rows: a setting changes at once, an action row (src/menu.json `config`)
+// runs its action.
 settingsPane.addEventListener("click", (ev) => {
   const el = (ev.target as HTMLElement).closest<HTMLElement>("button");
   if (!el) return;
@@ -2158,18 +2615,31 @@ function applyTitleBar(info: StartupInfo) {
   fitTopActions();
 }
 
-// ---- actions: the native menu bar and Workspace → Config (src/menu.json), and the palette -
+// ---- actions: the native menu bar and the Settings view (src/menu.json), and the palette --
 const ACTIONS: Record<string, () => unknown> = {
   "new-window": () => newWindow(),
   "open-folder": () => pickFolder(),
-  "run-elsewhere": () => controls.startElsewhere(),
   "new-file": () => newItem("file"),
   "new-folder": () => newItem("folder"),
   save: () => saveActive(),
   "save-as": () => saveAs(),
   "open-in-editor": () => openInEditor(),
-  settings: () => openSettings(),
+  "file-manager": () => fileManagerHere(),
+  settings: () => showSettings(),
   "close-window": () => closeWindow(),
+  explorer: () => toggleExplorer(),
+  "explorer-collapse": () => tree.collapseAll(),
+  "explorer-refresh": () => tree.refresh(),
+  refresh: () => snapshot.refresh(),
+  "split-right": () => splitFocused("right"),
+  "split-down": () => splitFocused("down"),
+  "pane-close": () => closePane(),
+  "quick-open": () => showQuick(),
+  commands: () => palette.show(),
+  "explorer-reveal": () => revealInExplorer(),
+  "nav-back": () => navAction("back"),
+  "nav-forward": () => navAction("forward"),
+  "new-terminal": () => newShell(),
   terminal: () => toggleTerminal(),
   "dock:bottom": () => setDock("bottom"),
   "dock:top": () => setDock("top"),
@@ -2177,26 +2647,22 @@ const ACTIONS: Record<string, () => unknown> = {
   "term-to-panel": () => moveActiveToPanel(),
   "term-to-editor": () => moveActiveToEditor(),
   "term-placement-reset": () => resetPlacement(),
-  explorer: () => toggleExplorer(),
-  "explorer-reveal": () => revealInExplorer(),
-  "explorer-collapse": () => tree.collapseAll(),
-  "explorer-refresh": () => tree.refresh(),
-  "quick-open": () => showQuick(),
-  commands: () => palette.show(),
-  refresh: () => snapshot.refresh(),
   "run-plan": () => host.runPlan(),
   "run-queue": () => host.runQueue(),
+  "run-elsewhere": () => controls.startElsewhere(),
   interactive: () => host.interactive(),
   "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
   "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
-  "new-terminal": () => newShell(),
-  engine: () => showEngine(),
   about: () => openAboutPanel(status),
+  shortcuts: () => openShortcutsPanel(shortcutRows(menuItems(), CTRL_DIGITS.map((id) => RAIL.find((r) => r.id === id)!.label))),
+  "check-updates": () => checkForUpdates(status),
+  engine: () => showEngine(),
   omarchy: () => openOmarchyPanel(status),
+  "settings-json": () => openSettings(),
 };
 
 /** `view:<rail item or Workspace section>`: the rail item's own behaviour (a group opens its
- *  last view); a Workspace section (`view:plans`, `view:config`, ...) opens that section. */
+ *  last view); a Workspace section (`view:plans`, `view:memory`, ...) opens that section. */
 function viewAction(id: string): (() => unknown) | null {
   const v = id.slice("view:".length);
   const r = RAIL.find((x) => x.id === v && x.views.length);
@@ -2230,10 +2696,16 @@ async function closeWindow() {
   await getCurrentWindow().close();
 }
 
-/** Every action item of src/menu.json: the menu bar in menu order, then Workspace → Config. */
+/** Every action item of src/menu.json: the menu bar in menu order, then the Settings view. */
 const menuItems = () => [
-  ...menuSpec.menus.flatMap((m) => m.items.flatMap((i) => ("id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []))),
-  ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Workspace → Config", bar: false, omarchyOnly: !!i.omarchyOnly })),
+  ...menuSpec.menus.flatMap((m) =>
+    m.items.flatMap((i): { id: string; label: string; where: string; bar: boolean; omarchyOnly: boolean }[] => {
+      // A submenu (View → Splits) lists its own items, one level deep.
+      if ("items" in i && i.items) return i.items.map((c) => ({ id: c.id, label: c.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }));
+      return "id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : [];
+    }),
+  ),
+  ...menuSpec.config.map((i) => ({ id: i.id, label: i.label, where: "Settings", bar: false, omarchyOnly: !!i.omarchyOnly })),
 ];
 /** Every item id of the native menu bar, in menu order. */
 const menuIds = () => menuItems().flatMap((i) => (i.bar ? [i.id] : []));
@@ -2252,8 +2724,8 @@ function showEngine() {
 }
 $("st-engine").addEventListener("click", showEngine);
 
-// ---- command palette (Ctrl+Shift+P, View → Commands) -----------------------------------
-/** Every menu action the menus show here (menu bar, then Workspace → Config) as a palette row,
+// ---- command palette (Ctrl+Shift+P, Go → Commands) -------------------------------------
+/** Every menu action the menus show here (menu bar, then the Settings view) as a palette row,
  *  a view row as `Go to <item>`, then `Go to Workspace → <section>` for every Workspace section
  *  the View menu does not list; not Commands… itself. */
 const paletteActions = (): ColonyAction[] => {
@@ -2287,7 +2759,7 @@ document.body.append(palette.el);
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
   for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
-  configActionsSep.hidden = ![...settingsPane.querySelectorAll<HTMLElement>("button[data-cmd]")].some((b) => !b.hidden);
+  for (const g of settingsPane.querySelectorAll<HTMLElement>(".settings-group")) g.hidden = ![...g.querySelectorAll<HTMLElement>("button")].some((b) => !b.hidden);
   for (const b of settingsPane.querySelectorAll<HTMLElement>('button[data-setting="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
@@ -2316,7 +2788,7 @@ snapshot.on((why) => {
     // Explorer's git marks (debounced, one git status call).
     tree.refreshMarks();
     // A plan shown rendered: its to-do table follows the snapshot (rebuilt only on a change).
-    if (tabs.get(activeTab)?.mode === "preview") renderDocMode(activeTab, false);
+    for (const p of paneList()) if (p.shown && tabs.get(p.shown)?.mode === "preview") renderDocMode(p, p.shown, false);
   }
 });
 setInterval(renderFeed, 5000);
@@ -2441,11 +2913,6 @@ $("welcome-open").addEventListener("click", () => void pickFolder());
 $("tree-refresh").replaceChildren(icon("refresh", "btn-icon"));
 $("tree-refresh").setAttribute("aria-label", "Refresh the Explorer");
 $("tree-refresh").addEventListener("click", () => void tree.refresh());
-for (const b of $("tabs").querySelectorAll<HTMLButtonElement>("[data-nav]")) {
-  const step = b.dataset.nav as "back" | "forward";
-  b.replaceChildren(icon(step, "tab-svg"));
-  b.addEventListener("click", () => navigate(step));
-}
 // The mouse's back and forward buttons, anywhere in the window. The press is swallowed so WebKit runs no history
 // navigation of its own.
 window.addEventListener("mousedown", (ev) => {
@@ -2470,17 +2937,16 @@ async function openWorkspace(path: string) {
   remember(workspace.root);
   // Files and terminal tabs belong to the folder; agent runs keep their
   // tabs (a run may be in another folder, and closing one would kill it).
-  for (const id of [...order]) {
+  for (const id of [...tabs.keys()]) {
     const t = tabs.get(id);
     if (!t || t.pinned || id.startsWith("run:")) continue;
     centerTerms.get(id)?.dispose();
     if (centerTerms.delete(id)) ttys.closed(id);
     tabs.delete(id);
-    order.splice(order.indexOf(id), 1);
-    if (t.el !== $("view-editor")) t.el.remove();
+    if (!isFile(id)) t.el.remove();
   }
-  // The history belongs to the folder (its tabs just left): Mission becomes its first entry.
-  nav.reset();
+  // The split tree belongs to the folder too: one pane again, holding the runs that stay.
+  resetPanes();
   commandsView.reset();
   document.getElementById("run-dialog")?.remove();
   editors.closeAll();
@@ -2505,6 +2971,8 @@ async function openWorkspace(path: string) {
   $("st-ws").textContent = workspace.name;
   $("welcome").hidden = true;
   shell.classList.remove("no-folder");
+  // The game may be on screen with no folder (`colony://play`): a folder reloads it with its data.
+  oligarchyView.hide();
   showTab("mission");
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace(workspace.root);
@@ -2567,7 +3035,7 @@ window.addEventListener(
     else if (key === "o" && !ev.shiftKey && !inTerm) runAction("open-folder");
     else if (key === "p" && !ev.shiftKey && !inTerm) runAction("quick-open");
     else if (key === "p" && ev.shiftKey) runAction("commands");
-    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab);
+    else if (key === "w" && !ev.shiftKey && !inTerm && !tabs.get(activeTab)?.pinned) void closeTab(activeTab, focused);
     else if (key === "e" && ev.shiftKey) runAction("open-in-editor");
     else if (key === "t" && ev.shiftKey) runAction("new-terminal");
     else if (key === "n" && ev.shiftKey) runAction("new-window");
@@ -2605,6 +3073,7 @@ window.addEventListener("contextmenu", (ev) => {
 
 // A terminal's refused clipboard read or write shows in the status bar (termview.ts).
 termStatus.show = status;
+editorStatus.show = status;
 
 // ---- files dropped from the desktop (src/droproute.ts) ------------------------------------
 /** Route one drop by the element under its position; returns the zone it went to. */
@@ -2727,7 +3196,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // (and no active plan) opens on the First run card instead of the hero.
     const firstRun = view("mission").querySelector<HTMLElement>(".first-run");
     const firstRunOk = !!firstRun && !!firstRun.querySelector('[data-act="onboard"], [data-act="install-kit"]');
-    // The hero keeps Open plan and Open HANDOFF; Run plan, Run queue and Open interactive sit in the top bar.
+    // The hero's own row is Play/Stop, Open, Edit, Cancel, Plans (card-* acts, the card-* steps);
+    // Run plan, Run queue and Open interactive keep their ids in the top bar only.
     const heroActs = view("mission").querySelector(".hero:not(.first-run)")?.querySelectorAll('[data-act="run-plan"], [data-act="run-queue"], [data-act="interactive"]').length ?? 0;
     const heroOk = !!snapshot.git.branch && hero.includes(String(snapshot.git.branch)) && heroActs === 0;
     await log("view-mission", activeTab === "mission" && (heroOk || firstRunOk), { hero: hero.slice(0, 160), heroActs, firstRun: firstRun?.dataset.firstRun ?? "", cards: view("mission").querySelectorAll(".card").length });
@@ -2819,15 +3289,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         ok &&= m.hidden;
       }
+      // The dropdown left the Mission hero (shell ADR amend 2026-10-29 point 1): Edit and
+      // Cancel are the card's own buttons there (checked in card-idle).
       showTab("mission");
       await wait(100);
-      const heroCrud = view("mission").querySelector<HTMLButtonElement>('.hero [data-act="plan-crud"]');
-      heroCrud?.click();
-      const heroItems = [...(document.getElementById("plan-crud-menu")?.querySelectorAll<HTMLElement>("[data-crud]") ?? [])].map((x) => x.dataset.crud).join(",");
-      await shot("plan-crud-hero");
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-      const heroOk = !snapshot.activePlanFile || (!!heroCrud && heroItems === "edit");
-      await log("plan-crud", ok && heroOk && Object.keys(crud).length === rowsBefore, { rows: crud, hero: heroItems });
+      const heroCrud = !!view("mission").querySelector('.hero [data-act="plan-crud"]');
+      await log("plan-crud", ok && !heroCrud && Object.keys(crud).length === rowsBefore, { rows: crud, heroDropdown: heroCrud });
       showTab("plans");
     }
     const rendered: Record<string, number> = {};
@@ -2840,16 +3307,17 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await log("views-render", Object.values(rendered).every((n) => n > 0) && gitText.includes(String(snapshot.git.branch)), rendered);
     // Native menu bar (src/menu.json): installed on the window as the spec lists it, every
     // item bound to an action, and a click (smoke_menu_click: the same Rust path as a real
-    // click) runs the action; Workspace → Config holds only its menu.json `config` rows (settings).
-    // A custom title bar has no GTK menu bar: its own File / View / Run / Help buttons open
-    // the same menus as popups (menu_popup, by index; a popup needs a real click).
+    // click) runs the action; the Settings view holds only its menu.json `config` rows as actions.
+    // A custom title bar has no GTK menu bar: its own File / View / Go / Terminal / Run / Help
+    // buttons open the same menus as popups (menu_popup, by index; a popup needs a real click).
+    const MENU_LABELS = "File,View,Go,Terminal,Run,Help";
     const bar = await api.menuState();
     const barIds = bar.flatMap((m) => m.items.map((i) => i.id));
     const topMenus = [...$("top-menus").querySelectorAll("button")].map((b) => b.textContent).join();
     const menuOk =
       info.titleBar === "custom"
-        ? !bar.length && topMenus === "File,View,Run,Help" && !$("top-menus").hidden
-        : JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === "File,View,Run,Help" && bar.every((m) => m.items.every((i) => i.enabled)) && $("top-menus").hidden;
+        ? !bar.length && topMenus === MENU_LABELS && !$("top-menus").hidden
+        : JSON.stringify(barIds) === JSON.stringify(menuIds()) && bar.map((m) => m.label).join() === MENU_LABELS && bar.every((m) => m.items.every((i) => i.enabled)) && $("top-menus").hidden;
     await log("menu-installed", menuOk && !unbound.length, { titleBar: info.titleBar, menus: bar.map((m) => `${m.label}: ${m.items.map((i) => i.label).join(" | ")}`), topMenus, unbound });
     const fire = (id: string) => api.smokeMenuClick(id);
     const termOn = () => !shell.classList.contains("no-bottom");
@@ -2876,16 +3344,86 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await fire("about");
     m.about = await until(() => !!document.getElementById("about-panel"), 2000);
     document.getElementById("about-panel")?.click();
-    await fire("engine");
+    // Engine… is a Settings row, not a menu bar item: the bar refuses its id, the row runs it.
+    m.engineNotInBar = await fire("engine").then(() => false, (e) => errText(e).startsWith("Unknown menu item"));
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="engine"]')?.click();
     m.engine = await until(() => !!document.getElementById("engine-panel"), 2000);
     closeEnginePanel();
+    // Help → Keyboard shortcuts…: one row per key of the window handler (SHORTCUTS, then
+    // Ctrl+1..9 and Ctrl+W), then closed.
+    await fire("shortcuts");
+    m.shortcuts = await until(() => !!document.getElementById("shortcuts-panel"), 2000);
+    const keyRows = [...document.querySelectorAll("#shortcuts-panel .shortcut-row kbd")].map((k) => k.textContent ?? "");
+    m.shortcutRows = keyRows.length === Object.keys(SHORTCUTS).length + 10 && Object.values(SHORTCUTS).every((k) => keyRows.includes(k)) && keyRows.includes("Ctrl+9") && keyRows.includes("Ctrl+W");
+    closeShortcutsPanel();
+    m.shortcutsClosed = !document.getElementById("shortcuts-panel");
+    // Go → Back / Forward: the strip's history, from the menu (Plans, Inbox, Ship were shown).
+    showTab("mission");
+    showTab("inbox");
+    await fire("nav-back");
+    m.navBack = await until(() => activeTab === "mission", 2000);
+    await fire("nav-forward");
+    m.navForward = await until(() => activeTab === "inbox", 2000);
     await fire("run-plan");
     m.runPlan = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
     document.getElementById("run-dialog")?.remove();
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
-    await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views)" });
+    await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, keyRows, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views), check-updates (asks GitHub Releases)" });
+    // Settings (kit ADR 2026-10-24 amend 2026-11-11, point 2): one view. The top bar gear and
+    // File → Settings… show the same view and Back returns from each; its rows sit under
+    // Appearance, Engine, Integrations (Omarchy only) and Files; Workspace has no Config
+    // section; settings.json opens from its one row; the palette names the place Settings.
+    // The gear is marked while the view is on screen, by its border colour alone.
+    const st: Record<string, unknown> = {};
+    const stView = view("settings");
+    const gear = $("btn-settings");
+    const stOn = () => activeTab === "settings" && !stView.hidden && stView.contains(settingsPane) && settingsPane.getClientRects().length > 0;
+    const gearLook = () => {
+      const c = getComputedStyle(gear);
+      return { border: c.borderTopColor, bars: [c.borderTopWidth, c.borderRightWidth, c.borderBottomWidth, c.borderLeftWidth].join(), bg: c.backgroundColor, shadow: c.boxShadow };
+    };
+    showTab("mission");
+    const gearOff = gearLook();
+    gear.click();
+    st.gear = stOn();
+    // The border colour is a 0.15s transition: read it settled.
+    await wait(300);
+    const gearOn = gearLook();
+    st.gearMarked = gear.getAttribute("aria-current") === "page" && gearOn.border !== gearOff.border;
+    st.gearBorderOnly = gearOn.bars === gearOff.bars && new Set(gearOn.bars.split(",")).size === 1 && gearOn.bg === gearOff.bg && gearOn.shadow === gearOff.shadow ? true : { gearOff, gearOn };
+    st.noRailItem = !$("rail").querySelector(".rail-item.active");
+    st.heading = stView.querySelector(".settings-head h2")?.textContent === "Settings" && stView.querySelector<HTMLElement>('.settings-head [data-act="welcome"]')?.hidden === true;
+    focused.bar.querySelector<HTMLButtonElement>(".nav-back")!.click();
+    st.gearBack = activeTab === "mission" && stView.hidden && !gear.hasAttribute("aria-current") ? true : activeTab;
+    showTab("inbox");
+    await fire("settings");
+    st.menu = await until(stOn, 2000);
+    st.menuLabel = menuItems().find((i) => i.id === "settings")?.label === "Settings…" && (!bar.length || bar.some((b) => b.label === "File" && b.items.some((i) => i.id === "settings" && i.label === "Settings…")));
+    await fire("nav-back");
+    st.menuBack = await until(() => activeTab === "inbox", 2000);
+    const stGroups = [...settingsPane.querySelectorAll<HTMLElement>(".settings-group")];
+    const groupRows = Object.fromEntries(stGroups.map((g) => [g.dataset.group ?? "", { title: g.querySelector(".settings-group-title")?.textContent ?? "", hidden: g.hidden, labels: [...g.querySelectorAll(".menu-label")].map((l) => l.textContent ?? ""), cmds: [...g.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd ?? "") }]));
+    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
+    st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"]) && !groupRows.Appearance?.cmds.length;
+    st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
+    st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 8 && !tabs.has("config") && view("plans").querySelectorAll(".ws-nav-btn").length === 8 && !view("plans").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
+    const stPalette = paletteActions();
+    st.paletteWhere = menuSpec.config.every((c) => !!c.omarchyOnly && !omarchyDetected() ? !stPalette.some((a) => a.id === c.id) : stPalette.find((a) => a.id === c.id)?.description === "Settings") && stPalette.find((a) => a.id === "settings")?.description === "File menu" && !stPalette.some((a) => a.id === "view:config");
+    // Files → Open settings.json: the raw file in an editor tab; closing it returns to Settings.
+    showTab("mission");
+    gear.click();
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
+    st.settingsJson = await until(() => activeTab.endsWith("/settings.json") && !activeTab.startsWith(`${root}/`), 3000);
+    const stFile = activeTab;
+    if (st.settingsJson === true) await closeTab(stFile);
+    st.jsonCloseReturns = activeTab === "settings" ? true : activeTab;
+    await wait(200);
+    await shot("settings");
+    focused.bar.querySelector<HTMLButtonElement>(".nav-back")!.click();
+    st.back = activeTab === "mission" ? true : activeTab;
+    await log("settings-view", Object.values(st).every((v) => v === true), { ...st, groups: st.groups === true ? true : groupRows, gearOff, gearOn });
     // Title bar: the window opened in the saved mode (decorations, drag region, controls),
-    // and the Config choice is saved for the next start (then put back). On a tiling
+    // and the Settings choice is saved for the next start (then put back). On a tiling
     // window manager: always native, the choice hidden, a saved custom ignored.
     const win = getCurrentWindow();
     const decorated = await win.isDecorated();
@@ -2894,12 +3432,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const drag = $("top").getAttribute("data-tauri-drag-region");
     await log("title-bar-applied", decorated === !custom && controlsShown === custom && (custom ? drag === "deep" : drag === null) && document.documentElement.dataset.titleBar === info.titleBar, { titleBar: info.titleBar, decorated, controlsShown, drag, tiling: info.tilingWm });
     if (info.tilingWm) {
-      // Tiling window manager: always native. The choice is hidden from Workspace → Config, and
+      // Tiling window manager: always native. The choice is hidden from the Settings view, and
       // a saved `custom` (written here, as a settings.json shared with a GNOME machine
       // would have it) still opens native on the next start (settings_title_bar asks the
       // same decision the startup uses). Then the saved value is put back.
       const hidden = [...settingsPane.querySelectorAll<HTMLElement>("[data-title-bar-menu]")];
-      const menuHidden = hidden.length === 4 && hidden.every((el) => el.hidden);
+      const menuHidden = hidden.length === 3 && hidden.every((el) => el.hidden);
       const before = await api.settingsTitleBar();
       await api.settingsSetTitleBar("custom");
       const withCustom = await api.settingsTitleBar();
@@ -2969,19 +3507,19 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Markdown in Monaco, Preview the document again.
     {
       const hf = `${root}/.cursor/HANDOFF.md`;
-      const pv = $("doc-preview");
-      const modeBtn = (m: DocMode) => $("doc-bar").querySelector<HTMLElement>(`button[data-mode="${m}"]`);
+      const pv = focused.docPreview;
+      const modeBtn = (m: DocMode) => focused.docBar.querySelector<HTMLElement>(`button[data-mode="${m}"]`);
       host.openRepoFile(".cursor/HANDOFF.md");
-      const shown = await until(() => activeTab === hf && !pv.hidden && !!pv.querySelector(".md-doc") && $("monaco-host").hidden, 4000);
+      const shown = await until(() => activeTab === hf && !pv.hidden && !!pv.querySelector(".md-doc") && focused.monacoHost.hidden, 4000);
       const renderMs = Number(pv.dataset.renderMs);
       modeBtn("editor")?.click();
-      const editorMode = await until(() => !$("monaco-host").hidden && pv.hidden && editors.active === hf && tabs.get(hf)?.mode === "editor", 2000);
+      const editorMode = await until(() => !focused.monacoHost.hidden && pv.hidden && editors.active === hf && tabs.get(hf)?.mode === "editor", 2000);
       modeBtn("preview")?.click();
       const back = await until(() => !pv.hidden && !!pv.querySelector(".md-doc"), 2000);
       await shot("md-preview");
       const readmeBar = (() => {
         showTab(file);
-        return !$("doc-bar").hidden && tabs.get(file)?.mode === "editor";
+        return !focused.docBar.hidden && tabs.get(file)?.mode === "editor";
       })();
       await closeTab(hf);
       await log("md-preview", shown && editorMode && back && readmeBar && renderMs < 500, { shown, renderMs, editorMode, back, readmeBar });
@@ -2995,6 +3533,64 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       out = await api.readTextFile(`${root}/smoke.txt`).catch(() => "");
     }
     await log("terminal-command", out.trim() === "colony-ok-42", out.trim());
+    // Remembered placement across a restart (kit ADR 2026-10-24 amend 2026-11-07, tab
+    // placement memory): the previous launch on this settings.json ended with
+    // tab-placement-seed (a shell moved to the editor area, an interactive tab to the panel).
+    // This fresh process opens new tabs there, Explorer → Open terminal here included, before
+    // any step here moves a tab; then the reset drops the field from settings.json and new
+    // tabs take the defaults again. A first launch (nothing remembered) only notes it.
+    const bootPlaced = readPlacement(bootLayout.terminalPlacement);
+    const placementSeed = { shell: "editor", interactive: "panel" } as const;
+    const rawPlacement = async () => ((await api.settingsGet()).settings as { ui?: { layout?: Record<string, unknown> } } | null)?.ui?.layout ?? {};
+    const termIn = {
+      panel: (id: string) => terminals.has(id) && !tabs.has(id) && ttys.get(id)?.place === "drawer",
+      editor: (id: string) => tabs.has(id) && !terminals.has(id) && ttys.get(id)?.place === "tab",
+    };
+    const smokeAgent = { kind: "interactive", plan: "", backend: "smoke", engine: "claude" } as const;
+    const statusLine = () => $("st-msg").textContent ?? "";
+    if (!Object.keys(bootPlaced).length) await log("tab-placement-restart", true, { skipped: "first launch on this settings.json: nothing remembered yet (tab-placement-seed records it for the next launch)" });
+    else {
+      const shownBefore = !shell.classList.contains("no-bottom");
+      const keyBefore = terminals.activeKey();
+      const settle = async () => {
+        await wait(100);
+        await placementSaved;
+      };
+      const r: Record<string, unknown> = {};
+      r.bootIsSeed = JSON.stringify(bootPlaced) === JSON.stringify(placementSeed);
+      r.diskIsSeed = JSON.stringify((await rawPlacement()).terminalPlacement) === JSON.stringify(placementSeed);
+      runAction("new-terminal");
+      await wait(600);
+      const s1 = terminals.newestKey;
+      r.newShellInEditor = s1 !== keyBefore && termIn.editor(s1) && activeTab === s1;
+      r.statusNamesMemory = statusLine().includes("where this kind of terminal was last moved");
+      await terminalHere(`${root}/.cursor`);
+      await wait(600);
+      const s2 = terminals.newestKey;
+      r.openHereInEditor = s2 !== s1 && termIn.editor(s2);
+      const a = await openTermTab(["sh"], "smoke restart a", "COLONY_SMOKE tab placement restart", "terminals", smokeAgent);
+      await wait(400);
+      r.newInteractiveInPanel = !!a && termIn.panel(a.id);
+      runAction("term-placement-reset");
+      await settle();
+      const rawAfter = await rawPlacement();
+      r.resetDropsField = !("terminalPlacement" in rawAfter);
+      r.openTabsStay = !!a && termIn.editor(s1) && termIn.editor(s2) && termIn.panel(a.id);
+      runAction("new-terminal");
+      await wait(600);
+      const s3 = terminals.newestKey;
+      r.afterResetShellInPanel = s3 !== s2 && termIn.panel(s3);
+      const b = await openTermTab(["sh"], "smoke restart b", "COLONY_SMOKE tab placement restart", "terminals", smokeAgent);
+      await wait(300);
+      r.afterResetInteractiveInEditor = !!b && termIn.editor(b.id);
+      for (const t of [a, b]) if (t) await closeTab(t.id);
+      for (const k of [s1, s2]) if (tabs.has(k)) await closeTab(k);
+      terminals.focusKey(s3);
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${s3}"] .tab-close`)?.click();
+      if (keyBefore) terminals.focusKey(keyBefore);
+      toggleTerminal(shownBefore);
+      await log("tab-placement-restart", Object.values(r).every((v) => v === true), { saved: bootLayout.terminalPlacement, a: a?.id ?? null, b: b?.id ?? null, shells: [s1, s2, s3], layoutAfterReset: rawAfter, ...r });
+    }
     // Files dropped from the desktop: the smoke's stand-in emits Tauri's drag-drop event
     // with the real payload (lib.rs smoke_drag_drop), at the centre of a terminal, an
     // Explorer file row (its folder: the root) and the editor. No OS drag, no input.
@@ -3032,7 +3628,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const onTree = await drop(row);
       const copied = await api.readTextFile(`${root}/${name}`).catch((e) => `error: ${errText(e)}`);
       showTab(file);
-      const onEditor = await drop($("monaco-host"));
+      const onEditor = await drop(focused.monacoHost);
       const opened = await until(() => editors.active === src && activeTab === src, 3000);
       await log("file-drop", onTerm.zone === "terminal" && typed && onTree.zone === "explorer" && copied === "dropped by the code-path smoke\n" && onEditor.zone === "editor" && opened, {
         terminal: { ...onTerm, typed, input: input.slice(0, 160) },
@@ -3090,6 +3686,63 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       r.escapeRefused = await api.renamePath(`${root}/README.md`, `${root}/../escaped.md`).then(() => false, () => true);
       r.overwriteRefused = await api.createDir(`${root}/README.md`).then(() => false, () => true);
       await log("explorer-ops", !!(r.newFolder && r.newFile && r.rename && r.terminalHere && r.terminalCwd === dir && r.trash && r.escapeRefused && r.overwriteRefused), r);
+      // File → Save (plan colony-explorer-file-ops e4): File → New file in a new folder, text
+      // typed through Monaco's own type command, File → Save through the native menu's click
+      // path; the text is on disk, the tab is clean and the status line says so.
+      const sdir = `${root}/smoke-file-save`;
+      const saved = `${sdir}/saved.md`;
+      const text = "typed in the code-path smoke, saved with File > Save\n";
+      const s: Record<string, unknown> = {};
+      s.folder = (await menuAt($("tree"), "tree-new-folder")) && (await typeName("smoke-file-save")) && (await until(() => !!rowOf(sdir), 4000));
+      await api.smokeMenuClick("new-file");
+      s.opened = (await typeName("saved.md")) && (await until(() => editors.active === saved && activeTab === saved, 4000));
+      editors.editor.trigger("colony-smoke", "type", { text });
+      s.dirty = editors.isDirty(saved);
+      await api.smokeMenuClick("save");
+      let disk = "";
+      for (let i = 0; i < 20 && disk !== text; i++) {
+        await wait(200);
+        disk = await api.readTextFile(saved).catch((e) => `error: ${errText(e)}`);
+      }
+      s.onDisk = disk === text;
+      s.clean = await until(() => !editors.isDirty(saved), 2000);
+      s.notice = $("st-msg").textContent ?? "";
+      await log("file-save", !!(s.folder && s.opened && s.dirty && s.onDisk && s.clean && s.notice === "Saved smoke-file-save/saved.md"), { ...s, disk: disk.slice(0, 80) });
+      await closeTab(saved);
+      await api.trashPath(sdir).catch(() => undefined);
+      // Open in terminal file manager (plan colony-explorer-file-ops e3, smoke e4). One process
+      // has one PATH, so the lookup takes the smoke's own: the fixture folder with a fake
+      // `yazi` (packaging/smoke/file-manager-bin, copied into the scratch clone by the runner),
+      // then an empty PATH for the not-installed hint. The fake runs in the picked folder,
+      // leaves a file there and exits, which must refresh the Explorer.
+      const fmBin = `${root}/packaging/smoke/file-manager-bin`;
+      if ((await api.listDir(fmBin).catch(() => [])).some((e) => e.path === `${fmBin}/yazi`)) {
+        const fdir = `${root}/smoke-file-manager`;
+        const f: Record<string, unknown> = {};
+        const made = `${fdir}/made-by-file-manager.txt`;
+        await api.createDir(fdir);
+        await tree.reveal(fdir, true); // expanded, so the file the fake leaves shows once the tree re-reads it
+        const prevKey = terminals.activeKey();
+        await fileManagerHere(fdir, () => api.smokeFileManagerLaunch(fmBin));
+        const key = terminals.activeKey();
+        f.tab = key !== prevKey && terminals.has(key) && !!$("term-tabs").querySelector(`.tab[data-key="${key}"]`)?.textContent?.includes("yazi smoke-file-manager");
+        const fm = terminals.view(key);
+        f.cwd = fm && fm.id >= 0 ? await api.ptyCwd(fm.id).catch((e) => `error: ${errText(e)}`) : null;
+        f.notice = $("st-msg").textContent ?? "";
+        f.exited = await until(() => !!terminals.view(key)?.exited, 8000);
+        f.made = (await api.listDir(fdir).catch(() => [])).some((e) => e.path === made);
+        // The tab's exit refreshes the Explorer: the row of the file the fake left appears.
+        f.refreshed = await until(() => !!rowOf(made), 3000);
+        $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"] .tab-close`)?.click();
+        if (prevKey) terminals.focusKey(prevKey);
+        await log("file-manager-tab", !!(f.tab && f.cwd === fdir && f.exited && f.made && f.refreshed && String(f.notice).startsWith("Opened yazi in smoke-file-manager (found on PATH)")), f);
+        const panesBefore = $("terms").querySelectorAll(".term-pane").length;
+        await fileManagerHere(fdir, () => api.smokeFileManagerLaunch(""));
+        const hint = $("st-msg").textContent ?? "";
+        const noTab = $("terms").querySelectorAll(".term-pane").length === panesBefore;
+        await log("file-manager-hint", hint.startsWith("No terminal file manager on PATH (yazi, lf, nnn, ranger or broot).") && hint.includes("Colony installs nothing") && noTab, { hint, noTab });
+        await api.trashPath(fdir).catch(() => undefined);
+      } else await log("file-manager-tab", false, `fixture missing: ${fmBin}/yazi (the runner copies packaging/smoke into the scratch clone)`);
     }
     // Panels: the terminal docks at the top, the side and back at the bottom (the menu's
     // path), refitting its xterm each time; the Explorer hides and comes back; both
@@ -3209,7 +3862,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await until(() => dock() === "bottom", 2000);
     await wait(600);
     await layoutSaved;
-    // Rail (Workspace → Config → Rail): left and right × labels and icons only, in every dock. The rail
+    // Rail (Settings → Appearance): left and right × labels and icons only, in every dock. The rail
     // sits at its window edge, the centre beside it; icons only hides the labels and keeps
     // each item's tooltip and aria-label; the choice is in settings.json.
     const settingRow = (sel: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting=${sel}]`)!.click();
@@ -3267,14 +3920,14 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Back / Forward (u4): views and a document, the buttons' state, Alt+Left / Alt+Right
     // (dispatched in the page: whether WebKitGTK itself reacts to the real keys is a manual check),
     // and a closed tab leaving the history.
-    const navBtn = (step: string) => $("tabs").querySelector<HTMLButtonElement>(`.nav-${step}`)!;
+    const navBtn = (step: string) => focused.bar.querySelector<HTMLButtonElement>(`.nav-${step}`)!;
     // On the focused element, as a real key press is (the handler reads its target).
     const altKey = (key: string) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true, cancelable: true }));
     const navDoc = `${root}/smoke-nav.txt`;
     await api.writeTextFile(navDoc, "Back / Forward smoke\n");
     const navSteps: Record<string, unknown> = {};
     const navAt = (k: string, want: string) => (navSteps[k] = activeTab === want ? true : activeTab);
-    nav.reset();
+    focused.nav.reset();
     showTab("mission");
     showTab("inbox");
     showTab("git");
@@ -3295,10 +3948,153 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     navSteps["closed-left-history"] = navBtn("forward").disabled;
     navBtn("back").click();
     navAt("back-after-close", "inbox");
+    // The strip holds documents only (kit ADR 2026-10-24 amend 2026-11-11, point 3): after
+    // Back / Forward it has the same children with a document, a Ship view, the document
+    // again and the other Ship view active. Ship switches Git | CI/CD inside its view, the
+    // rail item reopens the member shown last, and Ctrl+7 still reaches Ship.
+    const strip = () => [...focused.rest.children].map((el) => (el.classList.contains("tabs-docs") ? `docs[${[...el.children].map((t) => relPath((t as HTMLElement).dataset.tab ?? "")).join(",")}]` : el.className)).join(" ");
+    await openFile(navDoc);
+    const strips: Record<string, string> = { doc: strip() };
+    showTab("git");
+    strips.view = strip();
+    showTab(navDoc);
+    strips.docAgain = strip();
+    showTab("cicd");
+    strips.otherView = strip();
+    navSteps["strip-same-set"] = new Set(Object.values(strips)).size === 1 && strips.doc.includes("docs[") && strips.doc.includes("smoke-nav.txt") ? true : strips;
+    navSteps["strip-no-view-switch"] = !focused.bar.querySelector(".view-switch, [role='tablist']");
+    const shipNav = (id: string) => [...view(id).querySelectorAll<HTMLElement>(".ws-nav-btn")];
+    const shipBtns = shipNav("cicd").map((b) => `${b.dataset.section}${b.classList.contains("active") ? "*" : ""}`).join();
+    navSteps["ship-inner-switch"] = shipBtns === "git,cicd*" ? true : shipBtns;
+    shipNav("cicd").find((b) => b.dataset.section === "git")?.click();
+    navAt("ship-switch-click", "git");
+    showTab("cicd");
+    showTab(navDoc);
+    $("rail").querySelector<HTMLElement>('.rail-item[data-tab="ship"]')?.click();
+    navAt("rail-reopens-last", "cicd");
+    showTab(navDoc);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "7", code: "Digit7", ctrlKey: true, bubbles: true, cancelable: true }));
+    navAt("ctrl-7", "cicd");
+    await closeTab(navDoc);
     await log("inner-nav", Object.values(navSteps).every((v) => v === true), navSteps);
     // Leave the history as a fresh folder has it, for the steps after this one.
-    nav.reset();
+    focused.nav.reset();
     showTab("mission");
+    // Free tiling (kit ADR 2026-10-24 amend 2026-11-19; plan colony-free-tiling t2): Split right
+    // on a file shows it in both panes (one model, an editor each); a terminal opens in the
+    // focused pane; Split down moves it when its pane keeps a tab; a view shows in the focused
+    // pane only; Close pane keeps the tabs; closing a pane's last tab gives its space back.
+    {
+      const sp: Record<string, unknown> = {};
+      const splitDoc = `${root}/smoke-split.txt`;
+      await api.writeTextFile(splitDoc, "split smoke\n".repeat(60));
+      await openFile(splitDoc);
+      const p1 = focused;
+      runAction("split-right");
+      await wait(200);
+      const p2 = focused;
+      const box = (p: Pane) => p.el.getBoundingClientRect();
+      const paneState = () => ({ panes: paneList().map((p) => `${p.id}:${p.shown ?? "-"}:[${p.strip.order.map((x) => relPath(x)).join(",")}]`), focused: focused.id, active: relPath(activeTab) });
+      sp.splitRight = panes.size === 2 && p2 !== p1 && p1.shown === splitDoc && p2.shown === splitDoc && activeTab === splitDoc && $("panes").classList.contains("multi");
+      const m1 = p1.editor?.editor.getModel();
+      sp.oneModelTwoEditors = !!m1 && !!p2.editor && p1.editor !== p2.editor && p2.editor.editor.getModel() === m1;
+      sp.sideBySide = box(p1).width > 40 && box(p2).width > 40 && box(p2).left >= box(p1).right - 2 && Math.abs(box(p1).top - box(p2).top) < 2 ? true : { a: box(p1).toJSON(), b: box(p2).toJSON() };
+      sp.focusBorder = p2.el.classList.contains("focused") && !p1.el.classList.contains("focused") && getComputedStyle(p2.el).borderTopColor !== getComputedStyle(p1.el).borderTopColor;
+      p2.editor?.editor.trigger("colony-smoke", "type", { text: "x" });
+      sp.sameFileBothPanes = editors.isDirty(splitDoc) && (m1?.getValue() ?? "").startsWith("x") && focused.bar.querySelector(`.tab.active[data-tab="${CSS.escape(splitDoc)}"]`) !== null;
+      p2.editor?.editor.trigger("colony-smoke", "undo", null);
+      if (editors.isDirty(splitDoc)) await editors.save(splitDoc);
+      // Dragging the line between the panes resizes them (in-page pointer events).
+      {
+        const line = $("panes").querySelector<HTMLElement>('.pane-divider[data-dir="right"]');
+        const r = line?.getBoundingClientRect();
+        const w0 = box(p1).width;
+        if (line && r) {
+          const y = r.top + r.height / 2;
+          line.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left, clientY: y, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", { clientX: r.left - 120, clientY: y, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left - 120, clientY: y, bubbles: true }));
+        }
+        await wait(100);
+        const ratio = (nodeAt(paneTree, []) as PaneSplit | null)?.ratio ?? 0.5;
+        sp.dividerResizes = !!line && ratio < 0.5 && Math.abs(box(p1).width - (w0 - 120)) < 4 ? true : { line: !!line, ratio, w0, w1: box(p1).width };
+      }
+      // A drawer shell dragged onto the other pane's strip opens in that pane, then goes home.
+      {
+        toggleTerminal(true);
+        await wait(300);
+        if (!terminals.activeKey()) await terminals.create();
+        await wait(300);
+        const key = terminals.activeKey() ?? "";
+        const src = $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"]`);
+        const a = src?.getBoundingClientRect();
+        const b = p1.bar.getBoundingClientRect();
+        if (src && a) {
+          const to = { clientX: b.right - 30, clientY: b.top + b.height / 2, bubbles: true };
+          src.dispatchEvent(new PointerEvent("pointerdown", { clientX: a.left + 8, clientY: a.top + 8, button: 0, bubbles: true }));
+          window.dispatchEvent(new PointerEvent("pointermove", to));
+          window.dispatchEvent(new PointerEvent("pointerup", to));
+        }
+        await wait(300);
+        sp.drawerDropIntoPane = !!key && p1.strip.order.includes(key) && !p2.strip.order.includes(key) && !terminals.has(key) && p1.shown === key ? true : { key, ...paneState() };
+        if (p1.strip.order.includes(key)) movePty(key, "panel");
+        await placementSaved;
+        await wait(200);
+        sp.drawerShellHome = terminals.has(key) && !tabs.has(key) && p1.shown === splitDoc ? true : paneState();
+        focusPane(p2);
+      }
+      const term = await openTermTab(["sh"], "smoke split", "COLONY_SMOKE split panes", "terminals");
+      const tid = term?.id ?? "";
+      sp.termInFocusedPane = !!term && p2.strip.order.includes(tid) && !p1.strip.order.includes(tid) && p2.shown === tid && p2.host.contains(tabs.get(tid)!.el);
+      runAction("split-down");
+      await wait(200);
+      const p3 = focused;
+      sp.splitDownMovesTerm = panes.size === 3 && p3.shown === tid && !p2.strip.order.includes(tid) && p2.shown === splitDoc && p3.host.contains(tabs.get(tid)?.el ?? null);
+      sp.stacked = box(p3).top >= box(p2).bottom - 2 && Math.abs(box(p2).left - box(p3).left) < 2 ? true : { b: box(p2).toJSON(), c: box(p3).toJSON() };
+      showTab("inbox");
+      sp.viewInFocusedPane = p3.shown === "inbox" && p3.host.contains(view("inbox")) && !view("inbox").hidden;
+      focusPane(p1);
+      showTab("inbox");
+      sp.viewMovesPanes = p1.shown === "inbox" && p1.host.contains(view("inbox")) && p3.shown === tid;
+      focusPane(p3);
+      runAction("pane-close");
+      await wait(150);
+      sp.closePaneKeepsTabs = panes.size === 2 && !panes.has(p3.id) && tabs.has(tid) && p2.strip.order.includes(tid) && p2.host.contains(tabs.get(tid)?.el ?? null);
+      // A new pane whose only tab is the file: closing that tab there removes the pane, the
+      // file stays open in the pane that takes the space, and that pane takes the focus.
+      focusPane(p2);
+      showIn(p2, splitDoc);
+      runAction("split-right");
+      await wait(150);
+      const p4 = focused;
+      sp.splitAgain = panes.size === 3 && p4 !== p2 && p4.strip.order.length === 1 && p4.shown === splitDoc ? true : paneState();
+      await closeTab(splitDoc, p4);
+      await wait(150);
+      sp.lastTabCollapses = panes.size === 2 && !panes.has(p4.id) && focused === p2 && tabs.has(splitDoc) && p2.shown === splitDoc ? true : paneState();
+      // Its last tabs closed, p2 goes too: one pane again, as before splits (p1 kept its own
+      // tabs, the file among them, and the view it showed). The file then closes in p1.
+      await closeTab(tid);
+      await closeTab(splitDoc, p2);
+      await wait(150);
+      sp.fileStaysInP1 = panes.size === 1 && tabs.has(splitDoc) && p1.strip.order.includes(splitDoc) ? true : paneState();
+      await closeTab(splitDoc);
+      await wait(150);
+      sp.backToOnePane = panes.size === 1 && paneList()[0] === p1 && focused === p1 && !$("panes").classList.contains("multi") && !tabs.has(splitDoc) && !tabs.has(tid) ? true : paneState();
+      // A file in two panes closed with no pane named (the Explorer's rename, move and trash)
+      // closes in both, and the pane it alone held goes.
+      const doc2 = `${root}/smoke-split-2.txt`;
+      await api.writeTextFile(doc2, "split smoke 2\n");
+      await openFile(doc2);
+      runAction("split-down");
+      await wait(150);
+      sp.oneFileTwoPanes = panes.size === 2 && holders(doc2).length === 2 ? true : paneState();
+      await closeTab(doc2);
+      await wait(150);
+      sp.closedInEveryPane = !tabs.has(doc2) && holders(doc2).length === 0 && panes.size === 1 && focused === p1 ? true : paneState();
+      await log("split-panes", Object.values(sp).every((v) => v === true), sp);
+      focused.nav.reset();
+      showTab("mission");
+    }
     const launch = await openInEditor(file);
     let proof = "";
     for (let i = 0; i < 25 && !proof; i++) {
@@ -3369,7 +4165,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       found[0] === "compact" &&
       palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));
     await log("claude-builtins", builtinsOk, { rendered: builtins.length, listed: palette.builtins().length, section, compactSearch: found });
-    // Colony section: every menu action (menu bar and Workspace → Config, not Commands… itself), Run.
+    // Colony section: every menu action (menu bar and the Settings view, not Commands… itself), Run.
     pInput.value = "";
     pInput.dispatchEvent(new Event("input"));
     const actionRows = [...palette.el.querySelectorAll<HTMLElement>(".palette-action")].map((el) => el.dataset.action);
@@ -3380,7 +4176,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // Every kit item at first level, in the operator's order, no More menu, nothing hidden.
     const RAIL_WANT: [string, string][] = [
       ["mission", "Cockpit"], ["queue", "Queue"], ["inbox", "Inbox"], ["chats", "Chats"], ["flight", "Flight Log"], ["review", "Review"],
-      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Colony"],
+      ["ship", "Ship"], ["activity", "Activity"], ["terminals", "Terminals"], ["processes", "Processes"], ["workspace", "Workspace"], ["colony", "Oligarchy"],
     ];
     const railEls = () => [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
     const railGot = railEls().map((el) => [el.dataset.tab ?? "", el.querySelector(".lbl")?.textContent ?? ""]);
@@ -3468,7 +4264,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const nv: Record<string, unknown> = {};
     const isGate = (id: string) => (view(id).querySelector(".empty-state-headline")?.textContent ?? "") === "Update the engine";
     const ver = snapshot.version;
-    for (const id of ["terminals", "processes", "colony", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
+    for (const id of ["terminals", "processes", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
       showTab(id);
       if (id === "commands") await commandsView.load();
       await wait(250);
@@ -3476,7 +4272,9 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await shot(`native-${id}`);
     }
     const nvOk = Object.values(nv).every((v) => !(v as { pending: boolean }).pending && (v as { rendered: number }).rendered > 0);
-    await log("native-views", nvOk && !document.querySelector("iframe") && !tabs.has("web") && !menuItems().some((i) => i.id === "web"), { version: ver, views: nv, iframes: document.querySelectorAll("iframe").length });
+    // The one frame Colony may show is the game's (checked in oligarchy-view below), never a kit page.
+    const kitFrames = [...document.querySelectorAll("iframe")].filter((f) => f !== oligarchyView.frameEl).length;
+    await log("native-views", nvOk && kitFrames === 0 && !tabs.has("web") && !menuItems().some((i) => i.id === "web"), { version: ver, views: nv, iframes: kitFrames });
     // Processes: one row per snapshot process (or the All quiet state), Copy PID copies it.
     showTab("processes");
     await wait(100);
@@ -3527,30 +4325,35 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const runBtns = view("commands").querySelectorAll('[data-act="run"]').length;
     wsLists.commands = commandsView.loadError ? isGate("commands") || !!view("commands").querySelector(".empty-state-cta") : rowsIn("commands").length === cmdRows.length && runBtns === cmdRows.filter((r) => r.run).length && !cmdRows.some((r) => (r.name === "git-prod" || r.name === "kit-prod") && r.run);
     await log("native-workspace", Object.values(wsLists).every((v) => v === true), { version: ver, decisionIndex: decIndex?.length ?? null, rules: snapshot.rules?.length ?? null, decOpen, commandsError: commandsView.loadError || null, lists: wsLists });
-    // Colony: the map and the five structures; a build seeded as started two hours ago (one
-    // hour long) settles into the Uplink on the map, and the Uplink can no longer be built.
-    const gameKey = `colony-game-state-v1:${root}`;
-    const savedGame = localStorage.getItem(gameKey);
-    localStorage.setItem(gameKey, JSON.stringify({ v: 1, seq: 1, queue: [{ id: 1, structure: "uplink", startedAt: Date.now() - 2 * 3600_000, durationMs: 3600_000 }], built: [], spent: { logic: 0, compute: 3, rare: 0 } }));
-    colonyView.invalidate();
+    // Oligarchy (kit ADR 2026-11-17 points 1, 6 and 8): the web game in one sandboxed frame from
+    // its exact origin, no engine view; offline, a new load shows the network-needed state, and
+    // back online the frame loads again. The data channel itself is unit-tested
+    // (scripts/oligarchyfeed.test.mjs); the page that answers it is not this build's to load.
+    const settled = async () => {
+      for (let i = 0; i < 60 && oligarchyView.state === "loading"; i++) await wait(200);
+    };
     showTab("colony");
     await wait(150);
-    const cv = view("colony");
-    const game = snapshot.outcomeLedger
-      ? {
-          tiles: cv.querySelectorAll(".colony-map polygon").length,
-          cards: cv.querySelectorAll('[data-act="build"]').length,
-          uplinkGlyph: [...cv.querySelectorAll(".colony-glyph")].some((t) => t.textContent === "U"),
-          uplinkBlocked: cv.querySelector<HTMLButtonElement>('[data-structure="uplink"]')?.disabled === true,
-          settled: (JSON.parse(localStorage.getItem(gameKey) ?? "{}").built ?? []).length === 1,
-          art: [...cv.querySelectorAll<HTMLImageElement>("img.colony-card-art")].map((i) => i.getAttribute("src") ?? "").every((s) => !s.startsWith("http")),
-        }
-      : { gate: isGate("colony") };
-    if (savedGame === null) localStorage.removeItem(gameKey);
-    else localStorage.setItem(gameKey, savedGame);
-    colonyView.invalidate();
-    const gameOk = "gate" in game ? game.gate === true : game.tiles === 61 && game.cards === 5 && game.uplinkGlyph && game.uplinkBlocked && game.settled && game.art;
-    await log("native-colony", gameOk, { ledger: snapshot.outcomeLedger ? { entries: snapshot.outcomeLedger.entries, totals: snapshot.outcomeLedger.totals } : null, ...game });
+    await settled();
+    const gameFrame = () => oligarchyView.frameEl;
+    const game: Record<string, unknown> = {
+      state: oligarchyView.state,
+      src: gameFrame()?.getAttribute("src") ?? null,
+      sandbox: gameFrame()?.getAttribute("sandbox") ?? null,
+      frames: document.querySelectorAll("iframe").length,
+      noEngineView: !view("colony").querySelector(".colony-map, [data-act='build']"),
+      label: $("rail").querySelector('.rail-item[data-tab="colony"] .lbl')?.textContent ?? "",
+    };
+    window.dispatchEvent(new Event("offline"));
+    view("colony").querySelector<HTMLElement>('[data-act="reload"]')?.click();
+    await wait(100);
+    game.offline = oligarchyView.state === "offline" && !gameFrame() && !!view("colony").querySelector('[data-act="retry"]');
+    window.dispatchEvent(new Event("online"));
+    await wait(100);
+    await settled();
+    game.backOnline = oligarchyView.state === "frame" && gameFrame()?.getAttribute("src") === oligarchyView.url;
+    const gameOk = game.state === "frame" && game.src === oligarchyView.url && game.sandbox === "allow-scripts allow-same-origin" && game.frames === 1 && game.noEngineView === true && game.label === "Oligarchy" && game.offline === true && game.backOnline === true;
+    await log("oligarchy-view", gameOk, game);
     // Terminals: a shell closed in the drawer bar stays listed (closed, its folder), Reopen
     // starts a new drawer shell, Focus shows the drawer; the rail item never toggles it.
     toggleTerminal(false);
@@ -3581,7 +4384,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const tabRows = ttys.list().filter((s) => s.place === "tab").length;
     await log("native-terminals", drawerStaysClosed && closedListed && reopened && focusShows, { drawerStaysClosed, closed: lastOpen?.key ?? null, closedListed, reopened, focusShows, rows: ttys.list().length, tabRows });
     // Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
-    // 2026-11-07), in each dock position: a drawer shell to the editor area (View menu id)
+    // 2026-11-07), in each dock position: a drawer shell to the editor area (Terminal menu id)
     // and back (its tab menu), a centre agent PTY with its context strip to the panel and back
     // the same two ways. After each move the session still echoes, fitted to its new pane, and
     // a focus by its id finds it in the drawer.
@@ -3621,7 +4424,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         terminals.focusKey(sKey);
         runAction("term-to-editor");
         await wait(300);
-        r.shellInEditor = tabs.has(sKey) && !terminals.has(sKey) && activeTab === sKey && !!$("tabs").querySelector(`.tab[data-tab="${sKey}"]`) && ttys.get(sKey)?.place === "tab";
+        r.shellInEditor = tabs.has(sKey) && !terminals.has(sKey) && activeTab === sKey && !!focused.bar.querySelector(`.tab[data-tab="${sKey}"]`) && ttys.get(sKey)?.place === "tab";
         r.shellEchoes = await echoes(sKey);
         r.shellFitted = fitted(sKey);
         if (pty) {
@@ -3638,12 +4441,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           r.focusById = terminals.activeKey() === pty.id && !shell.classList.contains("no-bottom");
         }
         await shot(`tab-move-${d}`);
-        await menuMove(`#tabs .tab[data-tab="${sKey}"]`, "tab-to-panel");
+        await menuMove(`.pane-tabs .tab[data-tab="${sKey}"]`, "tab-to-panel");
         r.shellBack = terminals.has(sKey) && !tabs.has(sKey) && $("terms").contains(ptyView(sKey)?.pane ?? null) && ttys.get(sKey)?.place === "drawer";
         r.shellBackEchoes = await echoes(sKey);
         if (pty) {
           await menuMove(`#term-tabs > .tab[data-key="${pty.id}"]`, "tab-to-editor");
-          r.ptyBack = tabs.has(pty.id) && !terminals.has(pty.id) && activeTab === pty.id && !!$("views").querySelector(".term-center .ctx-strip") && ttys.get(pty.id)?.place === "tab";
+          r.ptyBack = tabs.has(pty.id) && !terminals.has(pty.id) && activeTab === pty.id && !!$("panes").querySelector(".term-center .ctx-strip") && ttys.get(pty.id)?.place === "tab";
           r.ptyBackEchoes = await echoes(pty.id);
         }
         docks[d] = r;
@@ -3656,11 +4459,205 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       toggleTerminal(shownBefore);
       await log("tab-move", ok, { shell: sKey, pty: pty?.id ?? null, docks });
     }
+    // Web links reach the system browser (kit ADR 2026-10-15 amend 2026-11-07; plan residual
+    // x1b): a Ctrl+click on an http(s) address printed in a terminal (plain text and an OSC 8
+    // hyperlink) and a click on one in the doc preview hand that address to the opener; a
+    // plain click in the terminal opens nothing, xterm's own confirm()/window.open() path is
+    // never taken, and a file: OSC 8 link is not a link; the same for a link in the editor
+    // (plan residual x1c). Runs only when the runner put an
+    // xdg-open/gio shim on PATH (marker <root>/.git/colony-opener-shim; the shim appends its
+    // argv to <root>/.git/colony-opener.log): without it a real browser would start.
+    if (await api.readTextFile(`${root}/.git/colony-opener-shim`).then(() => true, () => false)) {
+      const opened = async () => (await api.readTextFile(`${root}/.git/colony-opener.log`).catch(() => "")).split("\n").filter(Boolean);
+      const reached = async (url: string) => {
+        for (let i = 0; i < 20; i++) {
+          if ((await opened()).some((l) => l.endsWith(` ${url}`))) return true;
+          await wait(150);
+        }
+        return false;
+      };
+      const xtermCalls: string[] = [];
+      const realConfirm = window.confirm;
+      const realOpen = window.open;
+      window.confirm = (m?: string) => (xtermCalls.push(`confirm ${m ?? ""}`), false);
+      window.open = (u?: string | URL) => (xtermCalls.push(`open ${String(u ?? "")}`), null);
+      const plain = "https://example.invalid/colony-smoke/plain?q=1";
+      const osc = "https://example.invalid/colony-smoke/osc8";
+      const doc = "https://example.invalid/colony-smoke/doc";
+      const r: Record<string, unknown> = {};
+      toggleTerminal(true);
+      const script = `printf '%s\\n' '${plain}'; printf '\\033]8;;${osc}\\033\\\\OSC 8 label\\033]8;;\\033\\\\\\n'; printf '\\033]8;;file:///etc/hostname\\033\\\\file link\\033]8;;\\033\\\\\\n'; exec sleep 600`;
+      await terminals.create(["sh", "-c", script], "web links");
+      const key = terminals.activeKey();
+      let v = terminals.view(key);
+      await until(() => !!v && v.output.includes("file link"), 4000);
+      await wait(300);
+      // Mouse events on the cell that holds `text`: hover first (xterm resolves the link under
+      // the pointer on mousemove), then press and release.
+      const clickText = async (text: string, mods: { ctrlKey?: boolean }) => {
+        if (!v) return false;
+        const t = v.term;
+        const b = t.buffer.active;
+        let row = -1;
+        let col = -1;
+        for (let y = b.viewportY; y < b.viewportY + t.rows; y++) {
+          const at = b.getLine(y)?.translateToString(true).indexOf(text) ?? -1;
+          if (at >= 0) {
+            row = y - b.viewportY;
+            col = at;
+            break;
+          }
+        }
+        const screen = v.pane.querySelector<HTMLElement>(".xterm-screen");
+        if (row < 0 || !screen) return false;
+        const box = screen.getBoundingClientRect();
+        const clientX = box.left + (col + 1.5) * (box.width / t.cols);
+        const clientY = box.top + (row + 0.5) * (box.height / t.rows);
+        const init = { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, ...mods };
+        // xterm re-resolves the link under the pointer only when the hovered cell changes, so
+        // pass over an empty cell (bottom right) first, as a real pointer does.
+        screen.dispatchEvent(new MouseEvent("mousemove", { ...init, clientX: box.right - 2, clientY: box.bottom - 2, buttons: 0 }));
+        await wait(60);
+        screen.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0 }));
+        await wait(120);
+        screen.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1 }));
+        screen.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        screen.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+        await wait(150);
+        return true;
+      };
+      let before = (await opened()).length;
+      r.plainNoCtrlClicked = await clickText("example.invalid/colony-smoke/plain", {});
+      await wait(400);
+      r.plainNoCtrlOpensNothing = (await opened()).length === before;
+      r.plainNoCtrlHint = $("st-msg").textContent?.startsWith("Ctrl+click opens") ?? false;
+      r.plainCtrlClicked = await clickText("example.invalid/colony-smoke/plain", { ctrlKey: true });
+      r.plainCtrlOpens = await reached(plain);
+      before = (await opened()).length;
+      r.oscNoCtrlClicked = await clickText("OSC 8 label", {});
+      await wait(400);
+      r.oscNoCtrlOpensNothing = (await opened()).length === before;
+      r.oscCtrlClicked = await clickText("OSC 8 label", { ctrlKey: true });
+      r.oscCtrlOpens = await reached(osc);
+      before = (await opened()).length;
+      r.fileOscClicked = await clickText("file link", { ctrlKey: true });
+      await wait(400);
+      r.fileOscOpensNothing = (await opened()).length === before;
+      // The same Ctrl+clicks while the program has turned on mouse reporting (Claude Code's
+      // full-screen mode does): xterm sends the click to the program and still opens the link.
+      const mouseScript = `printf '\\033[?1000h\\033[?1002h\\033[?1006h'; ${script}`;
+      await terminals.create(["sh", "-c", mouseScript], "web links, mouse mode");
+      const mouseKey = terminals.activeKey();
+      v = terminals.view(mouseKey);
+      await until(() => !!v && v.output.includes("file link"), 4000);
+      await wait(300);
+      const mouseBefore = (await opened()).length;
+      r.mouseModeOn = !!v && (v.term.modes.mouseTrackingMode === "drag" || v.term.modes.mouseTrackingMode === "vt200");
+      r.mousePlainCtrlClicked = await clickText("example.invalid/colony-smoke/plain", { ctrlKey: true });
+      r.mouseOscCtrlClicked = await clickText("OSC 8 label", { ctrlKey: true });
+      await wait(600);
+      r.mouseModeOpens = (await opened()).slice(mouseBefore).filter((l) => l.endsWith(` ${plain}`) || l.endsWith(` ${osc}`)).length === 2;
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${mouseKey}"] .tab-close`)?.click();
+      // The doc preview: a click on a web link (Ctrl held, as the operator does) opens it;
+      // a mailto: address is not a link there.
+      const md = `${root}/.git/HANDOFF.md`;
+      await api.writeTextFile(md, `# Links\n\n- [smoke site](${doc})\n- [mail](mailto:smoke@example.com)\n`).catch((e) => (r.mdWrite = errText(e)));
+      await openFile(md, "preview");
+      const pv = focused.docPreview;
+      const link = await until(() => !pv.hidden && !!pv.querySelector(".md-link"), 4000).then(() => [...pv.querySelectorAll<HTMLElement>(".md-link")].find((a) => a.title.startsWith(doc)));
+      r.docLinks = [...pv.querySelectorAll<HTMLElement>(".md-link")].map((a) => a.textContent).join(",");
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0, ctrlKey: true }));
+      r.docCtrlOpens = !!link && (await reached(doc));
+      await closeTab(md);
+      // The editor (Monaco), as in VS Code (plan residual x1c): holding Ctrl over an address it
+      // underlined marks it as a link, Ctrl+click opens it (written form kept: `?q=1`), a plain
+      // click places the cursor and opens nothing, and a Ctrl+click on a file: address is
+      // refused. Monaco's default opener (window.open(), or location.href for other schemes)
+      // is never reached.
+      const edUrl = "https://example.invalid/colony-smoke/editor?q=1";
+      const edPath = `${root}/.git/colony-links.txt`;
+      await api.writeTextFile(edPath, `editor link: ${edUrl}\nfile link: file:///etc/hostname\nlast line\n`).catch((e) => (r.edWrite = errText(e)));
+      await openFile(edPath);
+      const ed = editors.editor;
+      const edHost = focused.monacoHost;
+      r.edLinksDetected = await until(() => edHost.querySelectorAll(".detected-link").length >= 2, 6000);
+      // What Monaco made of each press and release (target type 6 = text, Ctrl, line) and the
+      // element each click went to, for the log.
+      const edEvents: string[] = [];
+      // Mouse events at a character of the editor: Monaco hit-tests the element under the
+      // point, so they go to document.elementFromPoint there.
+      const clickEditor = async (lineNumber: number, column: number, mods: { ctrlKey?: boolean }, press = true) => {
+        ed.revealLine(lineNumber);
+        await wait(60);
+        const pos = ed.getScrolledVisiblePosition({ lineNumber, column });
+        const dom = ed.getDomNode();
+        if (!pos || !dom) return false;
+        const box = dom.getBoundingClientRect();
+        const clientX = box.left + pos.left + 2;
+        const clientY = box.top + pos.top + pos.height / 2;
+        const at = () => {
+          const el = document.elementFromPoint(clientX, clientY);
+          return el && dom.contains(el) ? el : null;
+        };
+        let target = at();
+        if (!target) return false;
+        edEvents.push(`${press ? "click" : "move"} ${lineNumber}:${column}${mods.ctrlKey ? " ctrl" : ""} on ${target.tagName.toLowerCase()}.${String(target.className).trim().split(/\s+/).join(".")}`);
+        const init = { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0, detail: 1, ...mods };
+        const ptr = { pointerId: 1, pointerType: "mouse", isPrimary: true };
+        target.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0 }));
+        await wait(80);
+        if (!press) return true;
+        // Holding Ctrl over a link re-renders its line (the underline decoration), so the span
+        // hovered a moment ago may be gone: press on what is under the pointer now.
+        target = at();
+        if (!target) return false;
+        target.dispatchEvent(new PointerEvent("pointerdown", { ...init, ...ptr, buttons: 1 }));
+        target.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1 }));
+        await wait(30);
+        target = at() ?? target;
+        target.dispatchEvent(new PointerEvent("pointerup", { ...init, ...ptr, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0 }));
+        await wait(150);
+        return true;
+      };
+      const edMouse = (kind: string) => (e: Parameters<Parameters<typeof ed.onMouseDown>[0]>[0]) => edEvents.push(`${kind} t${e.target.type} ctrl${e.event.ctrlKey ? 1 : 0} l${e.target.position?.lineNumber ?? 0}`);
+      const edSubs = [ed.onMouseDown(edMouse("down")), ed.onMouseUp(edMouse("up"))];
+      ed.setPosition({ lineNumber: 3, column: 1 });
+      r.edCtrlHoverMoved = await clickEditor(1, 22, { ctrlKey: true }, false);
+      r.edCtrlHoverUnderline = await until(() => !!edHost.querySelector(".detected-link-active"), 1000);
+      await clickEditor(3, 2, {}, false);
+      before = (await opened()).length;
+      r.edPlainClicked = await clickEditor(1, 22, {});
+      await wait(400);
+      r.edPlainOpensNothing = (await opened()).length === before;
+      r.edPlainPlacesCursor = ed.getPosition()?.lineNumber === 1;
+      r.edCtrlClicked = await clickEditor(1, 22, { ctrlKey: true });
+      r.edCtrlOpens = await reached(edUrl);
+      await wait(600); // the open's own status line lands first
+      before = (await opened()).length;
+      r.edFileClicked = await clickEditor(2, 16, { ctrlKey: true });
+      await wait(400);
+      r.edFileOpensNothing = (await opened()).length === before;
+      r.edFileRefused = $("st-msg").textContent?.startsWith("Not a web address Colony opens") ?? false;
+      for (const d of edSubs) d.dispose();
+      await closeTab(edPath);
+      const lines = await opened();
+      r.onlyWeb = lines.length > 0 && lines.every((l) => / https:\/\/example\.invalid\/colony-smoke\/(plain\?q=1|osc8|doc|editor\?q=1)$/.test(l));
+      r.noDefaultOpener = xtermCalls.length === 0;
+      window.confirm = realConfirm;
+      window.open = realOpen;
+      $("term-tabs").querySelector<HTMLElement>(`.tab[data-key="${key}"] .tab-close`)?.click();
+      const ok = Object.entries(r).every(([k, x]) => k === "docLinks" || x === true);
+      await log("web-link-open", ok, { ...r, opener: lines, xtermCalls, edEvents });
+    } else {
+      await log("web-link-open", true, "skipped: no opener shim on PATH (marker .git/colony-opener-shim), so no real browser is started");
+    }
     // Remembered placement per kind (kit ADR 2026-10-24 amend 2026-11-07, tab placement
     // memory): a move records the kind in settings.json, a new tab of that kind opens there
     // (and still echoes), Colony's own open-there move records nothing, the drawer's + stays in
     // the drawer, and the reset sends new tabs back to the defaults without moving open ones.
-    // Surviving a restart is the operator's dogfood (one process here).
+    // Surviving a restart: tab-placement-seed (last step) and tab-placement-restart (next launch).
     {
       const shownBefore = !shell.classList.contains("no-bottom");
       const onDisk = readPlacementOnDisk;
@@ -3735,7 +4732,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await log("tab-placement", Object.values(r).every((v) => v === true), { a: a?.id ?? null, b: b?.id ?? null, c: c?.id ?? null, shells: [s1, s2, s3, s4], ...r });
     }
     showTab("mission");
-    // Skins: Legacy from Workspace → Config (same handler as the operator's click), saved in
+    // Skins: Legacy from Settings → Appearance (same handler as the operator's click), saved in
     // settings.json and applied to the chrome and the native views; then back to Bare Metal.
     const pickSkin = (id: string) => settingsPane.querySelector<HTMLButtonElement>(`button[data-setting="skin"][data-skin="${id}"]`)?.click();
     // On Omarchy with no saved skin the window starts on the system theme: start from Bare Metal.
@@ -3780,7 +4777,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const plan = await api.omarchyIntegrationPlan("install").catch((e) => ({ error: errText(e) }));
       const steps = "steps" in plan ? plan.steps.map((st) => st.kind) : [];
       await log("omarchy-plan", "steps" in plan && (plan.blocked !== null || steps.includes("write")), plan);
-      // The Config row (menu.json `config`) opens the same panel; it only lists, nothing runs.
+      // The Settings row (menu.json `config`) opens the same panel; it only lists, nothing runs.
       settingsPane.querySelector<HTMLButtonElement>('button[data-cmd="omarchy"]')?.click();
       const panelOpen = await until(() => !!document.getElementById("omarchy-panel"), 2000);
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -4036,10 +5033,105 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       // The queue terminal stays a centre tab (dimmed once it exited); the drawer lists the
       // user's shells only and does not repeat it.
       const qListed = drawerListing();
-      const qCentre = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${qTab}"]`);
+      const qCentre = focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${qTab}"]`);
       await log("terminal-drawer-queue", !qListed.named.length && qListed.shells === terminals.count && !!qCentre?.classList.contains("exited"), { ...qListed, centreTab: qCentre?.className ?? null });
     }
     smokeDryRun = false;
+    // Current mission card (src/missioncard.ts; shell ADR amend 2026-10-29 point 1): the row in
+    // each run state, through the fake's `--model smoke-card-*` branch (driver protocol 1.5.0
+    // stop_after_tick, writes no files). Kill is never clicked here: the operator runs that step.
+    if (fixture) {
+      const heroRow = () => view("mission").querySelector<HTMLElement>(".hero:not(.first-run) .now-actions");
+      const cardBtn = (id: string) => heroRow()?.querySelector<HTMLButtonElement>(`[data-card="${id}"]`) ?? null;
+      const face = () => cardBtn("toggle")?.dataset.face ?? "";
+      const rowIds = () => [...(heroRow()?.querySelectorAll<HTMLElement>("[data-card]") ?? [])].map((b) => b.dataset.card).join(",");
+      const onMission = async () => {
+        showTab("mission");
+        mission.flush();
+        await wait(250);
+      };
+      const evs = (r: Run, type: string) => r.items.filter((i) => i.kind === "ev" && i.ev.type === type).length;
+      const stdinLine = (r: Run) => r.rows.find((x) => x.text.startsWith("fixture card stdin: "))?.text.slice("fixture card stdin: ".length) ?? "";
+      // Play: the card's toggle opens the run dialog (host.runPlan), whose Start runs the plan.
+      const playRun = async (model: string) => {
+        pick(controls.model, model);
+        await onMission();
+        const before = new Set(runs.runs.keys());
+        cardBtn("toggle")?.click();
+        const dialog = await until(() => !!document.querySelector('#run-dialog [data-act="run-start"]'), 3000);
+        document.querySelector<HTMLButtonElement>('#run-dialog [data-act="run-start"]')?.click();
+        await until(() => runs.list().some((r) => !before.has(r.id)), 10000);
+        const r = runs.list().find((x) => !before.has(x.id));
+        if (r) await until(() => evs(r, "tick_start") > 0 || !r.running, 10000);
+        return { dialog, r };
+      };
+      await onMission();
+      const idleRow = rowIds();
+      const idleFace = face();
+      const labelled = [...(heroRow()?.querySelectorAll<HTMLButtonElement>("[data-card]") ?? [])].every((b) => b.title.length > 10 && !!b.getAttribute("aria-label") && !b.disabled);
+      const heroLinks = { handoff: !!view("mission").querySelector('.hero .card-header [data-act="card-handoff"]'), dropdown: !!view("mission").querySelector('.hero [data-act="plan-crud"]'), topIds: view("mission").querySelectorAll('.hero [data-act="run-plan"], .hero [data-act="run-queue"]').length };
+      await shot("card-idle");
+      await log("card-idle", !!snapshot.activePlanFile && idleRow === "toggle,open,edit,cancel,plans" && idleFace === "play" && labelled && heroLinks.handoff && !heroLinks.dropdown && !heroLinks.topIds, { row: idleRow, face: idleFace, labelled, ...heroLinks });
+      cardBtn("plans")?.click();
+      await log("card-plans", await until(() => activeTab === "plans", 2000), { activeTab });
+      // Stop after the tick (1.5.0, no gate): the toggle sends stop_after_tick, shows Stopping…
+      // until the run ends with the documented run_end, then is Play again.
+      const t = await playRun("smoke-card-tick");
+      let tick: Record<string, unknown> = { dialog: t.dialog, run: t.r?.id ?? null };
+      if (t.r) {
+        const r = t.r;
+        await onMission();
+        tick = { ...tick, protocol: r.protocol, face: face(), row: rowIds(), cancelOff: !!cardBtn("cancel")?.disabled, cancelTip: cardBtn("cancel")?.title ?? "" };
+        await shot("card-running");
+        cardBtn("toggle")?.click();
+        await until(() => face() === "stopping" || !r.running, 3000);
+        tick.stopping = face();
+        await until(() => !r.running, 10000);
+        await onMission();
+        tick = { ...tick, sent: stdinLine(r), exit: r.exitCode, reason: r.reason, state: runState(r), chip: view(`run:${r.id}`).querySelector(".run-head .chip")?.textContent ?? null, after: face() };
+      }
+      await log(
+        "card-stop-after-tick",
+        !!t.dialog && tick.protocol === "1.5.0" && tick.face === "stop-after-tick" && tick.row === "toggle,open,edit,cancel,plans,kill" && tick.cancelOff === true && tick.stopping === "stopping" && tick.sent === '{"type":"stop_after_tick"}' && tick.exit === 0 && tick.reason === "stopped by request after tick 1" && tick.state === "stopped" && String(tick.chip).startsWith("stopped · exit 0") && tick.after === "play",
+        tick,
+      );
+      // Only an ended run: closing a live one asks to kill it (a native dialog the smoke never answers).
+      if (t.r && !t.r.running) await closeTab(`run:${t.r.id}`);
+      // Stop at the gate (any engine): {"type":"stop"}, the run ends there, exit 4.
+      const g = await playRun("smoke-card-gate");
+      let gate: Record<string, unknown> = { dialog: g.dialog, run: g.r?.id ?? null };
+      if (g.r) {
+        const r = g.r;
+        await until(() => !!r.gate || !r.running, 10000);
+        await onMission();
+        gate = { ...gate, face: face(), tip: cardBtn("toggle")?.title ?? "" };
+        await shot("card-gate");
+        cardBtn("toggle")?.click();
+        await until(() => !r.running, 10000);
+        gate = { ...gate, sent: stdinLine(r), exit: r.exitCode, reason: r.reason, gateLeft: !!r.gate };
+      }
+      await log("card-stop-gate", !!g.dialog && gate.face === "stop-gate" && String(gate.tip).includes("smoke-card-gate") && gate.sent === '{"type":"stop"}' && gate.exit === 4 && gate.reason === "driver stop" && gate.gateLeft === false, gate);
+      if (g.r && !g.r.running) await closeTab(`run:${g.r.id}`);
+      // An engine below 1.5.0 with no gate: the toggle is Kill… (asks first) and no second Kill
+      // shows. Not clicked: the run ends on its own after 4 s.
+      const o = await playRun("smoke-card-old");
+      let old: Record<string, unknown> = { dialog: o.dialog, run: o.r?.id ?? null };
+      if (o.r) {
+        const r = o.r;
+        await onMission();
+        old = { ...old, protocol: r.protocol, running: r.running, face: face(), row: rowIds(), tip: cardBtn("toggle")?.title ?? "" };
+        await shot("card-pre-1.5");
+        await until(() => !r.running, 15000);
+        old = { ...old, exit: r.exitCode, sent: stdinLine(r) };
+      }
+      await log("card-pre-1.5", !!o.dialog && old.protocol === "1.4.0" && old.running === true && old.face === "kill" && old.row === "toggle,open,edit,cancel,plans" && String(old.tip).includes("1.4.0") && old.exit === 0 && old.sent === "", old);
+      if (o.r && !o.r.running) await closeTab(`run:${o.r.id}`);
+      // Driver motion (src/motionsmoke.ts): one fake run through running, gate, running and done,
+      // read on the run chip, the transcript and the cockpit, with motion allowed and under reduce.
+      await motionSmoke({ log, wait, until, shot, showTab, view, onMission, playRun, closeTab });
+      pick(controls.model, "smoke-model");
+      await wait(300);
+    }
     // Open interactive: the vendor CLI in a center terminal tab (fixture: a fake claude;
     // real: the argv is resolved, the real vendor CLI is not started by the smoke).
     pick(controls.backend, "claude");
@@ -4059,7 +5151,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       // Mixed sessions: the interactive CLI is a centre tab next to the driver run tab, the
       // drawer holds the user's shells only (no repeat of the centre terminal tabs).
       const iListed = drawerListing();
-      const iCentre = activeTab === iTab && !!$("tabs").querySelector(`.tab.active[data-tab="${iTab}"]`);
+      const iCentre = activeTab === iTab && !!focused.bar.querySelector(`.tab.active[data-tab="${iTab}"]`);
       await shot("terminal-drawer");
       await closeTab(iTab);
       const listOk = !iListed.named.length && iListed.shells === terminals.count && terminals.count > 0 && iCentre && tabs.has(`run:${run.id}`) && !centerTerms.has(iTab);
@@ -4068,8 +5160,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await until(() => (p?.view.output ?? "").includes("fake claude ready"), 8000);
       const pProof = await api.readTextFile(`${root}/interactive-proof.txt`).catch((e) => `missing: ${errText(e)}`);
       // Its gate badge sits on its centre tab; the drawer still lists the shells only.
-      if (p) await until(() => !!$("tabs").querySelector(`.tab[data-tab="${p.id}"] .badge.warn`), 4000);
-      const pBadge = p ? $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"] .badge.warn`) : null;
+      if (p) await until(() => !!focused.bar.querySelector(`.tab[data-tab="${p.id}"] .badge.warn`), 4000);
+      const pBadge = p ? focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${p.id}"] .badge.warn`) : null;
       const pListed = drawerListing();
       await log("terminal-drawer-list", listOk && pBadge?.textContent === "gate" && !pListed.named.length && pListed.shells === terminals.count, { withInteractive: iListed, withGateTab: pListed, centreTab: iCentre, gateBadge: pBadge?.textContent ?? null, runTab: `run:${run.id}` });
       // A terminal tab that printed a HITL_GATE line: gate marker on its tab, a card in the
@@ -4077,7 +5169,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       if (p) {
         const key = `${p.id}:fake-gate`;
         await until(() => pendingGates().some((g) => g.key === key), 4000);
-        const tabBtn = $("tabs").querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
+        const tabBtn = focused.bar.querySelector<HTMLElement>(`.tab[data-tab="${p.id}"]`);
         const tCard = inbox.el.querySelector<HTMLElement>(`.inbox-card[data-tab="${p.id}"]`);
         const n = pendingGates().length;
         await log("terminal-gate", n === 1 && !!tabBtn?.classList.contains("run-gate") && tabBtn.querySelector(".badge")?.textContent === "gate" && tCard?.dataset.key === key && !!tCard.querySelector(".inbox-line")?.textContent?.includes("Go | Wait") && Number($("inbox-badge")?.textContent) === 1 && document.title.startsWith("(1) ") && alerts.log.some((x) => x.key === key && !x.sent), {
@@ -4108,6 +5200,58 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     await wait(1500);
     await workbenchSmoke({ ...smokeCtx, tree, statusText: () => $("st-msg").textContent ?? "" });
     confirmAction = realConfirmAction;
+    // Seed for tab-placement-restart (last, so no later step opens tabs in the remembered
+    // bars): a first launch moves a shell to the editor area and an interactive tab to the
+    // panel, as the operator would; the next launch on this settings.json checks them. A
+    // launch that found a placement at boot reset it and leaves settings.json without one.
+    if (!Object.keys(bootPlaced).length) {
+      const shownBefore = !shell.classList.contains("no-bottom");
+      const keyBefore = terminals.activeKey();
+      const r: Record<string, unknown> = {};
+      toggleTerminal(true);
+      await terminals.create();
+      await wait(300);
+      const s1 = terminals.activeKey();
+      runAction("term-to-editor");
+      await wait(100);
+      await placementSaved;
+      r.shellMoved = !!s1 && termIn.editor(s1);
+      r.statusSaysNewOnesThere = statusLine().includes("new ones of this kind open there");
+      const a = await openTermTab(["sh"], "smoke seed a", "COLONY_SMOKE tab placement seed", "terminals", smokeAgent);
+      await wait(300);
+      if (a) {
+        showTab(a.id);
+        runAction("term-to-panel");
+      }
+      await wait(100);
+      await placementSaved;
+      r.interactiveMoved = !!a && termIn.panel(a.id);
+      const raw = (await rawPlacement()).terminalPlacement;
+      r.diskIsSeed = JSON.stringify(raw) === JSON.stringify(placementSeed);
+      if (a) await closeTab(a.id);
+      if (s1 && tabs.has(s1)) await closeTab(s1);
+      if (keyBefore && terminals.has(keyBefore)) terminals.focusKey(keyBefore);
+      toggleTerminal(shownBefore);
+      await log("tab-placement-seed", Object.values(r).every((v) => v === true), { shell: s1, a: a?.id ?? null, terminalPlacement: raw, ...r });
+    }
+    // Process tree (kit ADR 2026-10-19 amend 2026-11-16 point 7), last so no later step needs
+    // the folder's one run: the fake's `--model smoke-tree` run starts an agent child and a
+    // detached tool subprocess, writes the three pids to .git/colony-tree-pids and stays
+    // live. smoke_exit then ends the window with the run still going; the runner checks after
+    // Colony exits that none of the three pids is alive (closing Colony kills everything).
+    if (fixture) {
+      const tree = await runs.start({ backend: "claude", maxTicks: 1, model: "smoke-tree" }).then(
+        (r) => r,
+        (e) => errText(e),
+      );
+      let pids = "";
+      for (let i = 0; i < 50 && pids.split(" ").length < 3; i++) {
+        await wait(200);
+        pids = (await api.readTextFile(`${root}/.git/colony-tree-pids`).catch(() => "")).trim();
+      }
+      const live = typeof tree !== "string" && tree.running;
+      await log("process-tree-armed", live && /^\d+ \d+ \d+$/.test(pids), { run: typeof tree === "string" ? tree : tree.id, running: live, pids });
+    }
     showTab("mission");
     await shot("mission");
     // Negative probe: the policy is really enforced (an inline script must not run).
@@ -4129,6 +5273,73 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
   await api.smokeExit();
 }
 
+/**
+ * COLONY_SMOKE with no folder: the `colony://play` path. Started with `colony://play` it checks the
+ * game the link opened; started without it, it waits for a second `colony colony://play` to reach
+ * this window over the single-instance socket (COLONY_SMOKE_SOCKET=1 keeps the socket on), then
+ * checks the same: the game page (or the network-needed state), Open folder and Back in its bar,
+ * nothing saved by Colony.
+ */
+async function runPlaySmoke(info: StartupInfo) {
+  const log = (step: string, ok: boolean, detail: unknown = "") => api.smokeLog(JSON.stringify({ t: new Date().toISOString(), step, ok, detail }));
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await log("play-wait", true, "no folder: waiting for colony://play");
+    for (let i = 0; i < 300 && !(oligarchyView.visible && !oligarchyView.el.hidden); i++) await wait(200);
+    await wait(300);
+    for (let i = 0; i < 60 && oligarchyView.state === "loading"; i++) await wait(200);
+    const cv = oligarchyView.el;
+    const shown = (sel: string) => {
+      const el = cv.querySelector<HTMLElement>(sel);
+      return !!el && !el.hidden;
+    };
+    const d = {
+      via: info.initialView === "play" ? "argv" : "socket",
+      shown: oligarchyView.visible && !cv.hidden,
+      welcomeHidden: $("welcome").hidden,
+      noFolderShell: shell.classList.contains("no-folder"),
+      state: oligarchyView.state,
+      src: oligarchyView.frameEl?.getAttribute("src") ?? null,
+      openFolder: shown('[data-act="open-folder"]'),
+      back: shown('[data-act="welcome"]'),
+      // Colony keeps no game state of its own any more: the page keeps its save on its origin.
+      saved: Object.keys(localStorage).filter((k) => k.startsWith("oligarchy-")).length,
+      status: $("st-msg").textContent ?? "",
+    };
+    const reached = d.state === "frame" ? d.src === oligarchyView.url : d.state === "offline";
+    const ok = d.shown && d.welcomeHidden && d.noFolderShell && reached && d.openFolder && d.back && d.saved === 0 && !/Open a folder first/.test(d.status);
+    await log("play-no-folder", ok, d);
+    cv.querySelector<HTMLElement>('[data-act="welcome"]')?.click();
+    await wait(200);
+    await log("play-back", !$("welcome").hidden && cv.hidden && !oligarchyView.visible, { welcome: !$("welcome").hidden, gameHidden: cv.hidden });
+    // Settings with no folder (kit ADR 2026-10-24 amend 2026-11-11, point 2): the gear shows
+    // the view over the welcome screen with its own Back (the strip is not on screen), the
+    // settings.json row names the file instead of opening a tab, and Back returns to welcome.
+    const gear = $("btn-settings");
+    gear.click();
+    await wait(150);
+    const sn: Record<string, unknown> = {
+      shown: !settingsView.hidden && settingsView.contains(settingsPane) && settingsPane.getClientRects().length > 0,
+      welcomeHidden: $("welcome").hidden,
+      ownBack: !settingsBack.hidden,
+      gearMarked: gear.getAttribute("aria-current") === "page",
+      noStrip: focused.bar.classList.contains("tabbar-empty"),
+    };
+    settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
+    await wait(400);
+    sn.jsonNamed = /settings\.json/.test($("st-msg").textContent ?? "") && !settingsView.hidden && ![...tabs.keys()].some((id) => id.endsWith("/settings.json")) ? true : ($("st-msg").textContent ?? "");
+    settingsBack.click();
+    await wait(150);
+    sn.back = !$("welcome").hidden && settingsView.hidden && !gear.hasAttribute("aria-current");
+    await log("settings-no-folder", Object.values(sn).every((v) => v === true), sn);
+    await log("done", true);
+  } catch (e) {
+    await log("error", false, errText(e));
+  }
+  await wait(500);
+  await api.smokeExit();
+}
+
 /** `colony --inbox` / `colony --open-folder` (menu entries, bar widget) and the `colony://play` link: show that view. */
 function showView(view: string) {
   if (view === "inbox") {
@@ -4136,9 +5347,31 @@ function showView(view: string) {
     else status("Open a folder first: the Inbox belongs to a folder");
   } else if (view === "open-folder") void pickFolder();
   else if (view === "play") {
-    if (workspace) showTab("colony");
-    else status("Open a folder first: the game belongs to a folder");
+    if (playTarget(!!workspace) === "tab") showTab("colony");
+    else showPlayWithoutFolder();
   }
+}
+
+/** `colony://play` with no folder open: the game on a new colony, with Open folder in it. A deep
+ *  link never ends on a status line; the folder's tabs stay closed until a folder opens. */
+function showPlayWithoutFolder() {
+  for (const t of tabs.values()) t.el.hidden = true;
+  for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
+  $("welcome").hidden = true;
+  oligarchyView.el.hidden = false;
+  oligarchyView.invalidate();
+  oligarchyView.show();
+  markSettings();
+}
+
+/** Back to the welcome screen from the game or the Settings view with no folder. */
+function showWelcome() {
+  if (workspace) return;
+  oligarchyView.hide();
+  oligarchyView.el.hidden = true;
+  settingsView.hidden = true;
+  $("welcome").hidden = false;
+  markSettings();
 }
 
 // ---- boot ------------------------------------------------------------------------------
@@ -4154,7 +5387,7 @@ api
     // The WebKit DMA-BUF renderer state is debug detail: in the tooltip, not the bar.
     $("st-env").textContent = `v${info.version}`;
     $("st-env").title = [`Colony ${info.version}`, `WebKit DMA-BUF renderer: ${info.webkitDmabuf}`, `agent-kit: ${info.agentKit ?? "not found"}`, `node: ${info.node ?? "not found"}`, `git: ${info.git ?? "not found"}`, `PATH added: ${info.pathAdded.join(", ") || "none"}`].join("\n");
-    if (!info.agentKit) status("No Agent Kit engine: install one from Run → Engine… (Mission Control and agent runs need it)");
+    if (!info.agentKit) status("No Agent Kit engine: click the engine in the status bar to install one (also Settings → Engine…; Mission Control and agent runs need it)");
     void refreshEngineBadge($("st-engine"));
     if (info.smoke) {
       focusPolicy.enabled = false;
@@ -4183,5 +5416,6 @@ api
     if (info.initialView) showView(info.initialView);
     pushShellStatus();
     if (info.smoke && workspace) await runSmoke(workspace.root, info, savedLayout);
+    else if (info.smoke) await runPlaySmoke(info);
   })
   .catch((e) => status(errText(e)));

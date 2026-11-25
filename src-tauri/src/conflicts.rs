@@ -44,7 +44,7 @@ pub(crate) fn kit(root: &Path, args: &[&str]) -> Result<std::process::Output, St
         .map_err(|e| format!("agent-kit {} failed to start: {e}", args.join(" ")))
 }
 
-const NO_COMMAND: &str = "This engine has no `agent-kit conflicts`: update it in Run → Engine… (the command ships after Agent Kit 6.14.0), or resolve in the editor";
+const NO_COMMAND: &str = "This engine has no `agent-kit conflicts`: update it in Settings → Engine… (the command ships after Agent Kit 6.14.0), or resolve in the editor";
 
 /// The kit's JSON on stdout when there is one (propose prints its result with a non-zero
 /// exit when hunks stay unresolved or verification fails); otherwise the error it printed.
@@ -70,23 +70,30 @@ pub fn conflicts_list(state: State<'_, AppState>) -> Result<Value, String> {
     kit_json(&kit(&root, &["conflicts", "--json"])?)
 }
 
+/// The argv of `agent-kit conflicts propose` (pure, unit-tested). Verification is always
+/// named, `--verify` or `--no-verify`, so the window's box means the same thing whatever
+/// default the installed kit has (git-cicd ADR amend 2026-11-19: verification runs code
+/// nobody has reviewed yet, as the operator).
+pub fn propose_args(path: &str, backend: Option<&str>, verify: bool) -> Result<Vec<String>, String> {
+    if !valid_repo_path(path) {
+        return Err(format!("Not a repository path: {path}"));
+    }
+    let backend = backend.unwrap_or("auto");
+    if !PROPOSE_BACKENDS.contains(&backend) {
+        return Err(format!("Backend must be one of {}", PROPOSE_BACKENDS.join(", ")));
+    }
+    // The path is checked above (never an option), so it goes in as the positional.
+    let flag = if verify { "--verify" } else { "--no-verify" };
+    Ok(["conflicts", "propose", path, "--json", "--backend", backend, flag].map(String::from).to_vec())
+}
+
 /// `agent-kit conflicts propose <path> --json`: minutes with verification on. Nothing is
 /// written; the window shows each proposal with its rationale before anything changes.
 #[tauri::command(async)]
 pub fn conflicts_propose(state: State<'_, AppState>, path: String, backend: Option<String>, verify: bool) -> Result<Value, String> {
     let root = workspace::workspace_root(&state)?;
-    if !valid_repo_path(&path) {
-        return Err(format!("Not a repository path: {path}"));
-    }
-    let backend = backend.unwrap_or_else(|| "auto".into());
-    if !PROPOSE_BACKENDS.contains(&backend.as_str()) {
-        return Err(format!("Backend must be one of {}", PROPOSE_BACKENDS.join(", ")));
-    }
-    // The path is checked above (never an option), so it goes in as the positional.
-    let mut args = vec!["conflicts", "propose", &path, "--json", "--backend", &backend];
-    if !verify {
-        args.push("--no-verify");
-    }
+    let args = propose_args(&path, backend.as_deref(), verify)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     kit_json(&kit(&root, &args)?)
 }
 
@@ -108,6 +115,16 @@ pub fn git_merge_abort(state: State<'_, AppState>) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn propose_args_always_name_verification() {
+        let on = propose_args("src/a.ts", None, true).unwrap();
+        assert_eq!(on, ["conflicts", "propose", "src/a.ts", "--json", "--backend", "auto", "--verify"]);
+        let off = propose_args("src/a.ts", Some("claude"), false).unwrap();
+        assert_eq!(off, ["conflicts", "propose", "src/a.ts", "--json", "--backend", "claude", "--no-verify"]);
+        assert!(propose_args("--verify-cmd=sh", None, false).is_err(), "a path is never an option");
+        assert!(propose_args("a.ts", Some("openrouter"), false).is_err());
+    }
 
     #[test]
     fn repo_paths_refuse_escapes_and_options() {

@@ -91,7 +91,7 @@ fn the_drawer_bar_has_the_toggle_and_lists_shells_only() {
     for gone in ["setLinked", "term-link"] {
         assert!(!TERMINAL.contains(gone), "{gone}: the drawer no longer repeats the centre terminal tabs");
     }
-    assert!(MAIN.contains("terminal: () => toggleTerminal()"), "View → Show or hide the terminal keeps its action");
+    assert!(MAIN.contains("terminal: () => toggleTerminal()"), "Terminal → Show or hide the terminal keeps its action");
 }
 
 #[test]

@@ -1,6 +1,7 @@
-//! Native menu bar (File, View, Run, Help). The items come from `src/menu.json`, the one
-//! command source: its `menus` are this bar, its `config` the action rows of Workspace →
-//! Config (settings only; the window renders those, never here). Every id sits in exactly one
+//! Native menu bar (File, View, Go, Terminal, Run, Help; kit ADR 2026-10-24 amend 2026-11-11).
+//! The items come from `src/menu.json`, the one
+//! command source: its `menus` are this bar, its `config` the action rows of the Settings
+//! view (settings only; the window renders those, never here). Every id sits in exactly one
 //! of the two and is a key of the window's action map (src/main.ts `runAction`); the tests
 //! below check that against main.ts. A click emits `colony-menu` with the item id to the
 //! main window; the window runs the action.
@@ -23,7 +24,7 @@ const SPEC: &str = include_str!("../../src/menu.json");
 #[derive(Deserialize, Debug)]
 struct Spec {
     menus: Vec<SpecMenu>,
-    /// The action rows of Workspace → Config (src/main.ts renders them; not in the bar).
+    /// The action rows of the Settings view (src/main.ts renders them; not in the bar).
     #[serde(default)]
     config: Vec<SpecItem>,
 }
@@ -42,6 +43,24 @@ struct SpecItem {
     label: String,
     #[serde(default)]
     separator: bool,
+    /// A `config` row: the group label of the Settings view it sits under.
+    #[serde(default)]
+    group: String,
+    /// A submenu of a bar menu (View → Splits): its own items, one level deep; the submenu
+    /// itself has a label and no id.
+    #[serde(default)]
+    items: Vec<SpecItem>,
+}
+
+impl SpecItem {
+    fn is_submenu(&self) -> bool {
+        !self.items.is_empty()
+    }
+}
+
+/// The action items of one menu, a submenu's items in its place, separators left out.
+fn actions(items: &[SpecItem]) -> impl Iterator<Item = &SpecItem> {
+    items.iter().filter(|i| !i.separator).flat_map(|i| if i.is_submenu() { i.items.iter().filter(|c| !c.separator).collect::<Vec<_>>() } else { vec![i] })
 }
 
 /// One menu of the installed menu bar, read back from the window (COLONY_SMOKE, tests).
@@ -81,13 +100,29 @@ fn parse_str(text: &str) -> Result<Spec, String> {
             return Err("src/menu.json: a menu without a label or items".into());
         }
         for i in m.items.iter().filter(|i| !i.separator) {
-            check(i)?;
+            if !i.is_submenu() {
+                check(i)?;
+                continue;
+            }
+            // A submenu: a plain label, no id, one level of plain items.
+            if !i.id.is_empty() || i.label.trim().is_empty() || i.label.contains('&') || i.label.contains('_') {
+                return Err(format!("src/menu.json: the submenu {:?} of {} needs a plain label and no id", i.label, m.label));
+            }
+            for c in i.items.iter().filter(|c| !c.separator) {
+                if c.is_submenu() {
+                    return Err(format!("src/menu.json: the submenu {:?} nests another one", i.label));
+                }
+                check(c)?;
+            }
         }
     }
-    // One id, one place: a Config row may not repeat a menu bar item (nor carry a separator:
-    // the Config pane draws its own section breaks).
+    // One id, one place: a Settings row may not repeat a menu bar item (nor carry a separator:
+    // the Settings view draws its own groups).
     for i in &spec.config {
         check(i)?;
+        if i.group.trim().is_empty() {
+            return Err(format!("src/menu.json: the Settings row {} names no group", i.id));
+        }
     }
     Ok(spec)
 }
@@ -98,7 +133,7 @@ fn parse() -> Result<Spec, String> {
 
 /// Every action id of the menu bar, in menu order.
 pub fn ids() -> Vec<String> {
-    parse().map(|s| s.menus.into_iter().flat_map(|m| m.items).filter(|i| !i.separator).map(|i| i.id).collect()).unwrap_or_default()
+    parse().map(|s| s.menus.iter().flat_map(|m| actions(&m.items).map(|i| i.id.clone()).collect::<Vec<_>>()).collect()).unwrap_or_default()
 }
 
 fn spec() -> tauri::Result<Spec> {
@@ -106,9 +141,19 @@ fn spec() -> tauri::Result<Spec> {
 }
 
 fn submenu<R: Runtime, M: Manager<R>>(manager: &M, m: &SpecMenu) -> tauri::Result<Submenu<R>> {
-    let mut sub = SubmenuBuilder::new(manager, &m.label);
-    for i in &m.items {
-        sub = if i.separator { sub.separator() } else { sub.text(i.id.as_str(), &i.label) };
+    build_items(manager, &m.label, &m.items)
+}
+
+fn build_items<R: Runtime, M: Manager<R>>(manager: &M, label: &str, items: &[SpecItem]) -> tauri::Result<Submenu<R>> {
+    let mut sub = SubmenuBuilder::new(manager, label);
+    for i in items {
+        sub = if i.separator {
+            sub.separator()
+        } else if i.is_submenu() {
+            sub.item(&build_items(manager, &i.label, &i.items)?)
+        } else {
+            sub.text(i.id.as_str(), &i.label)
+        };
     }
     sub.build()
 }
@@ -123,7 +168,7 @@ pub fn build<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
 }
 
 /// Custom title bar: no GTK menu bar above the webview (it would sit over Colony's own
-/// title bar); the title bar's File / View / Run / Help buttons open the same menu, by
+/// title bar); the title bar's File / View / Go / Terminal / Run / Help buttons open the same menu, by
 /// index, as a native popup under the button (logical coordinates in the window).
 #[tauri::command]
 pub fn menu_popup(window: tauri::WebviewWindow, index: usize, x: f64, y: f64) -> Result<(), String> {
@@ -150,8 +195,15 @@ pub fn menu_state(window: tauri::WebviewWindow) -> Result<Vec<MenuState>, String
         let MenuItemKind::Submenu(sub) = kind else { continue };
         let mut items = Vec::new();
         for item in sub.items().map_err(|e| e.to_string())? {
-            if let MenuItemKind::MenuItem(i) = item {
-                items.push(MenuItemState { id: i.id().0.clone(), label: i.text().map_err(|e| e.to_string())?, enabled: i.is_enabled().map_err(|e| e.to_string())? });
+            // A submenu's items are listed in its place (View → Splits).
+            let inner = match item {
+                MenuItemKind::Submenu(s) => s.items().map_err(|e| e.to_string())?,
+                other => vec![other],
+            };
+            for item in inner {
+                if let MenuItemKind::MenuItem(i) = item {
+                    items.push(MenuItemState { id: i.id().0.clone(), label: i.text().map_err(|e| e.to_string())?, enabled: i.is_enabled().map_err(|e| e.to_string())? });
+                }
             }
         }
         out.push(MenuState { label: sub.text().map_err(|e| e.to_string())?, items });
@@ -176,7 +228,7 @@ mod tests {
     fn spec_parses_with_unique_plain_ids() {
         let spec = parse().unwrap();
         let labels: Vec<&str> = spec.menus.iter().map(|m| m.label.as_str()).collect();
-        assert_eq!(labels, ["File", "View", "Run", "Help"]);
+        assert_eq!(labels, ["File", "View", "Go", "Terminal", "Run", "Help"]);
         let ids = ids();
         assert!(ids.len() >= 20, "{ids:?}");
         for want in ["open-folder", "close-window", "terminal", "quick-open", "commands", "run-plan", "interactive", "about"] {
@@ -184,20 +236,83 @@ mod tests {
         }
     }
 
-    /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
-    /// 2026-11-07): the two move actions live in View, after the dock items, so the palette
-    /// lists them (its keyboard path; no accelerator).
-    #[test]
-    fn terminal_move_actions_are_in_view() {
+    /// The ids of one menu of the bar, in order (separators left out).
+    fn menu_ids(label: &str) -> Vec<String> {
         let spec = parse().unwrap();
-        let view: Vec<&str> = spec.menus.iter().find(|m| m.label == "View").unwrap().items.iter().map(|i| i.id.as_str()).collect();
-        let at = |id: &str| view.iter().position(|i| *i == id).unwrap_or_else(|| panic!("{id} not in View: {view:?}"));
-        assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{view:?}");
+        let m = spec.menus.iter().find(|m| m.label == label).unwrap_or_else(|| panic!("no {label} menu"));
+        actions(&m.items).map(|i| i.id.clone()).collect()
+    }
+
+    /// The six-menu tree (kit ADR 2026-10-24 amend 2026-11-11, point 1): each id in the menu
+    /// its name suggests, in this order. Moving an id to another menu is a decision.
+    #[test]
+    fn the_six_menus_hold_their_ids() {
+        assert_eq!(menu_ids("File"), ["new-window", "open-folder", "new-file", "new-folder", "save", "save-as", "open-in-editor", "file-manager", "settings", "close-window"]);
+        let view = menu_ids("View");
+        assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 13, "{view:?}");
+        assert_eq!(view[..13].iter().filter(|i| i.starts_with("view:")).count(), 13, "the views come first: {view:?}");
+        assert_eq!(view[12], "view:plans", "Plans after the rail items: {view:?}");
+        assert_eq!(view[13..], ["explorer", "explorer-collapse", "explorer-refresh", "refresh", "split-right", "split-down", "pane-close"]);
+        assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
+        assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
+        assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
+        assert_eq!(menu_ids("Help"), ["about", "shortcuts", "check-updates"]);
+        // Engine… is a setting: a Settings row, not a Run item.
+        assert!(config_ids().iter().any(|i| i == "engine") && !ids().iter().any(|i| i == "engine"));
+    }
+
+    /// The rail items of the View menu follow the rail's own order (main.ts RAIL).
+    #[test]
+    fn view_lists_the_rail_in_rail_order() {
+        let rail: Vec<String> = main_ts_block("const RAIL: RailItem[] = [", "\n];").lines().filter_map(|l| l.trim_start().strip_prefix("{ id: \"")?.split('"').next().map(|id| format!("view:{id}"))).collect();
+        assert_eq!(rail.len(), 12, "{rail:?}");
+        assert_eq!(menu_ids("View")[..12], rail[..]);
+    }
+
+    /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
+    /// 2026-11-07): the two move actions live in the Terminal menu, after the dock items, so
+    /// the palette lists them (its keyboard path; no accelerator).
+    #[test]
+    fn terminal_move_actions_are_in_terminal() {
+        let term = menu_ids("Terminal");
+        let at = |id: &str| term.iter().position(|i| i == id).unwrap_or_else(|| panic!("{id} not in Terminal: {term:?}"));
+        assert!(at("dock:side") < at("term-to-panel") && at("term-to-panel") < at("term-to-editor"), "{term:?}");
+    }
+
+    /// Free tiling (kit ADR 2026-10-24 amend 2026-11-19, point 4): the split actions live in a
+    /// Splits submenu at the end of View, so View does not grow by a row per action; one level
+    /// deep, a plain label and no id of its own.
+    #[test]
+    fn splits_live_in_a_view_submenu() {
+        let spec = parse().unwrap();
+        let view = spec.menus.iter().find(|m| m.label == "View").unwrap();
+        let last = view.items.last().unwrap();
+        assert!(last.is_submenu() && last.label == "Splits" && last.id.is_empty(), "{last:?}");
+        let split: Vec<&str> = last.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(split, ["split-right", "split-down", "pane-close"]);
+        assert!(view.items[..view.items.len() - 1].iter().all(|i| !i.is_submenu()), "one Splits submenu");
+        let bar = ids();
+        for id in split {
+            assert!(bar.iter().any(|i| i == id), "{id} is a menu bar id");
+        }
+    }
+
+    #[test]
+    fn a_submenu_is_one_level_with_a_plain_label() {
+        let bad_nest = r#"{"menus":[{"label":"View","items":[{"label":"A","items":[{"label":"B","items":[{"id":"x","label":"X"}]}]}]}]}"#;
+        assert!(parse_str(bad_nest).unwrap_err().contains("nests"));
+        let with_id = r#"{"menus":[{"label":"View","items":[{"id":"s","label":"S","items":[{"id":"x","label":"X"}]}]}]}"#;
+        assert!(parse_str(with_id).unwrap_err().contains("no id"));
+        let dup = r#"{"menus":[{"label":"View","items":[{"id":"x","label":"X"},{"label":"S","items":[{"id":"x","label":"Again"}]}]}]}"#;
+        assert!(parse_str(dup).unwrap_err().contains("duplicate"));
+        let ok = r#"{"menus":[{"label":"View","items":[{"id":"x","label":"X"},{"label":"S","items":[{"id":"y","label":"Y"}]}]}]}"#;
+        let spec = parse_str(ok).unwrap();
+        assert_eq!(actions(&spec.menus[0].items).map(|i| i.id.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
 
     const MAIN_TS: &str = include_str!("../../src/main.ts");
 
-    /// The action ids of Workspace → Config (settings only; never in the menu bar).
+    /// The action ids of the Settings view (settings only; never in the menu bar).
     fn config_ids() -> Vec<String> {
         parse().unwrap().config.into_iter().map(|i| i.id).collect()
     }
@@ -251,19 +366,38 @@ mod tests {
         }
     }
 
-    /// The settings Workspace → Config may hold as action rows (Skin, Title bar and Rail are
-    /// markup in main.ts). Views, commands, About and Engine live in the menu bar: a new id
+    /// The settings the Settings view may hold as action rows (kit ADR 2026-10-24 amend
+    /// 2026-11-11, point 2; Skin, Title bar and Rail are markup in main.ts, under Appearance):
+    /// the Engine panel, the Omarchy integration and the raw settings.json, each with the
+    /// group label it sits under. Views, commands and About live in the menu bar: a new id
     /// here is a decision.
-    const CONFIG_SETTINGS: &[&str] = &["omarchy"];
+    const CONFIG_SETTINGS: &[(&str, &str)] = &[("engine", "Engine"), ("omarchy", "Integrations"), ("settings-json", "Files")];
 
     #[test]
     fn config_holds_settings_only() {
-        for id in config_ids() {
-            assert!(CONFIG_SETTINGS.contains(&id.as_str()), "{id} in Config: Config holds settings only (CONFIG_SETTINGS)");
-        }
-        // Config's action rows come from menu.json, not from markup in main.ts.
+        let rows: Vec<(String, String)> = parse().unwrap().config.into_iter().map(|i| (i.id, i.group)).collect();
+        let want: Vec<(String, String)> = CONFIG_SETTINGS.iter().map(|(id, group)| (id.to_string(), group.to_string())).collect();
+        assert_eq!(rows, want, "the Settings view holds settings only, each under its group (CONFIG_SETTINGS)");
+        // Its action rows come from menu.json, not from markup in main.ts.
         let markup = main_ts_block("<div id=\"settings-pane\"", "</div>\n<div id=\"quick\"");
-        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a Config action row: {markup}");
+        assert!(!markup.contains("data-cmd"), "main.ts hard-codes a Settings action row: {markup}");
+    }
+
+    /// One Settings surface (kit ADR 2026-10-24 amend 2026-11-11, point 2): `settings` (the
+    /// gear and File → Settings…) shows the view, the raw file opens from the one
+    /// `settings-json` row, and Settings is no Workspace section.
+    #[test]
+    fn settings_is_one_view() {
+        let spec = parse().unwrap();
+        let file = spec.menus.iter().find(|m| m.label == "File").unwrap();
+        let item = file.items.iter().find(|i| i.id == "settings").unwrap();
+        assert_eq!(item.label, "Settings…", "the File item names the view, not the file");
+        let actions = main_ts_block("const ACTIONS", "\n};");
+        assert!(actions.contains("\n  settings: () => showSettings(),"), "File → Settings… shows the Settings view");
+        assert!(actions.contains("\n  \"settings-json\": () => openSettings(),"), "Open settings.json opens the raw file");
+        assert!(MAIN_TS.contains("$(\"btn-settings\").addEventListener(\"click\", () => showSettings());"), "the gear shows the same view");
+        assert!(!view_ids().iter().any(|v| v == "view:config"), "Settings is not a Workspace section");
+        assert!(!main_ts_block("const RAIL: RailItem[] = [", "\n];").contains("config"), "the Workspace tooltip names no Config");
     }
 
     #[test]
@@ -295,7 +429,7 @@ mod tests {
     #[test]
     fn view_items_resolve() {
         let views = view_ids();
-        for want in ["view:mission", "view:ship", "view:workspace", "view:plans", "view:config", "view:flight", "view:activity", "view:terminals"] {
+        for want in ["view:mission", "view:ship", "view:workspace", "view:plans", "view:memory", "view:flight", "view:activity", "view:terminals"] {
             assert!(views.iter().any(|v| v == want), "{want} not in {views:?}");
         }
         assert!(!views.iter().any(|v| v == "view:terminal"), "Terminal is a toggle, not a view");
@@ -305,12 +439,14 @@ mod tests {
     fn a_duplicate_id_is_refused() {
         let twice_in_bar = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"},{"id":"x","label":"X again"}]}]}"#;
         assert!(parse_str(twice_in_bar).is_err());
-        let bar_and_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"x","label":"X"}]}"#;
+        let bar_and_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"x","group":"G","label":"X"}]}"#;
         assert!(parse_str(bar_and_config).is_err());
-        let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"},{"id":"y","label":"Y"}]}"#;
+        let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"},{"id":"y","group":"G","label":"Y"}]}"#;
         assert!(parse_str(twice_in_config).is_err());
-        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
+        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"}]}"#;
         assert_eq!(parse_str(fine).map(|s| s.config.len()), Ok(1));
+        let no_group = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
+        assert!(parse_str(no_group).is_err());
         let separator_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"separator":true}]}"#;
         assert!(parse_str(separator_in_config).is_err());
     }

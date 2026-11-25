@@ -27,6 +27,10 @@ jobs:
   linux:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    # The game-content Environment's deployment policy lets only v* tags run this job
+    # (docs/release.md). Its secret COLONY_GAME_DEPLOY_KEY is unused since Colony stopped running
+    # the game engine (kit ADR 2026-11-17 point 1): the game is the web page loaded from its origin.
+    environment: game-content
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

@@ -87,7 +87,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
   grid-template-rows: 40px minmax(0, 1fr) 24px;
   grid-template-areas: "top top top top top top" "rail side side-resizer center resizer bottom" "status status status status status status";
 }
-/* Rail at the right (More → Rail, ui.layout.railPosition): the same tracks, the rail last. */
+/* Rail at the right (Settings → Appearance → Rail position, ui.layout.railPosition): the same tracks, the rail last. */
 #shell[data-rail="right"] {
   grid-template-columns: var(--sw) var(--sr) minmax(0, 1fr) var(--rail-w);
   grid-template-areas: "top top top top" "side side-resizer center rail" "side side-resizer resizer rail" "side side-resizer bottom rail" "status status status status";
@@ -154,7 +154,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 #win-controls svg { width: 16px; height: 16px; }
 
 /* Rail: every kit item at first level, no More menu (ADR 2026-10-24 amend 2026-10-28).
-   Labels under the icons by default, icons only on request (Workspace → Config → Rail);
+   Labels under the icons by default, icons only on request (Settings → Appearance → Rail labels);
    every item keeps its tooltip and accessible name. At any window height the rail scrolls
    (wheel, touch, keys): an edge with items out of view fades, and its first pixel stays a
    1px line in the border colour. Items shrink with the window down to a legible minimum. */
@@ -175,7 +175,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active { color: var(--text-primary); border-color: var(--border-active); }
 .rail-item.on { color: var(--text-primary); }
 .rail-item.on .rail-icon { color: var(--green); }
-#tabs.tabbar-empty { display: none; }
+.pane-tabs.tabbar-empty { display: none; }
 /* Whole words only: a label wraps between words (Flight Log), never inside one. */
 .rail-item .lbl { max-width: 100%; text-align: center; }
 .rail-icon-wrap { position: relative; display: inline-flex; }
@@ -183,10 +183,6 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active .rail-icon { color: var(--blue); }
 .rail-icon-wrap .badge { position: absolute; top: -6px; left: 12px; font-size: 10px; line-height: 14px; min-width: 14px; padding: 0 4px; }
 .rail-icon-wrap .badge + .badge { left: auto; right: 12px; top: 10px; }
-/* A rail group with more than one view (Ship): its switch heads the tab strip. */
-.view-switch { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 6px; }
-.view-switch-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--mc-radius-chrome); background: transparent; border-color: transparent; }
-.view-switch-btn.active { background: var(--bg-card); border-color: var(--border-active); color: var(--text-primary); }
 .tab-svg { width: 16px; height: 16px; flex: none; }
 button.toggle.on { border-color: var(--blue); color: #fff; background: var(--blue-bg); }
 button.icon { padding: 0 6px; background: transparent; border-color: transparent; }
@@ -254,7 +250,26 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tab-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
 .tab.exited { opacity: 0.6; }
 .tab-add { border: 0; background: transparent; padding: 0 12px; font-size: 16px; color: var(--text-secondary); }
-#views { flex: 1; position: relative; min-height: 0; }
+/* The centre split tree (kit ADR 2026-10-24 amend 2026-11-19): nested flex boxes of panes,
+   a divider between two halves. Each pane: its strip, then its views host. */
+#panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.pane-split { display: flex; min-width: 0; min-height: 0; }
+.pane-split[data-dir="right"] { flex-direction: row; }
+.pane-split[data-dir="down"] { flex-direction: column; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 0; }
+/* With more than one pane, the focused one shows by its 1px border colour only (no accent
+   bar, no tint); one pane looks as before splits. */
+#panes.multi .pane { border: 1px solid transparent; }
+#panes.multi .pane.focused { border-color: var(--border-active); }
+.pane-divider { flex: none; background: var(--border); position: relative; z-index: 1; }
+.pane-divider[data-dir="right"] { width: 1px; cursor: col-resize; }
+.pane-divider[data-dir="down"] { height: 1px; cursor: row-resize; }
+/* A wider grab area than the 1px line. */
+.pane-divider::after { content: ""; position: absolute; inset: 0; }
+.pane-divider[data-dir="right"]::after { left: -3px; right: -3px; }
+.pane-divider[data-dir="down"]::after { top: -3px; bottom: -3px; }
+.pane-views { flex: 1; position: relative; min-height: 0; }
+.pane-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
 .view { position: absolute; inset: 0; }
 #welcome { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg-primary); }
 #welcome h1 { display: flex; align-items: center; gap: 12px; margin: 0; font-weight: 600; }
@@ -409,8 +424,11 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .inbox-line { font-family: var(--mc-font-mono); font-size: 12px; color: var(--text-secondary); word-break: break-word; }
 /* The question before a gate line, in full (untrusted text, rendered as text only). */
 .gate-prompt { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.45; color: var(--text-primary); max-height: 18em; overflow: auto; }
-.gate.flash { animation: gate-flash 1.2s ease-out 2; }
-@keyframes gate-flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px var(--yellow); } }
+/* A revealed card (notification click, a card a button just created): one opacity step back to
+   full, once. Motion ADR point 6: no box-shadow and no second flash; the gate's own attention is
+   the pulse on its state mark. Reduced motion keeps the static outline. */
+.gate.flash { animation: gate-flash var(--motion-enter) ease-out; }
+@keyframes gate-flash { from { opacity: 0.4; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .gate.flash { animation: none; outline: 2px solid var(--yellow); } }
 /* Mission: open gates pinned above the hero. No scroller of its own (the view is the one
    scroller): each card shows its answer controls first and the question clamped to three
@@ -424,12 +442,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .tabbar .tab.active .tab-icon { color: var(--blue); }
 .tabbar .tab .badge { margin-left: -2px; }
 .badge.muted { background: var(--bg-card-hover); color: var(--text-secondary); }
-#tabs { overflow: hidden; }
+.pane-tabs { overflow: hidden; }
 .tabs-docs { display: flex; gap: 1px; overflow-x: auto; min-width: 0; flex: 1; }
 .tabs-docs::-webkit-scrollbar { height: 3px; }
 .tab-sep { width: 1px; background: var(--border); margin: 6px 4px; flex: none; }
-/* Back / Forward head the strip, built once (only #tabs-rest is re-rendered). */
-#tabs-rest { display: contents; }
+/* Back / Forward head each strip, built once (only .tabs-rest is re-rendered). */
+.tabs-rest { display: contents; }
 .tab-nav { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 4px 0 6px; }
 .tab-nav button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border-color: transparent; color: var(--text-secondary); }
 .tab-nav button:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-active); }
@@ -446,7 +464,7 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 /* No max-width: a cap left a wide empty gutter at 1920px while text truncated inside. */
 .cv-body { padding: var(--mc-space-xl) var(--mc-space-xl) var(--mc-space-2xl); display: flex; flex-direction: column; gap: var(--mc-space-xl); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
-.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color 0.2s, box-shadow 0.2s; }
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius-lg); padding: var(--mc-card-padding); display: flex; flex-direction: column; gap: var(--mc-space-sm); min-width: 0; transition: border-color var(--motion-fast) ease-out, box-shadow var(--motion-fast) ease-out; }
 .card:hover { border-color: var(--border-active); box-shadow: var(--mc-shadow-card-hover); }
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: var(--mc-space-md); margin-bottom: var(--mc-space-sm); min-height: 22px; }
 .card-title { white-space: nowrap; display: inline-flex; align-items: center; gap: var(--mc-chrome-label-gap); min-width: 0; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); line-height: 1.2; color: var(--text-primary); }
@@ -509,8 +527,21 @@ button.empty-state-btn:active { transform: scale(0.98); }
   .state-mark.motion-loop .state-ring { display: block; animation: mc-spin var(--motion-loop) linear infinite; }
   .state-mark.motion-loop .state-icon { transform: scale(0.75); }
   .state-mark.motion-pulse .state-icon { animation: state-pulse var(--motion-pulse) ease-in-out infinite; }
+  .state-fade { animation: state-fade var(--motion-fast) ease-out both; }
+  .tr-enter { animation: tr-enter var(--motion-fast) ease-out both; }
 }
 @media (prefers-reduced-motion: reduce) { .state-mark.motion-enter .state-icon { animation: none; } }
+/* State changes (motion ADR point 5). A state pill, chip or line crossfades in when its state
+   changed (src/icons.ts crossfade; a re-render in the same state stays still); a transcript
+   card or tick row enters once on a live append (src/transcript.ts card). Both are one-shots and
+   opt-in above, so reduced motion has neither. The 1px border colour of a chip, transcript card
+   or row transitions over --motion-fast where the element is kept across the change (the run
+   chip, a gate card being answered); the cockpit rebuilds its nodes, so there the crossfade is
+   the transition. Reduced motion: the colour changes at once. */
+@keyframes state-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tr-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.chip, .tr-card, .tr-gate { transition: border-color var(--motion-fast) ease-out; }
+@media (prefers-reduced-motion: reduce) { .card, .chip, .tr-card, .tr-gate, .plan-list > .plan-row, .plan-wrap, .q-row { transition: none; } }
 .pill-executing { background: var(--blue-bg); color: var(--blue); }
 .pill-running { background: var(--green-bg); color: var(--green); }
 .pill-awaiting { background: var(--yellow-bg); color: var(--yellow); }
@@ -575,6 +606,11 @@ button.empty-state-btn:active { transform: scale(0.98); }
 @keyframes mc-spin { to { transform: rotate(360deg); } }
 .now-meta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .now-actions { margin-top: var(--mc-space-xs); }
+/* Current mission card (src/missioncard.ts): Kill is the secondary action, pushed to the row's
+   end; Open HANDOFF is a link in the header line, centred with the state pill. States change
+   no active look of their own: no left bar, no inset, no tinted fill. */
+.now-actions .card-kill { margin-left: auto; }
+.card-aside button.link { align-self: center; }
 .run-meta { display: inline-flex; gap: var(--mc-space-md); flex: none; font-size: var(--mc-chrome-meta-size); color: var(--text-muted); white-space: nowrap; }
 
 button.link { background: transparent; border-color: transparent; color: var(--blue); padding: 1px 4px; font-size: var(--mc-chrome-subtitle-size); align-self: flex-start; min-height: 0; }
@@ -660,7 +696,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 
 /* Plans (dashboard .plan-accordion-item) and Queue rows. */
 .plan-list, .q-list { display: flex; flex-direction: column; gap: var(--mc-space-md); }
-.plan-list > .plan-row, .plan-wrap, .q-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius); transition: border-color 0.2s; }
+.plan-list > .plan-row, .plan-wrap, .q-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--mc-radius); transition: border-color var(--motion-fast) ease-out; }
 .plan-list > .plan-row:hover, .plan-wrap:hover, .q-row:hover { border-color: var(--border-active); }
 .plan-row, .q-row { display: flex; align-items: flex-start; gap: 10px; padding: var(--mc-card-padding-dense); min-width: 0; cursor: pointer; }
 .plan-list > .plan-row.active, .plan-wrap:has(.plan-row.active) { border-color: var(--blue); }
@@ -800,6 +836,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .tr-start { border-color: var(--border-active); }
 .tr-end.ok { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
 .tr-end.bad { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.tr-queue { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; }
 .tr-tick { display: flex; align-items: center; gap: 2px; margin-top: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--blue); font-size: 12px; flex-wrap: wrap; }
 .tr-tick .link { font-family: var(--mc-font-mono); font-weight: 400; }
 .tr-line { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
@@ -827,13 +864,13 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .md-link-text { text-decoration: underline dotted; text-underline-offset: 2px; }
 
 /* ---- Markdown file tabs: Preview | Editor (plans and HANDOFF open rendered) ------------ */
-#view-editor { display: flex; flex-direction: column; }
-#monaco-host { flex: 1; min-height: 0; position: relative; }
-#doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-#doc-bar button { padding: 2px 10px; background: transparent; }
+.pane-editor { display: flex; flex-direction: column; }
+.monaco-host { flex: 1; min-height: 0; position: relative; }
+.doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.doc-bar button { padding: 2px 10px; background: transparent; }
 /* The shown mode: its border colour only. */
-#doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
-#doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
+.doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
 .md-doc { max-width: 980px; margin: 0 auto; padding: 16px 24px 40px; }
 .md-doc.prose, .md-doc .prose { font-size: 14px; }
 .md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4, .md-doc h5, .md-doc h6 { margin: 18px 0 6px; line-height: 1.3; color: var(--text-primary); }
@@ -916,17 +953,18 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 @media (max-width: 900px) { #btn-quick, #btn-editor { display: none; } }
 
 /* Engine panel (src/engine.ts) */
-#engine-panel, #about-panel, #omarchy-panel { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
+#engine-panel, #about-panel, #omarchy-panel, #shortcuts-panel { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 80px; z-index: 50; }
 .engine-box { width: min(680px, 92vw); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; max-height: 80vh; overflow: auto; }
 .engine-row { display: grid; grid-template-columns: 130px 1fr; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
 .engine-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .engine-msg { font-size: 12px; overflow-wrap: anywhere; }
+.shortcut-row kbd { justify-self: start; }
 .engine-box .warn, #st-engine.warn { color: var(--yellow); }
 .engine-box .bad, #st-engine.bad { color: var(--red); }
 #st-engine { cursor: pointer; margin-right: 10px; }
 #st-engine.warn, #st-engine.bad { text-decoration: underline dotted; text-underline-offset: 3px; }
 
-/* More → Omarchy integration: the listed steps before anything runs. */
+/* Settings → Integrations → Omarchy integration: the listed steps before anything runs. */
 .omarchy-steps { margin: 4px 0 8px; padding-left: 20px; font-size: 12px; }
 .omarchy-steps li { margin: 2px 0; overflow-wrap: anywhere; }
 .omarchy-steps code { font-family: var(--mc-font-mono); }
@@ -941,37 +979,37 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .ws-nav-btn.active { border-color: var(--border-active); color: var(--text-primary); }
 .ws-body { flex: 1; min-height: 0; position: relative; overflow: auto; }
 .ws-body > .cv { position: absolute; inset: 0; }
-/* Workspace → Config: Colony's settings, the rows the rail's More menu held. */
-.settings-pane { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-xl); max-width: 560px; }
+/* Settings: Colony's settings, one view (the top bar gear and File → Settings… show it). Its
+   rows sit under plain group labels; the current choice and the gear while the view is on
+   screen change only their 1px border colour. */
+.settings-view { overflow: auto; background: var(--bg-primary); }
+.settings-head { display: flex; align-items: center; gap: var(--mc-space-md); padding: var(--mc-space-xl) var(--mc-space-xl) 0; max-width: 560px; }
+.settings-head h2 { margin: 0; flex: 1; font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.settings-pane { display: flex; flex-direction: column; gap: var(--mc-space-md); padding: var(--mc-space-md) var(--mc-space-xl) var(--mc-space-xl); max-width: 560px; }
+.settings-group { display: flex; flex-direction: column; gap: 2px; padding-top: var(--mc-space-md); border-top: 1px solid var(--border); }
+.settings-group[hidden] { display: none; }
+.settings-group-title { margin: 0; padding: 0 10px; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); color: var(--text-secondary); }
 .settings-pane button { text-align: left; border: 1px solid transparent; background: transparent; padding: 6px 10px; font-size: var(--mc-chrome-label-size); border-radius: var(--mc-radius-chrome); }
 .settings-pane button:hover { border-color: var(--border); }
 .settings-pane button.on { border-color: var(--border-active); color: var(--text-primary); }
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
+#btn-settings[aria-current="page"] { border-color: var(--border-active); }
 
-/* Native kit views (src/kitviews.ts): list rows, and the Colony game. Active filters and
+/* Native kit views (src/kitviews.ts): list rows. Active filters and
    rows change only their 1px border colour (no bar, no inset, no tint). */
 .kv-row { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-sm) 0; border-top: 1px solid var(--border); min-width: 0; }
 .card-header + .kv-row { border-top: 0; }
 .kv-row .row { padding: 0; }
 .kv-row .now-meta { margin-top: 2px; }
 button.kv-filter.on { background: transparent; border-color: var(--border-active); }
-.colony-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: var(--mc-space-xl); align-items: start; }
-@media (max-width: 1100px) { .colony-layout { grid-template-columns: minmax(0, 1fr); } }
-.colony-map { display: block; width: 100%; max-width: 420px; margin: 0 auto; height: auto; }
-.colony-tile { stroke: var(--bg-primary); stroke-width: 1; }
-.colony-tile[data-tile="fog"] { fill: var(--bg-secondary); }
-.colony-tile[data-tile="barren"] { fill: #4b5563; }
-.colony-tile[data-tile="green"] { fill: #3f7d5a; }
-.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: none; }
-.colony-side { display: flex; flex-direction: column; gap: var(--mc-space-lg); }
-.colony-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--mc-space-md); }
-.colony-resource { border: 1px solid var(--border); border-radius: var(--mc-radius); padding: var(--mc-space-md); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.colony-resource-value { font: 600 20px var(--mc-font-mono); color: var(--text-primary); }
-.colony-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--mc-space-lg); }
-.colony-card { gap: 6px; }
-.colony-card-art { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--mc-radius-chrome); background: var(--bg-secondary); }
-.colony-card button { align-self: flex-start; }
-.colony-card button:disabled { cursor: not-allowed; opacity: 0.6; }
+/* Oligarchy (src/oligarchyview.ts): the web game in a frame that fills the view, a one-line
+   bar above it, and the network-needed state. Border colour only, no fill, no accent bar. */
+.kv-oligarchy { overflow: hidden; }
+.kv-oligarchy .cv-body { height: 100%; padding: 0; gap: 0; }
+.oligarchy-bar { display: flex; align-items: center; gap: var(--mc-space-md); padding: var(--mc-space-sm) var(--mc-space-lg); border-bottom: 1px solid var(--border); min-width: 0; }
+.oligarchy-bar .oligarchy-origin { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oligarchy-frame { flex: 1; display: block; width: 100%; min-height: 0; border: 0; background: var(--bg-primary); }
+.oligarchy-offline { flex: 1; display: grid; place-items: center; padding: var(--mc-space-xl); }
 /* Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
    2026-11-07): while a tab is dragged, the bar it would land on shows a 1px line in the accent
    colour, drawn as an outline so nothing shifts. No fill, no accent bar, no inset shadow. */

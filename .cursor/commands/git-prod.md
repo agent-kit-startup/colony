@@ -1,6 +1,9 @@
 ---
 name: git-prod
 description: Promote origin/staging to origin/main following the git prod routine (HITL confirmation required).
+context: sha
+audience: user
+interactiveOnly: true
 ---
 
 # Git prod
@@ -9,17 +12,17 @@ Follow the **git prod** routine to promote `origin/staging` to `origin/main` (pr
 
 Factory landing wrap (not consumer L0): `/kit-prod` when that file exists. This command stays git-only.
 
-**Runs in the main window by default.** Do not dispatch this command to a Task subagent by default; Task isolation is opt-in and used only when the kit repo wants it.
+**Runs in the main window by default.** Do not dispatch this command to a Task subagent by default; Task isolation is opt-in.
 
 1. **Read** the "Prompt: git prod" section in `autogit/gitupdate.md` (when it exists in the project).
 2. Critical validation: no uncommitted local changes; never commit directly to main.
 3. Close the release in the CHANGELOG (move `[Unreleased]` to a dated version) before merging. Keep `<!-- changelog-private -->` fences when the project uses them.
 4. Show a summary of the changes (diff/log) between staging and main and **ask for explicit confirmation using Ask questions tool** before merging and pushing to main.
-   
+
    Options: `Proceed with production deploy` / `Review changes first` / `Cancel`
-   
+
    **Advisory (does not replace confirmation):** if Blocking untriaged `.cursor/memory/plan-monitor-*.md` match themes in the staging→main delta, mention them once in the summary. Never steal this Ask; Field Report / `/plan-review-triage` stay attention/HITL SoT.
-   
+
    **Fallback (path 1):** if Ask questions is missing, say so once, print the same three labels as a numbered list, accept number or label, and treat a typed answer as Other. Do not invent a fake tool call.
 5. **Agent signature gate (hard stop, before merge to main):** after the confirmation and before any merge or push, scan everything that would reach `main`: `git log origin/main..origin/staging --format=%B | sh git-hooks/prepare-commit-msg --check -`.
    Also scan the authors and committers of the same delta: `sh git-hooks/prepare-commit-msg --check-authors origin/main origin/staging`. Exit 1 lists each commit whose author or committer address is an agent identity: **stop**. A red commit not yet on `staging` is fixed through `/git-staging` (set your own identity, then `git commit --amend --no-edit --reset-author` or `git rebase --exec 'git commit --amend --no-edit --reset-author' <base>` on the working branch). Already merged on a protected `staging`: stop, never rewrite `staging`; the per-SHA continue rule below covers messages only and never clears an identity red. Option: an operator-run history rewrite.
@@ -40,7 +43,7 @@ Factory landing wrap (not consumer L0): `/kit-prod` when that file exists. This 
    - `Cancel`
 
    **On `I pushed main`:** The operator already pushed. Verify `origin/main` advanced, then continue with the annotated tag, staging sync, and the report. Do not run the push.
-   **On `Open staging→main PR instead`:** While on local `main`, `git reset --hard origin/main`, then `gh pr create --base main --head staging`. Prefer a merge commit. Wait for the operator to merge the PR.
+   **On `Open staging→main PR instead`:** Reset local `main`, tree untouched: `git switch <staging> && git branch -f main origin/main`. GitHub: advisory `agent-kit promote rules --base main`, then `gh pr create --base main --head staging`; wait with `agent-kit promote wait --pr <N>` only (exit 3 = Ask `promote-merge-wait`). Both `promote` commands are GitHub-only; GitLab (MR with `squash=false`, `remove_source_branch=false`, bounded MR-state poll): [promote-merge-wait.md](../skills/core/hitl-gates/promote-merge-wait.md). Prefer a merge commit; never merge it yourself.
    **On `Cancel`:** Stop. Do not tag, push, or open a PR.
 
    **Other lanes:** Push with the authorized inline form `ALLOW_MAIN_PUSH=1 git push origin main`, then continue with the annotated tag. Bare `git push origin main` stays denied by `agent-kit guard shell` and `git-hooks/pre-push`. Keep it on one line (the guard denies an env prefix split off with a `\` continuation). Do not export `ALLOW_MAIN_PUSH=1` as a session environment variable. Do not add `--force`, `--no-verify`, or a non-main destination.
@@ -48,6 +51,6 @@ Factory landing wrap (not consumer L0): `/kit-prod` when that file exists. This 
    Details: `autogit/gitupdate.md` Prompt git prod step 9.
 8. **Sync staging (mandatory):** immediately after `main` is pushed, if `git merge-base --is-ancestor origin/staging origin/main`, fast-forward staging with `git merge --ff-only origin/main` and push. Do not open a merge PR that only records `origin/main` as ancestor. If staging is not an ancestor, stop and report; do not back-merge in this prod session. Details: `autogit/gitupdate.md` step 10.
 9. Update `.cursor/HANDOFF.md` ("promoted to production") and memory-loop WRITE if it applies.
-10. Annotated `v*` tags trigger whatever tag CI the project configures.
+10. Annotated `v*` tags trigger whatever tag CI the project configures. Before pushing the first `v*` tag, run the project's release preflight when it defines one (a wrapper command or `autogit/gitupdate.md` step 9.5 names it); red is a STOP before the tag.
 11. **Post-prod verification (mandatory):** before ending, report `autogit/gitupdate.md` step 12. If the project defines post-prod release verification (e.g. a factory wrapper command), run it; otherwise **Done** = `origin/main` pushed, tag pushed, tag CI green, all on the same `vX.Y.Z`. Red is a **STOP** (no next patch under this yes). Eventually-consistent row: poll with bounded backoff; Ask only on timeout.
 12. **Close-release / tags:** bump every version manifest the project keeps (in a consumer project `.cursor/agent-kit.json` records the installed kit, not a product manifest; a wrapper command may list extra manifests); never force-move an already-pushed `v*` tag. Release-close stays its own PR to staging (do not bundle with a main-back-merge or product fix). Retry via a new **patch** tag when the fix must republish (**new** `/git-prod` confirm); **hold** (manifests stay on the tagged SemVer, no new tag) when the existing tarball is enough; local-only recreate before first push. Same rule as `autogit/gitupdate.md` SemVer / step 9.5.

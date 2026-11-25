@@ -3,8 +3,10 @@
 // Cancel, Delete). Read is the Open button (the rendered preview). Every action only starts
 // the interactive agent with `/<command> <file>` (host.interactive): the kit command asks its
 // own confirmation there and Colony never answers it. Edit is on every row (completed ones
-// too: /backlog-edit warns off the backlog). The active plan offers Edit only: the three
-// remove commands stop on it. Pure (no imports): Node runs it in `pnpm test`.
+// too: /backlog-edit warns off the backlog). The active plan offers Edit and Cancel, the kit's
+// /cancel-plan (ADR amend 2026-10-29 point 1, the same Cancel as the Mission card), off while
+// a run or queue is in flight; the three backlog remove commands stop on it. Pure (no
+// imports): Node runs it in `pnpm test`.
 
 export interface PlanAction {
   id: "edit" | "archive" | "cancel" | "delete";
@@ -14,6 +16,8 @@ export interface PlanAction {
   /** Shown in the confirmation before the agent opens. */
   why: string;
   title: string;
+  /** Why the item is off right now ("" or absent: it is on). */
+  disabled?: string;
 }
 
 /** The one plain token valid_prompt (vendor.rs) accepts as the argument. */
@@ -26,7 +30,8 @@ export interface PlanLists {
   backlog: boolean;
 }
 
-export function planActions(file: string, lists: PlanLists, active: boolean): PlanAction[] {
+/** `busy`: why the active plan cannot be cancelled now (a run or queue in flight), "" when it can. */
+export function planActions(file: string, lists: PlanLists, active: boolean, busy = ""): PlanAction[] {
   if (!PLAIN.test(file) || file.startsWith("-") || file.split("/").includes("..")) return [];
   const edit: PlanAction = {
     id: "edit",
@@ -38,7 +43,18 @@ export function planActions(file: string, lists: PlanLists, active: boolean): Pl
         : `/backlog-edit changes the to-dos, overview or phases of ${file} without activating it. ${file} is not a backlog plan: the command warns once and asks before it edits it.`,
     title: "/backlog-edit in your agent, interactively: change to-dos, overview or phases without activating the plan",
   };
-  if (active) return [edit];
+  if (active)
+    return [
+      edit,
+      {
+        id: "cancel",
+        label: "Cancel…",
+        prompt: `/cancel-plan ${file}`,
+        why: `/cancel-plan marks the open to-dos of ${file} cancelled, keeps the file and clears the HANDOFF plan fields, so HANDOFF names no plan after. It refuses while a run or queue is in flight for it, and asks before it changes anything.`,
+        title: busy ? `${busy}: stop it first (/cancel-plan refuses while a run or queue is in flight)` : "/cancel-plan in your agent: the active plan cancelled (open to-dos cancelled, the file kept)",
+        ...(busy ? { disabled: busy } : {}),
+      },
+    ];
   const out = [edit];
   if (lists.parked)
     out.push({

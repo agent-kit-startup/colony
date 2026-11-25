@@ -6,7 +6,7 @@
 import { api, errText } from "./api";
 import { forgeApi } from "./forge";
 import { hostApi, hostRequests } from "./hostreq";
-import { prAction, rowAction, shipLaneGate } from "./shiplane";
+import { dataAtLeast, prAction, rowAction, shipLaneGate } from "./shiplane";
 import { snapshot } from "./snapshot";
 
 export interface SmokeCtx {
@@ -20,6 +20,18 @@ export interface SmokeCtx {
   term: (line: string) => Promise<void>;
   activeTab: () => string;
 }
+
+/**
+ * The promote step's precondition, typed into a terminal tab in the fixture repository: one
+ * commit that adds `smoke-promote.txt` on top of the scratch origin's staging, built with
+ * plumbing on a temporary index (the working tree, the index, HEAD and main stay as they
+ * are), pushed to the push URL, which must be a local folder (the runner's bare scratch
+ * origin; a real remote is refused), and mirrored into `refs/remotes/origin/staging`, since
+ * the fetch URL is not reachable. main stays outside
+ * staging, so the staging-sync step still has a sync to open. The subshell stops at the first
+ * failing command (set -e, outside any || list) and the file ends with its exit code.
+ */
+const PROMOTE_FIXTURE = `( set -e; o=$(git config remote.origin.pushurl); test -d "$o"; b=$(git rev-parse refs/remotes/origin/staging); d=$(mktemp -d); GIT_INDEX_FILE=$d/index git read-tree "$b"; h=$(printf 'Colony smoke: a staging-only file\\n' | git hash-object -w --stdin); GIT_INDEX_FILE=$d/index git update-index --add --cacheinfo "100644,$h,smoke-promote.txt"; t=$(GIT_INDEX_FILE=$d/index git write-tree); rm -rf "$d"; n=$(git -c user.name=smoke -c user.email=smoke@example.invalid commit-tree "$t" -p "$b" -m "feat: staging-only file (Colony smoke)"); git push -q "$o" "$n:refs/heads/staging"; git update-ref refs/remotes/origin/staging "$n"; echo "ok $n" ) > promote-fixture.txt 2>&1; echo "exit=$?" >> promote-fixture.txt\n`;
 
 export async function hostSmoke(c: SmokeCtx) {
   const read = (rel: string) => api.readTextFile(`${c.root}/${rel}`).catch(() => "");
@@ -242,12 +254,16 @@ export async function gitCicdSmoke(c: SmokeCtx) {
     await c.log("ship-merge-staging", m11.el?.dataset.production === "no" && gh.includes("pr merge 11 --squash"), { production: m11.el?.dataset.production });
 
     // Open the staging -> main PR: fixed branches and title, no typed yes (it merges nothing).
+    // The host refuses a promote whose staging has the same files as main, so the step first
+    // gives the scratch origin's staging one staging-only file (PROMOTE_FIXTURE).
+    await c.term(PROMOTE_FIXTURE);
+    const pf = (await untilFile("promote-fixture.txt", (x) => x.includes("exit="), 10000)).trim();
     click(row("staging-main"), "ship-open-pr");
     const op = await ready("open-pr", "promote");
     const opText = op.el?.textContent ?? "";
     click(op.el, "approve");
     gh = await untilFile("gh-proof.txt", (x) => x.includes("pr create --base main --head staging"), 15000);
-    await c.log("ship-open-promote", op.el?.dataset.production === "no" && opText.includes("Promote staging to main") && opText.includes("main ← staging") && gh.includes("pr create --base main --head staging --title Promote staging to main --body"), { text: opText.slice(0, 300) });
+    await c.log("ship-open-promote", /^ok [0-9a-f]{40}\nexit=0$/.test(pf) && op.el?.dataset.production === "no" && opText.includes("Promote staging to main") && opText.includes("main ← staging") && gh.includes("pr create --base main --head staging --title Promote staging to main --body"), { fixture: pf.slice(0, 300), text: opText.slice(0, 300) });
 
     // Rerun the failed jobs of the tag's CI run.
     click(row("tag-ci"), "ship-rerun-checks");
@@ -432,6 +448,46 @@ export async function forgeUxSmoke(c: SmokeCtx & { closeTab: (id: string) => voi
     const proofU = await untilFile("gh-proof.txt", (t) => t.includes("pr update-branch 13"), 15000);
     await c.log("forge-update-branch", inBox && proofU.includes("pr update-branch 13"), { inBox, active: c.activeTab() });
 
+    // Bulk (git-cicd ADR amend 2026-11-08 point 1): update-branch and close only, one card per PR,
+    // filed one after another and approved one by one; a merge is never part of a bulk action.
+    // A behind PR (13) and a ready one (7): Update branch (1) files 13 only, Close (2) files both.
+    const count = (t: string, what: string) => t.split("\n").filter((l) => l.startsWith(what)).length;
+    const select = async (...ns: number[]) => {
+      c.showTab("git");
+      await c.until(() => ns.every((n) => !!row(n)), 15000);
+      for (const n of ns) row(n)?.querySelector<HTMLInputElement>("input.pr-select:not(:checked)")?.click();
+      await c.wait(150);
+      return git.querySelector<HTMLElement>(".pr-bulk");
+    };
+    const bulkActs = (b: HTMLElement | null) => [...(b?.querySelectorAll<HTMLButtonElement>("button[data-act]") ?? [])].map((x) => x.dataset.act).join(",");
+    const p0 = await read("gh-proof.txt");
+    const merges0 = count(p0, "pr merge ");
+    const upd0 = count(p0, "pr update-branch 13");
+    const b1 = await select(13, 7);
+    const bulkText1 = b1?.textContent ?? "";
+    const acts1 = bulkActs(b1);
+    click(b1, "bulk-update-branch");
+    const bu13 = await ready("update-branch", 13, "colony");
+    const no7 = !req("update-branch", 7, "colony");
+    click(bu13, "approve");
+    const pU = await untilFile("gh-proof.txt", (t) => count(t, "pr update-branch 13") > upd0, 15000);
+    const b2 = await select(13, 7);
+    const bulkText2 = b2?.textContent ?? "";
+    click(b2, "bulk-close");
+    const cl7 = await ready("close-pr", 7, "colony");
+    click(cl7, "approve");
+    await untilFile("gh-proof.txt", (t) => t.includes("pr close 7"), 15000);
+    const cl13 = await ready("close-pr", 13, "colony");
+    click(cl13, "approve");
+    const pC = await untilFile("gh-proof.txt", (t) => t.includes("pr close 13"), 15000);
+    await c.log(
+      "forge-bulk",
+      /2 selected/.test(bulkText1) && /Update branch \(1\)/.test(bulkText1) && /Close \(2\)/.test(bulkText1) && acts1 === "bulk-update-branch,bulk-close,bulk-clear" &&
+        !!bu13 && no7 && count(pU, "pr update-branch 13") === upd0 + 1 && !pU.includes("pr update-branch 7") &&
+        /Close \(2\)/.test(bulkText2) && pC.includes("pr close 7") && pC.includes("pr close 13") && count(pC, "pr merge ") === merges0,
+      { bulkText1, acts1, bulkText2, no7, merges: [merges0, count(pC, "pr merge ")], tail: pC.split("\n").slice(-6) },
+    );
+
     // PR detail: the conflicting PR's merge box lists the blocker and offers Resolve, not Merge.
     click(row(14), "open");
     await c.until(() => !!document.querySelector('.cv-pr[data-pr="14"] .prd-merge .actions'), 15000);
@@ -453,13 +509,47 @@ export async function forgeUxSmoke(c: SmokeCtx & { closeTab: (id: string) => voi
     const box9 = document.querySelector<HTMLElement>('.cv-pr[data-pr="9"] .prd-merge');
     const merge9 = box9?.querySelector<HTMLButtonElement>('button[data-act="merge"]');
     await c.log("forge-promote-preflight", /required_signatures \(ruleset 42\)/.test(box9?.textContent ?? "") && /merge commit/.test(box9?.textContent ?? "") && /typed yes/.test(box9?.textContent ?? "") && merge9?.textContent === "Merge (promote)…" && !merge9.disabled, { box: (box9?.textContent ?? "").slice(0, 400) });
+    // Merge (promote)… files its card in the box; without the typed yes nothing runs, with it the
+    // host merges with a merge commit pinned to the card's head, then the box waits with
+    // `agent-kit promote wait` (the fixture answers merged) and says so.
+    const pin9 = (t: string) => (t.match(/^pr merge 9 --merge --match-head-commit [0-9a-f]{40}/gm) ?? []).length;
+    const w0 = pin9(await read("gh-proof.txt"));
+    const sq9 = squashes(await read("gh-proof.txt"));
+    merge9?.click();
+    const c9 = await ready("merge-pr", 9, "colony");
+    const c9Box = !!c9?.closest('.cv-pr[data-pr="9"] .prd-merge');
+    const c9Prod = c9?.dataset.production === "yes";
+    click(c9, "approve");
+    await c.wait(800);
+    const noYes = c9?.querySelector(".hostreq-out")?.textContent ?? "";
+    const ranNoYes = pin9(await read("gh-proof.txt")) > w0;
+    const yes9 = c9?.querySelector<HTMLInputElement>("input.yes");
+    if (yes9) yes9.value = "yes";
+    click(c9, "approve");
+    const pW = await untilFile("gh-proof.txt", (t) => pin9(t) > w0, 15000);
+    const waitEl = () => document.querySelector<HTMLElement>('.cv-pr[data-pr="9"] .prd-wait');
+    await c.until(() => /is merged on the forge/.test(waitEl()?.textContent ?? ""), 15000);
+    const waitText = waitEl()?.textContent ?? "";
+    await c.log(
+      "forge-promote-merge-wait",
+      c9Box && c9Prod && /type yes/i.test(noYes) && !ranNoYes && pin9(pW) === w0 + 1 && squashes(pW) === sq9 && /#9 is merged on the forge/.test(waitText),
+      { c9Box, c9Prod, noYes: noYes.slice(0, 200), ranNoYes, waitText: waitText.slice(0, 200) },
+    );
     await shotAt("forge-pr-detail", 1280);
     await shotAt("forge-pr-detail", 1920);
 
     // Ship lane: one status line; the rows open while a row is red (tag CI in the fixture).
     c.showTab("git");
+    // Data 1.11.0 (kit 6.15.0+): staging vs main from the forge's Ref.compare in the fixture (3 ahead:
+    // one feat, one merge, one docs commit; 1 behind), never the local fallback. Older engines: the
+    // count is labelled local.
     const line = git.querySelector<HTMLElement>(".bento-ship .ship-line")?.textContent ?? "";
-    await c.log("forge-ship-line", /shipped/.test(line) && /forge (read|not read)/.test(line), { line });
+    const version = String(snapshot.data?.dashboardDataVersion ?? "");
+    const compare = dataAtLeast(version, "1.11.0");
+    const counts = compare
+      ? snapshot.data?.shipLane?.compare?.source === "forge" && /release pending: 1 commit /.test(line) && /main \+1 \(staging sync due\)/.test(line) && !/local/.test(line)
+      : /local count, may include merges/.test(line);
+    await c.log("forge-ship-line", /shipped/.test(line) && /forge (read|not read)/.test(line) && counts, { line, version, source: snapshot.data?.shipLane?.compare?.source ?? null });
   } catch (e) {
     await c.log("forge-ux-smoke", false, errText(e));
   } finally {

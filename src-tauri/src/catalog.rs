@@ -3,9 +3,18 @@
 //! contract). Colony keeps no list of its own: the rows come from the engine that runs
 //! agent-kit, read from the opened folder's `.cursor/commands/`.
 //!
-//! Every row is either "run" or "copy". A row runs only when its name is in vendor.rs
-//! `PROMPT_SLASH` (the same check `term_launch` repeats); the catalog's `headless` hint and
-//! its layer never widen that. Factory rows stay copy. Catalog text is untrusted: names
+//! Every row is either "run" or "copy". A kit or factory row runs only when its name is in
+//! vendor.rs `PROMPT_SLASH` (the same check `term_launch` repeats), and the catalog can only
+//! narrow that (ADR 2026-10-22 amend 2026-11-16, run with context); project rows are the one
+//! widening, below. From catalog 1.1.0 a row also carries
+//! `context` (what the launch may append after the slash), `interactiveOnly` (`/git-prod`,
+//! `/kit-prod`, also forced by vendor.rs) and `audience`: a `meta` row is hidden and never
+//! runs outside the factory workspace (a catalog with factory-layer rows), and a `project`
+//! row (a file the workspace added) runs too, under a name that is not a compiled one
+//! (operator reply of 2026-11-20, decision 6 of that amend: repository text can define what
+//! runs, accepted). `commands_catalog` hands those names to vendor.rs for the folder, so
+//! `term_launch` checks the set Rust read, never a name from the page. An older catalog without those fields keeps
+//! the pre-1.1.0 behavior: vendor.rs `LEGACY_RUN`, factory rows copy. Catalog text is untrusted: names
 //! must match the schema pattern (others are dropped), descriptions are plain text with
 //! control characters removed and a length cap; the page renders them as text only.
 //!
@@ -24,7 +33,7 @@ use crate::{tools, vendor, workspace, AppState};
 
 /// The `catalogVersion` major this Colony reads.
 const CATALOG_MAJOR: u64 = 1;
-const UPDATE_ENGINE: &str = "Update the engine (Run → Engine…) to list commands";
+const UPDATE_ENGINE: &str = "Update the engine (Settings → Engine…) to list commands";
 const MAX_DESCRIPTION: usize = 400;
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -36,8 +45,17 @@ pub struct CommandRow {
     pub layer: String,
     /// The kit can dispatch it headless: shown as a hint only.
     pub headless: bool,
-    /// Colony may hand `/<name>` to an interactive agent (PROMPT_SLASH); otherwise copy.
+    /// Colony may hand `/<name>` to an interactive agent (a `PROMPT_SLASH` name, or a project
+    /// row under its own name); otherwise copy.
     pub run: bool,
+    /// What a launch may append after the slash: none, goal, plan, branch, pr or sha.
+    pub context: String,
+    /// Interactive tab only, with the native confirm first (`/git-prod`, `/kit-prod`).
+    pub interactive_only: bool,
+    /// `user` or `meta`.
+    pub audience: String,
+    /// A meta row outside the factory workspace: the page does not show it.
+    pub hidden: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -48,6 +66,20 @@ pub struct Catalog {
     pub commands: Vec<CommandRow>,
     /// Rows dropped for an invalid name or shape.
     pub dropped: usize,
+    /// The catalog lists factory-layer rows: this folder is the kit's own repository.
+    pub factory: bool,
+}
+
+const CONTEXTS: &[&str] = &["none", "goal", "plan", "branch", "pr", "sha"];
+
+fn field<'a>(r: &'a Value, key: &str, allowed: &[&str], default: &'a str) -> &'a str {
+    r.get(key).and_then(Value::as_str).filter(|v| allowed.contains(v)).unwrap_or(default)
+}
+
+/// A project row takes at most one token (vendor.rs `valid_prompt_in`): a declared goal would
+/// make the page build a launch Rust refuses, so it reads as none.
+fn context<'a>(layer: &str, declared: &'a str) -> &'a str {
+    if layer == "project" && declared == "goal" { "none" } else { declared }
 }
 
 /// Schema pattern `^[a-z0-9][a-z0-9-]{0,63}$`.
@@ -71,11 +103,15 @@ pub fn parse(stdout: &str) -> Result<Catalog, String> {
     let Some(version) = v.get("catalogVersion").and_then(Value::as_str) else {
         return Err(UPDATE_ENGINE.into());
     };
-    let major = semver::Version::parse(version).map_err(|_| format!("{UPDATE_ENGINE} (catalog version {version:?} is not a version)"))?.major;
+    let parsed = semver::Version::parse(version).map_err(|_| format!("{UPDATE_ENGINE} (catalog version {version:?} is not a version)"))?;
+    let major = parsed.major;
     if major != CATALOG_MAJOR {
         return Err(format!("{UPDATE_ENGINE} (catalog {version}; this Colony reads {CATALOG_MAJOR}.x)"));
     }
     let rows = v.get("commands").and_then(Value::as_array).ok_or_else(|| UPDATE_ENGINE.to_string())?;
+    // Catalog 1.1.0 carries context, interactiveOnly and audience; older ones get today's rule.
+    let fields = parsed.minor >= 1;
+    let factory = rows.iter().any(|r| r.get("layer").and_then(Value::as_str) == Some("factory"));
     let mut commands = Vec::new();
     for r in rows {
         let name = r.get("name").and_then(Value::as_str).unwrap_or("");
@@ -83,12 +119,23 @@ pub fn parse(stdout: &str) -> Result<Catalog, String> {
         if !valid_name(name) || !matches!(layer, "kit" | "factory" | "project") {
             continue;
         }
+        let audience = if fields { field(r, "audience", &["user", "meta"], "user") } else { "user" };
+        let hidden = audience == "meta" && !factory;
+        let run = match (fields, layer) {
+            (true, "project") => !hidden && vendor::project_runnable(name),
+            (true, _) => !hidden && vendor::runnable(name),
+            (false, _) => layer != "factory" && vendor::LEGACY_RUN.contains(&name),
+        };
         commands.push(CommandRow {
             name: name.to_string(),
             description: clean_text(r.get("description").and_then(Value::as_str).unwrap_or("")),
             layer: layer.to_string(),
             headless: r.get("headless").and_then(Value::as_bool).unwrap_or(false),
-            run: layer != "factory" && vendor::runnable(name),
+            run,
+            context: if fields { context(layer, field(r, "context", CONTEXTS, "none")) } else { "none" }.to_string(),
+            interactive_only: vendor::interactive_only(name) || (fields && r.get("interactiveOnly").and_then(Value::as_bool).unwrap_or(false)),
+            audience: audience.to_string(),
+            hidden,
         });
     }
     Ok(Catalog {
@@ -96,6 +143,7 @@ pub fn parse(stdout: &str) -> Result<Catalog, String> {
         kit_version: clean_text(v.get("kitVersion").and_then(Value::as_str).unwrap_or("?")),
         dropped: rows.len() - commands.len(),
         commands,
+        factory,
     })
 }
 
@@ -119,18 +167,27 @@ fn load(root: &Path) -> Result<Catalog, String> {
     parse(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The runnable `project` rows of a catalog: what `term_launch` may open for its folder.
+fn project_names(c: &Catalog) -> Vec<String> {
+    c.commands.iter().filter(|r| r.layer == "project" && r.run).map(|r| r.name.clone()).collect()
+}
+
 /// The opened folder's commands catalog, each row marked run or copy.
 #[tauri::command(async)]
 pub fn commands_catalog(state: State<'_, AppState>) -> Result<Catalog, String> {
-    load(&workspace::workspace_root(&state)?)
+    let root = workspace::workspace_root(&state)?;
+    let catalog = load(&root);
+    vendor::set_project_run(&root, catalog.as_ref().map(project_names).unwrap_or_default());
+    catalog
 }
 
 #[cfg(test)]
 mod tests {
     use super::{load, parse, valid_name, UPDATE_ENGINE};
 
+    /// A 1.0.0 catalog (no context, interactiveOnly or audience): the pre-1.1.0 run rule.
     const FIXTURE: &str = r#"{
-      "catalogVersion": "1.2.0",
+      "catalogVersion": "1.0.0",
       "kitVersion": "6.7.0",
       "commands": [
         { "name": "run-plan", "description": "Run the active plan.", "layer": "kit", "headless": true },
@@ -147,23 +204,86 @@ mod tests {
     }"#;
 
     #[test]
-    fn rows_run_or_copy() {
+    fn older_catalog_keeps_todays_rule() {
         let c = parse(FIXTURE).unwrap();
         let names: Vec<_> = c.commands.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["run-plan", "git-staging", "git-prod", "kit-prod", "handoff", "my-thing", "future"]);
         assert_eq!(c.dropped, 3);
         let run = |n: &str| c.commands.iter().find(|r| r.name == n).unwrap().run;
         assert!(run("run-plan"));
-        // headless in the kit is a hint: git-staging stays copy in Colony.
+        // Without the 1.1.0 fields Colony cannot tell meta rows apart: the old set holds.
         assert!(!run("git-staging"));
         assert!(!run("git-prod") && !run("kit-prod"));
-        // A factory row stays copy even when its name is allowlisted.
         assert!(!run("handoff"));
         assert!(!run("my-thing") && !run("future"));
+        assert!(c.commands.iter().all(|r| r.context == "none" && r.audience == "user" && !r.hidden));
+        // The production floor holds whatever the catalog says.
+        assert!(c.commands.iter().filter(|r| r.interactive_only).map(|r| r.name.as_str()).eq(["git-prod", "kit-prod"]));
         assert_eq!(c.commands[1].description, "Bring changes to staging.");
         // Untrusted text is carried as text; the page never parses it as HTML.
         assert_eq!(c.commands[5].description, "<img src=x onerror=alert(1)>");
         assert_eq!(c.kit_version, "6.7.0");
+    }
+
+    /// A consumer workspace on catalog 1.1.0: no factory rows, so meta rows are hidden.
+    const CONSUMER: &str = r#"{
+      "catalogVersion": "1.1.0",
+      "kitVersion": "6.19.0",
+      "commands": [
+        { "name": "backlog-add", "description": "Enqueue.", "layer": "kit", "headless": true, "context": "goal", "interactiveOnly": false, "audience": "user" },
+        { "name": "git-prod", "description": "Promote.", "layer": "kit", "headless": false, "context": "sha", "interactiveOnly": true, "audience": "user" },
+        { "name": "git-staging", "description": "Stage.", "layer": "kit", "headless": true, "context": "branch", "interactiveOnly": false, "audience": "user" },
+        { "name": "hotfix", "description": "Fix.", "layer": "kit", "headless": false, "context": "goal", "interactiveOnly": false, "audience": "user" },
+        { "name": "review-pack", "description": "Review.", "layer": "kit", "headless": true, "context": "none", "interactiveOnly": false, "audience": "meta" },
+        { "name": "deploy-site", "description": "Ship.", "layer": "project", "headless": false, "context": "goal", "interactiveOnly": false, "audience": "user" },
+        { "name": "summary", "description": "Sum.", "layer": "kit", "headless": false, "context": "everything", "interactiveOnly": "yes", "audience": "admins" },
+        { "name": "run-plan", "description": "Run.", "layer": "kit", "headless": true, "context": "none", "interactiveOnly": true, "audience": "user" }
+      ]
+    }"#;
+
+    #[test]
+    fn consumer_catalog_runs_user_rows_and_hides_meta() {
+        let c = parse(CONSUMER).unwrap();
+        assert!(!c.factory);
+        let row = |n: &str| c.commands.iter().find(|r| r.name == n).unwrap();
+        for n in ["backlog-add", "git-prod", "git-staging", "hotfix", "summary", "run-plan"] {
+            assert!(row(n).run && !row(n).hidden, "{n}");
+        }
+        assert_eq!(row("backlog-add").context, "goal");
+        assert_eq!(row("git-staging").context, "branch");
+        assert_eq!(row("git-prod").context, "sha");
+        assert!(row("git-prod").interactive_only);
+        // Meta: hidden and never run outside the factory workspace.
+        assert!(row("review-pack").hidden && !row("review-pack").run);
+        // A project row runs (operator reply 2026-11-20), and is handed to vendor.rs.
+        assert!(row("deploy-site").run && !row("deploy-site").hidden);
+        assert_eq!(super::project_names(&c), ["deploy-site"]);
+        // Its declared goal reads as none: a project row never takes free text.
+        assert_eq!(row("deploy-site").context, "none");
+        assert!(!crate::vendor::valid_prompt_in("/deploy-site ship it", &super::project_names(&c)));
+        // Unknown values fall back; a non-boolean interactiveOnly is false.
+        assert_eq!((row("summary").context.as_str(), row("summary").audience.as_str(), row("summary").interactive_only), ("none", "user", false));
+        // The catalog may add interactive-only rows, never remove the prod floor.
+        assert!(row("run-plan").interactive_only);
+    }
+
+    #[test]
+    fn factory_catalog_runs_meta_rows() {
+        let c = parse(r#"{"catalogVersion":"1.1.0","kitVersion":"6.19.0","commands":[
+          {"name":"kit-prod","description":"Ship the kit.","layer":"factory","headless":false,"context":"sha","interactiveOnly":false,"audience":"meta"},
+          {"name":"kit-staging","description":"Stage the kit.","layer":"factory","headless":false,"context":"branch","interactiveOnly":false,"audience":"meta"},
+          {"name":"review-pack","description":"Review.","layer":"kit","headless":true,"context":"none","interactiveOnly":false,"audience":"meta"},
+          {"name":"not-in-colony","description":"x","layer":"kit","headless":false,"context":"none","interactiveOnly":false,"audience":"user"}
+        ]}"#).unwrap();
+        assert!(c.factory);
+        let row = |n: &str| c.commands.iter().find(|r| r.name == n).unwrap();
+        for n in ["kit-prod", "kit-staging", "review-pack"] {
+            assert!(row(n).run && !row(n).hidden, "{n}");
+        }
+        // kit-prod stays interactive only even when the catalog says false.
+        assert!(row("kit-prod").interactive_only);
+        // A kit name Colony was not built with stays copy: the catalog cannot widen the set.
+        assert!(!row("not-in-colony").run);
     }
 
     #[test]
@@ -204,9 +324,24 @@ mod tests {
         assert!(!c.commands.is_empty());
         let row = |n: &str| c.commands.iter().find(|r| r.name == n);
         assert!(row("run-plan").is_some_and(|r| r.run));
-        assert!(row("git-prod").is_some_and(|r| !r.run));
-        assert!(row("git-staging").is_some_and(|r| !r.run));
-        assert!(c.commands.iter().filter(|r| r.layer == "factory").all(|r| !r.run));
+        assert!(row("git-prod").is_some_and(|r| r.interactive_only));
+        assert!(c.commands.iter().filter(|r| r.hidden).all(|r| !r.run));
         eprintln!("catalog {} kit {}: {} rows, {} run, {} dropped", c.catalog_version, c.kit_version, c.commands.len(), c.commands.iter().filter(|r| r.run).count(), c.dropped);
+    }
+
+    /// Project rows run, but never under a compiled name and never when hidden as meta.
+    #[test]
+    fn project_rows_run_under_their_own_names() {
+        let c = parse(r#"{ "catalogVersion": "1.1.0", "kitVersion": "6.22.0", "commands": [
+          {"name":"deploy-site","description":"Ship.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"git-prod","description":"Shadow.","layer":"project","headless":false,"context":"sha","interactiveOnly":false,"audience":"user"},
+          {"name":"run-plan","description":"Shadow.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"agent-kit","description":"Reserved.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"user"},
+          {"name":"internal-tool","description":"Meta.","layer":"project","headless":false,"context":"none","interactiveOnly":false,"audience":"meta"}
+        ] }"#).unwrap();
+        let run: Vec<&str> = c.commands.iter().filter(|r| r.run).map(|r| r.name.as_str()).collect();
+        assert_eq!(run, ["deploy-site"]);
+        assert_eq!(super::project_names(&c), ["deploy-site"]);
+        assert!(c.commands.iter().any(|r| r.name == "git-prod" && r.interactive_only && !r.run));
     }
 }

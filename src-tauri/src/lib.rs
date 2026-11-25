@@ -1,6 +1,8 @@
 //! Colony: the Mission Kit desktop IDE shell (Tauri 2).
 
 mod agent;
+#[cfg(target_os = "linux")]
+mod appimage;
 mod appupdate;
 mod branchrule;
 mod catalog;
@@ -11,7 +13,9 @@ mod dashboard;
 mod deeplink;
 mod dragdrop;
 mod engine;
+mod filemanager;
 mod forge;
+mod gameframe;
 mod gitops;
 mod hostreq;
 #[cfg(unix)]
@@ -24,6 +28,7 @@ mod menu;
 mod newwindow;
 mod omarchy;
 mod omarchy_shell;
+mod proctree;
 mod prworktree;
 mod pty;
 mod review;
@@ -218,6 +223,25 @@ fn app_info(state: State<'_, AppState>) -> StartupInfo {
     state.startup.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
+/// Make this AppImage (`appimage`, the file) the `colony://` handler. Not through the plugin:
+/// its `update-desktop-database` and `xdg-mime` inherit the AppImage's
+/// `LD_LIBRARY_PATH` and load the bundled glib (appimage.rs).
+#[cfg(target_os = "linux")]
+fn register_appimage_scheme(app: &tauri::App, appimage: std::ffi::OsString) -> Result<(), String> {
+    let bin = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+    let file_name = format!("{}-handler.desktop", bin.file_name().map_or("colony".into(), |n| n.to_string_lossy()));
+    let handler = appimage::Handler {
+        dir: app.path().data_dir().map_err(|e| e.to_string())?.join("applications"),
+        name: app.config().product_name.clone().unwrap_or_else(|| file_name.clone()),
+        file_name,
+        appimage,
+    };
+    let config_dir = app.path().config_dir().map_err(|e| e.to_string())?;
+    let roots = appimage::appdir_roots(app.env().appdir.as_deref());
+    let changes = appimage::host_env_changes(std::env::vars_os(), &roots);
+    appimage::register(&handler, &config_dir, &changes)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `colony request ...`: the host-action CLI (hostreq.rs), no GUI.
@@ -323,6 +347,8 @@ pub fn run() {
             catalog::commands_catalog,
             chats::chat_sessions,
             pty::pty_spawn,
+            filemanager::file_manager_launch,
+            filemanager::smoke_file_manager_launch,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
@@ -331,6 +357,7 @@ pub fn run() {
             agent::agent_backends,
             agent::agent_reply,
             agent::agent_stop,
+            agent::agent_stop_after_tick,
             agent::agent_kill,
             gitops::git_status,
             gitops::git_marks,
@@ -382,9 +409,9 @@ pub fn run() {
             host_requests.start_watcher();
             // An AppImage has no installer to write its desktop entry. The other installs
             // register the scheme when they install (packaging/install.sh, the .deb).
-            if app.env().appimage.is_some() && std::env::var_os("COLONY_SMOKE").is_none() {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                if let Err(e) = app.deep_link().register_all() {
+            #[cfg(target_os = "linux")]
+            if let Some(path) = app.env().appimage.filter(|_| std::env::var_os("COLONY_SMOKE").is_none()) {
+                if let Err(e) = register_appimage_scheme(app, path) {
                     eprintln!("colony: could not register the colony:// link: {e}");
                 }
             }
@@ -436,6 +463,13 @@ pub fn run() {
                 // `navigator.clipboard.readText()` and `execCommand('paste')` are refused, so
                 // the terminal's Ctrl+Shift+V and Monaco's menu Paste paste nothing.
                 .enable_clipboard_access()
+                // Colony's own page and the Oligarchy game's origin only, in any frame.
+                .on_navigation(gameframe::navigation_allowed)
+                .on_page_load(|_, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Started {
+                        gameframe::app_committed();
+                    }
+                })
                 .build()?;
             Ok(())
         })
@@ -447,8 +481,12 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let server = state.dashboard.lock().ok().and_then(|mut d| d.take());
             drop(server); // kills the dashboard server
-            state.ptys.kill_all();
-            state.agents.kill_all();
+            // Closing Colony ends every tree it started (terminals and agent runs, each with
+            // its grace period, side by side) and keeps the state on disk.
+            std::thread::scope(|sc| {
+                sc.spawn(|| state.ptys.kill_all());
+                state.agents.kill_all();
+            });
             handle.state::<hostreq::Shared>().cleanup();
             if let Some(p) = state.instance_socket.lock().ok().and_then(|mut p| p.take()) {
                 let _ = std::fs::remove_file(p);
@@ -495,6 +533,16 @@ mod tests {
             })
             .collect();
         assert_eq!(urls, ["http://*", "https://*"]);
+        // The plugin tests a URL against each entry with glob::Pattern::matches (default
+        // options, so `*` crosses `/`; tauri-plugin-opener src/scope.rs `matches_url`): the two
+        // entries admit every http(s) address the frontend sends, and nothing else.
+        let admits = |u: &str| urls.iter().any(|p| glob::Pattern::new(p).unwrap().matches(u));
+        for u in ["https://example.com/", "https://github.com/agent-kit-startup/colony/pull/62?x=1#y", "http://localhost:5173/a/b"] {
+            assert!(admits(u), "{u}");
+        }
+        for u in ["mailto:a@b.c", "tel:+10000000000", "file:///etc/hostname", "javascript:alert(1)", "ftp://example.com/"] {
+            assert!(!admits(u), "{u}");
+        }
         // The webview never calls the plugin with another program, nor for a path.
         let fe = [include_str!("../../src/browser.ts"), include_str!("../../src/main.ts"), include_str!("../../src/termview.ts")].concat();
         for gone in ["openPath", "revealItemInDir", "inAppBrowser"] {
@@ -504,11 +552,13 @@ mod tests {
     }
 
     #[test]
-    fn no_frames_no_web_panel() {
+    fn one_frame_the_game_no_web_panel() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let csp = conf["app"]["security"]["csp"].as_str().unwrap();
-        assert!(csp.contains("frame-src 'none'"), "{csp}");
-        assert!(!csp.contains("127.0.0.1"), "{csp}");
+        // The game's origin is the only frame source (gameframe.rs checks the exact value).
+        assert!(csp.contains(&format!("frame-src {};", crate::gameframe::GAME_ORIGIN)), "{csp}");
+        assert!(!csp.contains("127.0.0.1") && !csp.contains('*'), "{csp}");
+        assert!(include_str!("../../src/oligarchyview.ts").contains("sandbox: FRAME_SANDBOX"), "the game frame is sandboxed");
         let main = include_str!("../../src/main.ts");
         for gone in ["h(\"iframe\"", "__MISSION_CONTROL_ACTIONS__", "openWebPanel", "mc-action"] {
             assert!(!main.contains(gone), "src/main.ts still has {gone}");

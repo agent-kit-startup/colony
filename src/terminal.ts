@@ -68,8 +68,10 @@ export class Terminals {
   }
 
   /** New tab running the user's shell, or `command` (argv) labelled `label`; in `cwd` (a
-   *  folder of the workspace) when given, else the workspace root. */
-  async create(command?: string[], label?: string, cwd?: string) {
+   *  folder of the workspace) when given, else the workspace root. `o.hostEnv`: the program
+   *  starts without the AppImage's environment; `o.onLeave`: called when the tab's terminal
+   *  loses the focus and when its program exits (the file manager refreshes the Explorer). */
+  async create(command?: string[], label?: string, cwd?: string, o: { hostEnv?: boolean; onLeave?: () => void } = {}) {
     const pane = h("div", { class: "term-pane" });
     this.host.append(pane);
     const view = new TermView(pane);
@@ -82,10 +84,15 @@ export class Terminals {
       ttys.exited(key, code);
       this.refresh();
       this.onExit();
+      o.onLeave?.();
     };
+    if (o.onLeave) {
+      const leave = o.onLeave;
+      pane.addEventListener("focusout", (ev) => !pane.contains(ev.relatedTarget as Node | null) && leave());
+    }
     view.term.onTitleChange((title) => ttys.update(key, { title: title.slice(0, 200) }));
     try {
-      await view.spawn(command, cwd);
+      await view.spawn(command, cwd, o.hostEnv);
     } catch (e) {
       this.onError(`Terminal: ${errText(e)}`);
       ttys.exited(key, null);

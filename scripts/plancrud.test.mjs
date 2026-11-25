@@ -11,8 +11,23 @@ const none = { parked: false, backlog: false };
 const parked = { parked: true, backlog: false };
 const backlog = { parked: false, backlog: true };
 
-test("the active plan offers Edit only, whatever list names it", () => {
-  for (const l of [none, parked, backlog]) assert.deepEqual(ids(planActions("a.plan.md", l, true)), ["edit"], JSON.stringify(l));
+test("the active plan offers Edit and Cancel (/cancel-plan), whatever list names it", () => {
+  for (const l of [none, parked, backlog]) {
+    const acts = planActions("a.plan.md", l, true);
+    assert.deepEqual(ids(acts), ["edit", "cancel"], JSON.stringify(l));
+    assert.equal(acts[1].prompt, "/cancel-plan a.plan.md");
+    assert.ok(!acts[1].disabled);
+  }
+});
+
+test("the active plan's Cancel is off with the reason while a run is in flight", () => {
+  const acts = planActions("a.plan.md", none, true, "Run #3 is going in this folder");
+  assert.deepEqual(ids(acts), ["edit", "cancel"]);
+  assert.equal(acts[1].disabled, "Run #3 is going in this folder");
+  assert.match(acts[1].title, /^Run #3 is going in this folder: stop it first/);
+  assert.ok(!acts[0].disabled);
+  // A busy reason never touches the other plans' rows.
+  assert.ok(planActions("b.plan.md", backlog, false, "Run #3 is going").every((a) => !a.disabled));
 });
 
 test("a plan on the Backlog: Edit, Cancel, Delete (also once all its to-dos are done)", () => {

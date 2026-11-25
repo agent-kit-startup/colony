@@ -4,7 +4,7 @@
 #   colony-<version>-linux-x86_64-package.tar.gz
 #                                          binary + icon built with --no-default-features
 #                                          (package channel, no updater): the source of distro
-#                                          packages (AUR colony-bin); when COLONY_PACKAGE_BIN is set
+#                                          packages (AUR missionkit-colony-bin); when COLONY_PACKAGE_BIN is set
 #   Colony_<version>_amd64.deb             the Tauri .deb bundle, when present
 #   Colony_<version>_amd64.AppImage        the Tauri AppImage (direct channel, updates itself)
 #   Colony_<version>_amd64.AppImage.sig    its updater signature (createUpdaterArtifacts)

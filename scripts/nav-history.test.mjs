@@ -106,3 +106,29 @@ test("reset starts an empty history", () => {
   h.visit("mission");
   assert.equal(h.canBack(all), false);
 });
+
+// The tab strip holds documents only (kit ADR 2026-10-24 amend 2026-11-11, point 3): no view
+// switch is drawn in it, and a rail group with several views switches inside its view.
+test("the tab strip draws no view switch; Ship and Workspace switch inside their views", async () => {
+  const fs = await import("node:fs/promises");
+  const read = (p) => fs.readFile(new URL(`../${p}`, import.meta.url), "utf8");
+  const main = await read("src/main.ts");
+  const from = main.indexOf("function renderTabs()");
+  const renderTabs = main.slice(from, main.indexOf("\nfunction showTab(", from));
+  assert.ok(from > 0 && renderTabs.length > 200, "renderTabs found");
+  assert.ok(!/RAIL|tablist|view-switch|showTab\("(git|cicd)"\)/.test(renderTabs), "renderTabs reads no rail group and draws no switch");
+  assert.match(renderTabs, /rest\.replaceChildren\(\.\.\.\(docs\.length \? \[h\("span", \{ class: "tab-sep" \}\)\] : \[\]\), docBar\)/, "the strip is the separator and the document tabs");
+  // Ship's two views are the members of its rail item, each wrapped with the inner switch.
+  const views = /id: "ship",[^\n]*views: \[([^\]]*)\]/.exec(main)?.[1].replace(/["\s]/g, "");
+  assert.equal(views, "git,cicd");
+  const shipViews = main.slice(main.indexOf("const SHIP_VIEWS"), main.indexOf("];", main.indexOf("const SHIP_VIEWS")));
+  assert.deepEqual([...shipViews.matchAll(/id: "([a-z]+)"/g)].map((m) => m[1]), ["git", "cicd"]);
+  assert.match(main, /groupSection\("Ship", SHIP_VIEWS, info\.id, body/);
+  assert.ok(!/\binner\??: /.test(main.slice(main.indexOf("interface RailItem"), main.indexOf("const CTRL_DIGITS"))), "no group is special-cased as inner");
+  // The switch marks its current member with the 1px border colour only.
+  const css = await read("src/styles.css");
+  assert.ok(!css.includes("view-switch"), "the strip switch styles are gone");
+  const active = css.split("\n").filter((l) => l.startsWith(".ws-nav-btn.active"));
+  assert.equal(active.length, 1);
+  assert.ok(/border-color/.test(active[0]) && !/background|border-left|inset|box-shadow/.test(active[0]), active[0]);
+});
