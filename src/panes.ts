@@ -63,12 +63,14 @@ function replaceAt(n: PaneNode, path: PanePath, next: PaneNode): PaneNode {
 }
 
 /** Split the pane `id` in two: it keeps the first half (left or top), `fresh` gets the
- *  second. Unchanged when `id` is not in the tree, `fresh` already is, or the tree is full. */
-export function splitPane(root: PaneNode, id: string, dir: SplitDir, fresh: string): PaneNode {
+ *  second (`before`: the first). Unchanged when `id` is not in the tree, `fresh` already is,
+ *  or the tree is full. */
+export function splitPane(root: PaneNode, id: string, dir: SplitDir, fresh: string, before = false): PaneNode {
   const path = pathTo(root, id);
   const all = leaves(root);
   if (!path || all.includes(fresh) || all.length >= MAX_PANES) return root;
-  return replaceAt(root, path, { split: dir, ratio: 0.5, a: { pane: id }, b: { pane: fresh } });
+  const [a, b] = before ? [fresh, id] : [id, fresh];
+  return replaceAt(root, path, { split: dir, ratio: 0.5, a: { pane: a }, b: { pane: b } });
 }
 
 /** Remove the pane `id`: its sibling takes the parent split's place. Null when `id` is the
@@ -99,6 +101,119 @@ export function setRatio(root: PaneNode, path: PanePath, ratio: number): PaneNod
   const n = nodeAt(root, path);
   if (!n || isLeaf(n)) return root;
   return replaceAt(root, path, { ...n, ratio: clampRatio(ratio) });
+}
+
+// ---- keyboard: direction, swap, move, resize, equalize (plan to-do t3) -------------------
+
+/** A direction on screen. Left and right cross a `right` split, up and down a `down` split. */
+export type Dir = "left" | "right" | "up" | "down";
+export const DIRS: readonly Dir[] = ["left", "right", "up", "down"];
+const axis = (d: Dir): SplitDir => (d === "left" || d === "right" ? "right" : "down");
+/** Toward the second child (right, down) or the first (left, up). */
+const forward = (d: Dir): boolean => d === "right" || d === "down";
+
+/** Each pane's box in the unit square (x, y, w, h), from the ratios alone. */
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export function boxes(n: PaneNode, at: Box = { x: 0, y: 0, w: 1, h: 1 }, out = new Map<string, Box>()): Map<string, Box> {
+  if (isLeaf(n)) return out.set(n.pane, at);
+  if (n.split === "right") {
+    const w = at.w * n.ratio;
+    boxes(n.a, { ...at, w }, out);
+    boxes(n.b, { ...at, x: at.x + w, w: at.w - w }, out);
+  } else {
+    const h = at.h * n.ratio;
+    boxes(n.a, { ...at, h }, out);
+    boxes(n.b, { ...at, y: at.y + h, h: at.h - h }, out);
+  }
+  return out;
+}
+
+const EPS = 1e-9;
+
+/** The pane next to `id` in direction `d`: among the panes whose facing edge touches `id`'s
+ *  edge on that side, the one sharing the longest stretch of it, ties to the one nearest
+ *  `id`'s centre line (then reading order). Null at the edge of the tree. */
+export function neighbour(root: PaneNode, id: string, d: Dir): string | null {
+  const all = boxes(root);
+  const me = all.get(id);
+  if (!me) return null;
+  const horizontal = axis(d) === "right";
+  const edge = horizontal ? (forward(d) ? me.x + me.w : me.x) : forward(d) ? me.y + me.h : me.y;
+  let best: { id: string; overlap: number; dist: number } | null = null;
+  for (const [other, b] of all) {
+    if (other === id) continue;
+    const facing = horizontal ? (forward(d) ? b.x : b.x + b.w) : forward(d) ? b.y : b.y + b.h;
+    if (Math.abs(facing - edge) > EPS) continue;
+    const [lo, hi, olo, ohi] = horizontal ? [me.y, me.y + me.h, b.y, b.y + b.h] : [me.x, me.x + me.w, b.x, b.x + b.w];
+    const overlap = Math.min(hi, ohi) - Math.max(lo, olo);
+    if (overlap <= EPS) continue;
+    const dist = Math.abs((lo + hi) / 2 - (olo + ohi) / 2);
+    if (!best || overlap > best.overlap + EPS || (Math.abs(overlap - best.overlap) <= EPS && dist < best.dist - EPS)) best = { id: other, overlap, dist };
+  }
+  return best?.id ?? null;
+}
+
+/** The pane after (`step` 1) or before (-1) `id` in reading order, wrapping around. */
+export function cycle(root: PaneNode, id: string, step: 1 | -1): string | null {
+  const ids = leaves(root);
+  const i = ids.indexOf(id);
+  if (i < 0 || ids.length < 2) return null;
+  return ids[(i + step + ids.length) % ids.length];
+}
+
+/** The tree with the panes `a` and `b` trading places (unchanged unless both are in it). */
+export function swapPanes(root: PaneNode, a: string, b: string): PaneNode {
+  const all = leaves(root);
+  if (a === b || !all.includes(a) || !all.includes(b)) return root;
+  const swap = (n: PaneNode): PaneNode => (isLeaf(n) ? { pane: n.pane === a ? b : n.pane === b ? a : n.pane } : { ...n, a: swap(n.a), b: swap(n.b) });
+  return swap(root);
+}
+
+/** Move pane `id` past its neighbour in direction `d`: it leaves its place (its sibling takes
+ *  the space) and halves the neighbour, on the far side of it. Unchanged at the edge. */
+export function movePane(root: PaneNode, id: string, d: Dir): PaneNode {
+  const target = neighbour(root, id, d);
+  if (!target) return root;
+  const rest = removePane(root, id);
+  if (!rest) return root;
+  return splitPane(rest, target, axis(d), id, !forward(d));
+}
+
+/** Move the border of pane `id` that lies in direction `d` by `step` (a share of the split it
+ *  divides): the nearest enclosing split across that axis where `id` sits on the near side of
+ *  the border. Right / down grow the first child, left / up shrink it. Unchanged when the pane
+ *  has no border on that side. */
+export function resizeToward(root: PaneNode, id: string, d: Dir, step: number): PaneNode {
+  const path = pathTo(root, id);
+  if (!path) return root;
+  const want = axis(d);
+  // The border on the right (down) side belongs to a split where the pane is in `a`; on the
+  // left (up) side, to a split where it is in `b`.
+  const side = forward(d) ? "a" : "b";
+  for (let i = path.length - 1; i >= 0; i--) {
+    const at = path.slice(0, i);
+    const n = nodeAt(root, at) as PaneSplit;
+    if (n.split === want && path[i] === side) return setRatio(root, at, n.ratio + (forward(d) ? step : -step));
+  }
+  return root;
+}
+
+/** Every split's ratio set so the panes along each axis get equal room: a split's share
+ *  follows how many panes each side lines up across that axis. */
+export function equalize(root: PaneNode): PaneNode {
+  const span = (n: PaneNode, dir: SplitDir): number => (isLeaf(n) ? 1 : n.split === dir ? span(n.a, dir) + span(n.b, dir) : Math.max(span(n.a, dir), span(n.b, dir)));
+  const walk = (n: PaneNode): PaneNode => {
+    if (isLeaf(n)) return n;
+    const a = span(n.a, n.split);
+    const b = span(n.b, n.split);
+    return { ...n, ratio: clampRatio(a / (a + b)), a: walk(n.a), b: walk(n.b) };
+  };
+  return walk(root);
 }
 
 // ---- the tabs of each pane ---------------------------------------------------------------

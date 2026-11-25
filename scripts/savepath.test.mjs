@@ -1,7 +1,7 @@
 // Save as… path rules (src/savepath.ts). Node strips the types (Node 22.18 or later). Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "../src/savepath.ts";
+import { SHORTCUTS, paneKey, saveAsInitial, saveAsTarget, shortcutRows } from "../src/savepath.ts";
 
 const root = "/home/u/ws";
 const from = "/home/u/ws/docs/a.md";
@@ -44,7 +44,8 @@ test("Save has a shortcut for the palette and no accelerator in the menu", async
 test("Help > Keyboard shortcuts lists every bound key once: the menu actions, Ctrl+1..9, Ctrl+W", async () => {
   const fs = await import("node:fs/promises");
   const menu = JSON.parse(await fs.readFile(new URL("../src/menu.json", import.meta.url), "utf8"));
-  const items = menu.menus.flatMap((m) => m.items.filter((i) => i.id));
+  // A submenu (View → Splits) lists its items in its place.
+  const items = menu.menus.flatMap((m) => m.items.flatMap((i) => (i.items ? i.items.filter((c) => c.id) : i.id ? [i] : [])));
   const rail = ["Cockpit", "Queue", "Inbox", "Chats", "Flight Log", "Review", "Ship", "Activity", "Terminals", "Processes"];
   const rows = shortcutRows(items, rail);
   // Every SHORTCUTS id is a menu item, so no bound key is missing from the panel.
@@ -59,4 +60,28 @@ test("Help > Keyboard shortcuts lists every bound key once: the menu actions, Ct
   // The keys the handler binds in src/main.ts are the ones the table names.
   const main = await fs.readFile(new URL("../src/main.ts", import.meta.url), "utf8");
   for (const id of ["open-folder", "quick-open", "commands", "open-in-editor", "new-terminal", "new-window"]) assert.ok(main.includes(`runAction("${id}")`), `${id} bound in the keyboard handler`);
+});
+
+test("Ctrl+Alt keys drive the split tree, by key position, and leave Monaco its Linux keys", () => {
+  assert.equal(paneKey("ArrowLeft", false, false), "pane-focus-left");
+  assert.equal(paneKey("ArrowDown", false, true), "pane-focus-down", "focus by direction works from the editor too");
+  assert.equal(paneKey("ArrowRight", true, true), "tab-to-pane-right");
+  assert.equal(paneKey("ArrowUp", true, false), "tab-to-pane-up");
+  assert.equal(paneKey("ArrowUp", true, true), null, "Ctrl+Alt+Shift+Up is Monaco's copy line up on Linux");
+  assert.equal(paneKey("ArrowDown", true, true), null);
+  assert.equal(paneKey("PageDown", false, false), "pane-focus-next");
+  assert.equal(paneKey("PageUp", false, false), "pane-focus-prev");
+  assert.equal(paneKey("KeyZ", false, false), "pane-zoom");
+  assert.equal(paneKey("Digit0", false, false), "pane-equalize");
+  assert.equal(paneKey("Backslash", false, false), "split-right");
+  assert.equal(paneKey("Minus", false, false), "split-down");
+  assert.equal(paneKey("KeyZ", true, false), null);
+  assert.equal(paneKey("KeyS", false, false), null);
+  // Every id paneKey returns has its key in SHORTCUTS, so the panel and the palette show it.
+  for (const code of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
+    for (const shift of [false, true]) assert.ok(SHORTCUTS[paneKey(code, shift, false)].startsWith("Ctrl+Alt+"), code);
+  }
+  for (const code of ["PageDown", "PageUp", "KeyZ", "Digit0", "Backslash", "Minus"]) assert.ok(SHORTCUTS[paneKey(code, false, false)].startsWith("Ctrl+Alt+"), code);
+  // Clear of the keys the amend reserves: Alt+arrows, Ctrl+digits, Ctrl+Shift+C / V.
+  for (const k of Object.values(SHORTCUTS)) assert.ok(!/^(Alt\+(Left|Right)|Ctrl\+[1-9]|Ctrl\+Shift\+[CV])$/.test(k) || ["Alt+Left", "Alt+Right"].includes(k), k);
 });

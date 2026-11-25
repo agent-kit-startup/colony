@@ -261,6 +261,10 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
    bar, no tint); one pane looks as before splits. */
 #panes.multi .pane { border: 1px solid transparent; }
 #panes.multi .pane.focused { border-color: var(--border-active); }
+/* Zoom (View → Splits → Zoom the pane, Ctrl+Alt+Z): the zoomed pane fills the tree, the other
+   panes and the dividers are hidden, the ratios are kept for when the zoom ends. */
+#panes.zoomed .pane:not(.zoomed), #panes.zoomed .pane-divider, #panes.zoomed .pane-split:not(:has(.pane.zoomed)) { display: none; }
+#panes.zoomed .pane-split > * { flex: 1 1 0 !important; }
 .pane-divider { flex: none; background: var(--border); position: relative; z-index: 1; }
 .pane-divider[data-dir="right"] { width: 1px; cursor: col-resize; }
 .pane-divider[data-dir="down"] { height: 1px; cursor: row-resize; }

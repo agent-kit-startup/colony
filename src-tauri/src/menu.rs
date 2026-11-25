@@ -252,7 +252,8 @@ mod tests {
         assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 13, "{view:?}");
         assert_eq!(view[..13].iter().filter(|i| i.starts_with("view:")).count(), 13, "the views come first: {view:?}");
         assert_eq!(view[12], "view:plans", "Plans after the rail items: {view:?}");
-        assert_eq!(view[13..], ["explorer", "explorer-collapse", "explorer-refresh", "refresh", "split-right", "split-down", "pane-close"]);
+        assert_eq!(view[13..17], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
+        assert_eq!(view[17..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom"]);
         assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
         assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
@@ -288,8 +289,10 @@ mod tests {
         let view = spec.menus.iter().find(|m| m.label == "View").unwrap();
         let last = view.items.last().unwrap();
         assert!(last.is_submenu() && last.label == "Splits" && last.id.is_empty(), "{last:?}");
-        let split: Vec<&str> = last.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(split, ["split-right", "split-down", "pane-close"]);
+        let split: Vec<&str> = last.items.iter().filter(|i| !i.separator).map(|i| i.id.as_str()).collect();
+        // t2 split and close; t3 focus, move the tab, swap and move the pane, resize, equalize,
+        // zoom (plan colony-free-tiling-2026-11-14).
+        assert_eq!(split, ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom"]);
         assert!(view.items[..view.items.len() - 1].iter().all(|i| !i.is_submenu()), "one Splits submenu");
         let bar = ids();
         for id in split {

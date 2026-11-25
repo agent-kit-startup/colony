@@ -27,7 +27,7 @@ import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { type EditorView, Editors, editorStatus } from "./editor";
-import { freshPaneId, heir, isLeaf, leaves, MAX_PANES, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove } from "./panes";
+import { cycle, type Dir, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, resizeToward, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
 import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -46,7 +46,7 @@ import { launches, promptPlan } from "./launches";
 import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
-import { SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
+import { paneKey, SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
 import { closeShortcutsPanel, openShortcutsPanel } from "./shortcuts";
 import { railFit, type RailFit } from "./railfit";
 import { ReviewView } from "./review";
@@ -230,6 +230,8 @@ interface Pane {
 }
 const panes = new Map<string, Pane>();
 let paneTree: PaneNode = { pane: "p1" };
+/** The pane zoomed to fill the tree, others hidden (null: none). */
+let zoomed: Pane | null = null;
 /** A file tab has no element of its own: each pane shows it in its own editor view. */
 const fileTabEl = h("div", { class: "file-tab-el", hidden: "" });
 
@@ -312,6 +314,7 @@ renderPaneTree();
 /** Draw the tree: nested flex boxes, the panes themselves are kept (a terminal or an editor
  *  in one is moved, never rebuilt). A divider between two halves resizes them. */
 function renderPaneTree() {
+  if (zoomed) setZoom(null);
   const build = (n: PaneNode, path: PanePath): HTMLElement => {
     if (isLeaf(n)) return panes.get(n.pane)!.el;
     const a = build(n.a, [...path, "a"]);
@@ -355,6 +358,8 @@ function paneDivider(divider: HTMLElement, box: HTMLElement, path: PanePath, dir
  *  click when the pressed node is replaced before the release). */
 function focusPane(p: Pane, render = true) {
   if (focused === p || !panes.has(p.id)) return;
+  // Another pane taking the focus ends a zoom (tmux and Herdr do the same).
+  if (zoomed && zoomed !== p) setZoom(null);
   focused.el.classList.remove("focused");
   focused = p;
   p.el.classList.add("focused");
@@ -513,6 +518,114 @@ function splitFocused(dir: SplitDir) {
   }
   status(dir === "right" ? "Split right" : "Split down");
   relayout();
+}
+
+// ---- keyboard parity: focus, swap, move, tab to pane, resize, equalize, zoom (plan t3) ----
+// Every action is an ACTIONS id with a home in View → Splits and a palette row; the window
+// key handler binds the frequent ones (SHORTCUTS in src/savepath.ts).
+
+/** One keyboard resize step, as a share of the split it moves. */
+const RESIZE_STEP = 0.05;
+const DIR_WORD: Record<Dir, string> = { left: "left", right: "right", up: "above", down: "below" };
+
+function setZoom(p: Pane | null) {
+  zoomed?.el.classList.remove("zoomed");
+  zoomed = p && panes.size > 1 ? p : null;
+  zoomed?.el.classList.add("zoomed");
+  $("panes").classList.toggle("zoomed", !!zoomed);
+  relayout();
+}
+
+/** View → Splits → Zoom pane: the focused pane fills the tree, or the tree comes back. */
+function toggleZoom() {
+  if (panes.size < 2) return status("Zoom pane: this is the only pane");
+  setZoom(zoomed ? null : focused);
+  status(zoomed ? "Zoom pane: on (the same key or any other pane ends it)" : "Zoom pane: off");
+}
+
+/** Pane `p` takes the focus, and the keyboard goes into what it shows: its editor, its
+ *  terminal, else the pane itself. */
+function focusInto(p: Pane) {
+  focusPane(p);
+  const t = p.shown;
+  if (t && isFile(t) && p.editor) p.editor.editor.focus();
+  else if (t && centerTerms.has(t)) centerTerms.get(t)!.focus();
+  else {
+    if (!p.el.hasAttribute("tabindex")) p.el.setAttribute("tabindex", "-1");
+    p.el.focus();
+  }
+}
+
+function focusDir(d: Dir) {
+  const id = neighbour(paneTree, focused.id, d);
+  if (!id) return status(panes.size < 2 ? "Focus: this is the only pane" : `Focus: no pane ${DIR_WORD[d]}`);
+  focusInto(panes.get(id)!);
+}
+
+function focusCycle(step: 1 | -1) {
+  const id = cycle(paneTree, focused.id, step);
+  if (!id) return status("Focus: this is the only pane");
+  focusInto(panes.get(id)!);
+}
+
+/** The focused pane trades places with its neighbour in direction `d` (it keeps the focus). */
+function swapDir(d: Dir) {
+  const id = neighbour(paneTree, focused.id, d);
+  if (!id) return status(panes.size < 2 ? "Swap pane: this is the only pane" : `Swap pane: no pane ${DIR_WORD[d]}`);
+  paneTree = swapPanes(paneTree, focused.id, id);
+  renderPaneTree();
+  relayout();
+}
+
+/** The focused pane moves past its neighbour in direction `d` and halves it there. */
+function moveDir(d: Dir) {
+  const next = movePane(paneTree, focused.id, d);
+  if (next === paneTree) return status(panes.size < 2 ? "Move pane: this is the only pane" : `Move pane: no pane ${DIR_WORD[d]}`);
+  paneTree = next;
+  renderPaneTree();
+  relayout();
+}
+
+/** The focused pane's tab moves to the pane in direction `d`; with no pane there, a new pane
+ *  opens on that side for it (VS Code's move editor into the group to the right). A file stays
+ *  one tab: it leaves this pane and shows in the other one. */
+function tabToDir(d: Dir) {
+  const id = focused.shown;
+  const t = id ? tabs.get(id) : undefined;
+  if (!id || !t || t.pinned) return status("Move tab: the focused pane shows no document tab");
+  let to = panes.get(neighbour(paneTree, focused.id, d) ?? "");
+  if (!to) {
+    if (focused.strip.order.length < 2) return status(`Move tab: no pane ${DIR_WORD[d]}, and it is this pane's only tab`);
+    if (panes.size >= MAX_PANES) return status(`Move tab: at most ${MAX_PANES} panes`);
+    const fresh = freshPaneId(panes.keys());
+    to = makePane(fresh);
+    panes.set(fresh, to);
+    paneTree = splitPane(paneTree, focused.id, d === "left" || d === "right" ? "right" : "down", fresh, d === "left" || d === "up");
+    renderPaneTree();
+  }
+  const from = focused;
+  if (isFile(id) && from.editor && from.editor.active === id) editorViewOf(to).states.set(id, from.editor.editor.saveViewState());
+  moveTabToPane(id, from, to);
+  relayout();
+}
+
+/** Move the focused pane's border in direction `d` by one step. */
+function resizeDir(d: Dir) {
+  const next = resizeToward(paneTree, focused.id, d, RESIZE_STEP);
+  if (next === paneTree) return status(`Resize: no border ${DIR_WORD[d] === "above" || DIR_WORD[d] === "below" ? DIR_WORD[d] : `on the ${d}`}`);
+  paneTree = next;
+  const z = zoomed;
+  renderPaneTree();
+  if (z) setZoom(z);
+  relayout();
+}
+
+function equalizePanes() {
+  if (panes.size < 2) return status("Equalize: this is the only pane");
+  paneTree = equalize(paneTree);
+  renderPaneTree();
+  relayout();
+  status("Equalize: every pane gets equal room");
 }
 
 /** A folder opens: one pane again. The tabs that stay (agent runs) gather in it, every view
@@ -2634,6 +2747,30 @@ const ACTIONS: Record<string, () => unknown> = {
   "split-right": () => splitFocused("right"),
   "split-down": () => splitFocused("down"),
   "pane-close": () => closePane(),
+  "pane-focus-left": () => focusDir("left"),
+  "pane-focus-right": () => focusDir("right"),
+  "pane-focus-up": () => focusDir("up"),
+  "pane-focus-down": () => focusDir("down"),
+  "pane-focus-next": () => focusCycle(1),
+  "pane-focus-prev": () => focusCycle(-1),
+  "pane-swap-left": () => swapDir("left"),
+  "pane-swap-right": () => swapDir("right"),
+  "pane-swap-up": () => swapDir("up"),
+  "pane-swap-down": () => swapDir("down"),
+  "pane-move-left": () => moveDir("left"),
+  "pane-move-right": () => moveDir("right"),
+  "pane-move-up": () => moveDir("up"),
+  "pane-move-down": () => moveDir("down"),
+  "tab-to-pane-left": () => tabToDir("left"),
+  "tab-to-pane-right": () => tabToDir("right"),
+  "tab-to-pane-up": () => tabToDir("up"),
+  "tab-to-pane-down": () => tabToDir("down"),
+  "pane-resize-left": () => resizeDir("left"),
+  "pane-resize-right": () => resizeDir("right"),
+  "pane-resize-up": () => resizeDir("up"),
+  "pane-resize-down": () => resizeDir("down"),
+  "pane-equalize": () => equalizePanes(),
+  "pane-zoom": () => toggleZoom(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
   "explorer-reveal": () => revealInExplorer(),
@@ -2701,7 +2838,7 @@ const menuItems = () => [
   ...menuSpec.menus.flatMap((m) =>
     m.items.flatMap((i): { id: string; label: string; where: string; bar: boolean; omarchyOnly: boolean }[] => {
       // A submenu (View → Splits) lists its own items, one level deep.
-      if ("items" in i && i.items) return i.items.map((c) => ({ id: c.id, label: c.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }));
+      if ("items" in i && i.items) return i.items.flatMap((c) => ("id" in c && c.id ? [{ id: c.id, label: c.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : []));
       return "id" in i && i.id ? [{ id: i.id, label: i.label, where: `${m.label} menu`, bar: true, omarchyOnly: false }] : [];
     }),
   ),
@@ -3025,6 +3162,18 @@ window.addEventListener(
       ev.preventDefault();
       ev.stopPropagation();
       return;
+    }
+    // Ctrl+Alt: the panes of the split tree (View → Splits), by key position (ev.code), in a
+    // terminal and the editor too. Ctrl+Alt+Shift+Up / Down stay with a focused editor
+    // (Monaco's copy line up / down on Linux).
+    if (ev.ctrlKey && ev.altKey && !ev.metaKey && workspace) {
+      const id = paneKey(ev.code, ev.shiftKey, ev.target instanceof Element && !!ev.target.closest(".monaco-editor"));
+      if (id) {
+        runAction(id);
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
     }
     if (!ev.ctrlKey || ev.altKey || ev.metaKey) return;
     const inTerm = termFocus();
@@ -4092,6 +4241,76 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await wait(150);
       sp.closedInEveryPane = !tabs.has(doc2) && holders(doc2).length === 0 && panes.size === 1 && focused === p1 ? true : paneState();
       await log("split-panes", Object.values(sp).every((v) => v === true), sp);
+      focused.nav.reset();
+      showTab("mission");
+    }
+    // COLONY_SMOKE split-keys (plan colony-free-tiling t3): the Ctrl+Alt keys of View → Splits,
+    // pressed as in-page key events on the window: split, focus by direction and in turn, move
+    // the tab, swap and move the pane, a border step, equalize and zoom.
+    {
+      const sk: Record<string, unknown> = {};
+      const key = (code: string, shift = false) => window.dispatchEvent(new KeyboardEvent("keydown", { key: code, code, ctrlKey: true, altKey: true, shiftKey: shift, bubbles: true, cancelable: true }));
+      const state = () => ({ tree: JSON.stringify(paneTree), focused: focused.id, zoomed: zoomed?.id ?? null });
+      const keyDoc = `${root}/smoke-split-keys.txt`;
+      await api.writeTextFile(keyDoc, "split keys\n".repeat(20));
+      await openFile(keyDoc);
+      const k1 = focused;
+      key("Backslash");
+      await wait(150);
+      const k2 = focused;
+      key("Minus");
+      await wait(150);
+      const k3 = focused;
+      sk.keysSplit = panes.size === 3 && k1 !== k2 && k2 !== k3 && JSON.stringify(leaves(paneTree)) === JSON.stringify([k1.id, k2.id, k3.id]) ? true : state();
+      key("ArrowUp");
+      sk.focusUp = focused === k2 ? true : state();
+      key("ArrowLeft");
+      sk.focusLeft = focused === k1 ? true : state();
+      key("ArrowRight");
+      sk.focusRightTieReadingOrder = focused === k2 ? true : state();
+      key("PageDown");
+      const afterNext = focused;
+      key("PageDown");
+      sk.focusNextWraps = afterNext === k3 && focused === k1 ? true : state();
+      key("PageUp");
+      sk.focusPrevWraps = focused === k3 ? true : state();
+      // k3 shows the file; its tab moves to the pane above (k2 holds the file too: one tab).
+      key("ArrowUp", true);
+      await wait(150);
+      sk.tabToPaneUp = focused === k2 && k2.shown === keyDoc && !panes.has(k3.id) ? true : state();
+      // Two panes left (k1 | k2): swap them, then a border step and equalize.
+      runAction("pane-swap-left");
+      await wait(100);
+      sk.swapLeft = JSON.stringify(leaves(paneTree)) === JSON.stringify([k2.id, k1.id]) && focused === k2 ? true : state();
+      runAction("pane-resize-right");
+      const stepped = (nodeAt(paneTree, []) as PaneSplit | null)?.ratio ?? 0;
+      sk.resizeStep = Math.abs(stepped - 0.55) < 1e-9 ? true : { stepped, ...state() };
+      key("Digit0");
+      sk.equalize = (nodeAt(paneTree, []) as PaneSplit | null)?.ratio === 0.5 ? true : state();
+      key("KeyZ");
+      await wait(100);
+      const zr = k2.el.getBoundingClientRect();
+      const pr = $("panes").getBoundingClientRect();
+      sk.zoomFills = zoomed === k2 && getComputedStyle(k1.el).display === "none" && Math.abs(zr.width - pr.width) < 3 ? true : { zr: zr.toJSON(), pr: pr.toJSON(), ...state() };
+      key("KeyZ");
+      await wait(100);
+      sk.zoomOff = !zoomed && getComputedStyle(k1.el).display !== "none" && !$("panes").classList.contains("zoomed") ? true : state();
+      key("KeyZ");
+      focusPane(k1);
+      sk.focusEndsZoom = !zoomed ? true : state();
+      // k2 sits on the left after the swap: nothing to move past there; k1 moves past it.
+      focusPane(k2);
+      runAction("pane-move-left");
+      sk.moveAtEdgeUnchanged = JSON.stringify(leaves(paneTree)) === JSON.stringify([k2.id, k1.id]) ? true : state();
+      focusPane(k1);
+      runAction("pane-move-left");
+      sk.movePastNeighbour = JSON.stringify(leaves(paneTree)) === JSON.stringify([k1.id, k2.id]) && focused === k1 ? true : state();
+      sk.shortcutsListed = ["Ctrl+Alt+Left", "Ctrl+Alt+Z", "Ctrl+Alt+0", "Ctrl+Alt+Shift+Right"].every((k) => Object.values(SHORTCUTS).includes(k));
+      await closeTab(keyDoc);
+      await wait(150);
+      while (panes.size > 1) closePane(paneList()[1]);
+      sk.backToOnePane = panes.size === 1 && !tabs.has(keyDoc) ? true : state();
+      await log("split-keys", Object.values(sk).every((v) => v === true), sk);
       focused.nav.reset();
       showTab("mission");
     }
