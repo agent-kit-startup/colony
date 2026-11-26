@@ -27,7 +27,7 @@ import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { type EditorView, Editors, editorStatus } from "./editor";
-import { type Box, cycle, type Dir, type DockMove, dockAction, paneDropZone, zoneBox, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, readSaved, relInside, absInside, removePane, resizeToward, type SavedPanes, type SavedTab, saveTree, savedLeaves, treeOf, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
+import { type Box, cycle, pathTo, type Dir, type DockMove, dockAction, paneDropZone, zoneBox, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, readSaved, relInside, absInside, removePane, resizeToward, type SavedPanes, type SavedTab, saveTree, savedLeaves, treeOf, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
 import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -3589,12 +3589,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           cwd = v && v.id >= 0 ? ((await api.ptyCwd(v.id).catch(() => null)) ?? "") : "";
         }
         r.freshShellInLastFolder = !!sh && cwd === `${root}/.cursor` ? true : { sh, cwd };
-        r.missingFileDroppedPaneKept = !tabs.has(gone) && !!q1 && q1.strip.order.length === 0 && panes.has(q1.id);
+        r.missingFileDroppedPaneKept = !tabs.has(gone) && !!q1 && panes.has(q1.id) && !q1.strip.order.includes(gone) && q1.strip.order.length > 0;
         r.focusRestored = focused === q2;
         await wait(800);
         await panesSaved;
         const disk = readSaved(await panesOnDisk());
-        r.diskDropsMissing = !!disk && savedLeaves(disk.tree)[0].tabs.length === 0 && savedLeaves(disk.tree)[1].tabs.length === 2 ? true : disk;
+        r.diskDropsMissing = !!disk && !savedLeaves(disk.tree)[0].tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && savedLeaves(disk.tree)[1].tabs.length === 2 ? true : disk;
         runAction("pane-layout-reset");
         await wait(300);
         await panesSaved;
@@ -4625,9 +4625,17 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       const docB = `${root}/smoke-drag-b.txt`;
       await api.writeTextFile(docA, "drag a\n".repeat(20));
       await api.writeTextFile(docB, "drag b\n".repeat(20));
-      await openFile(docA);
-      await openFile(docB);
+      // The drags run in a pane of their own, right of the one earlier steps left (it keeps
+      // its tabs): a view shown when splitting leaves the new pane empty.
+      const d0 = focused;
+      showTab("mission");
+      runAction("split-right");
+      await wait(150);
       const d1 = focused;
+      await openFile(docA, undefined, d1);
+      await openFile(docB, undefined, d1);
+      const order = (...ps: (Pane | undefined)[]) => JSON.stringify(leaves(paneTree)) === JSON.stringify(ps.map((p) => p?.id));
+      const parentOf = (p: Pane) => nodeAt(paneTree, (pathTo(paneTree, p.id) ?? []).slice(0, -1)) as PaneSplit | null;
       // B to the right edge of its own pane: d1 splits, B goes to the new right half.
       let host = d1.host.getBoundingClientRect();
       let box: Record<string, unknown> | null = null;
@@ -4639,20 +4647,20 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           box = z && r && cs ? { shown: !z.hidden, halfWidth: Math.abs(r.width - host.width / 2) < 3, onRight: Math.abs(r.right - host.right) < 3, unfilled: cs.backgroundColor === "rgba(0, 0, 0, 0)" || cs.backgroundColor === "transparent", border1px: cs.borderTopWidth === "1px" && cs.borderLeftWidth === "1px" } : { zone: !!z };
         },
       });
-      const d2 = paneList().find((p) => p !== d1);
+      const d2 = paneList().find((p) => p !== d1 && p !== d0);
       sd.edgeBoxShown = !!box && Object.values(box as Record<string, unknown>).every((v) => v === true) ? true : box;
-      sd.edgeSplitsRight = panes.size === 2 && !!d2 && JSON.stringify(leaves(paneTree)) === JSON.stringify([d1.id, d2.id]) && (nodeAt(paneTree, []) as PaneSplit).split === "right" && d2.shown === docB && !d1.strip.order.includes(docB) && d1.shown === docA ? true : state();
+      sd.edgeSplitsRight = panes.size === 3 && !!d2 && order(d0, d1, d2) && parentOf(d2)?.split === "right" && d2.shown === docB && !d1.strip.order.includes(docB) && d1.shown === docA ? true : state();
       sd.zoneHiddenAfter = document.querySelector<HTMLElement>(".drop-zone")?.hidden !== false && !paneList().some((p) => p.bar.classList.contains("drop-target"));
       // A onto d2's strip: d1 loses its only tab and goes, d2 holds both.
       if (d2) {
         const b = d2.bar.getBoundingClientRect();
         await drag(d1, docA, b.right - 30, b.top + b.height / 2);
-        sd.stripMoves = panes.size === 1 && !panes.has(d1.id) && d2.strip.order.includes(docA) && d2.strip.order.includes(docB) && d2.shown === docA ? true : state();
+        sd.stripMoves = panes.size === 2 && !panes.has(d1.id) && order(d0, d2) && d2.strip.order.includes(docA) && d2.strip.order.includes(docB) && d2.shown === docA ? true : state();
         // B to the bottom edge: split down, B below.
         host = d2.host.getBoundingClientRect();
         await drag(d2, docB, host.left + host.width / 2, host.bottom - 8);
-        const d3 = paneList().find((p) => p !== d2);
-        sd.edgeSplitsDown = panes.size === 2 && !!d3 && (nodeAt(paneTree, []) as PaneSplit).split === "down" && JSON.stringify(leaves(paneTree)) === JSON.stringify([d2.id, d3.id]) && d3.shown === docB ? true : state();
+        const d3 = paneList().find((p) => p !== d2 && p !== d0);
+        sd.edgeSplitsDown = panes.size === 3 && !!d3 && parentOf(d3)?.split === "down" && order(d0, d2, d3) && d3.shown === docB ? true : state();
         if (d3) {
           // Escape cancels a drag: nothing moves.
           const before = JSON.stringify(state());
@@ -4665,7 +4673,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
           sd.onlyTabOwnEdgeNoop = JSON.stringify(state()) === before ? true : state();
           // B into the middle of d2: d3 goes, one pane holds both.
           await drag(d3, docB, c.left + c.width / 2, c.top + c.height / 2);
-          sd.centreMoves = panes.size === 1 && !panes.has(d3.id) && d2.strip.order.includes(docB) && d2.shown === docB ? true : state();
+          sd.centreMoves = panes.size === 2 && !panes.has(d3.id) && order(d0, d2) && d2.strip.order.includes(docB) && d2.shown === docB ? true : state();
           // A press with no travel is still a click: it shows the tab, nothing moves.
           const ta = tabEl(d2, docA);
           const r = ta?.getBoundingClientRect();
@@ -4675,13 +4683,13 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
             ta.click();
           }
           await wait(100);
-          sd.pressIsClick = panes.size === 1 && d2.shown === docA ? true : state();
+          sd.pressIsClick = panes.size === 2 && d2.shown === docA ? true : state();
         }
       }
       await closeTab(docA);
       await closeTab(docB);
       await wait(150);
-      while (panes.size > 1) closePane(paneList()[1]);
+      while (panes.size > 1) closePane(paneList()[panes.size - 1]);
       sd.backToOnePane = panes.size === 1 && !tabs.has(docA) && !tabs.has(docB) ? true : state();
       await log("split-drag", Object.values(sd).every((v) => v === true), sd);
       focused.nav.reset();
@@ -5858,7 +5866,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       await flushPanes();
       const disk = readSaved(await panesOnDisk());
       const [l1, l2] = disk ? savedLeaves(disk.tree) : [];
-      r.saved = !!disk && disk.focused === s2.id && !!l2 && JSON.stringify(l1.tabs) === JSON.stringify([{ file: "smoke-restore-gone.txt" }]) && JSON.stringify(l2.tabs) === JSON.stringify([{ file: "smoke-restore.md", mode: "preview" }, { terminal: ".cursor" }]) && l2.active === 0 ? true : disk;
+      r.saved = !!disk && disk.focused === s2.id && !!l2 && l1.tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && l1.active == null && JSON.stringify(l2.tabs) === JSON.stringify([{ file: "smoke-restore.md", mode: "preview" }, { terminal: ".cursor" }]) && l2.active === 0 ? true : disk;
       // The panel-change save leaves the tree alone.
       layoutChanged();
       await wait(600);
