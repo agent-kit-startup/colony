@@ -172,3 +172,98 @@ test("equalize gives every pane along an axis the same room", () => {
   assert.equal(nodeAt(equalize(setRatio(tee(), [], 0.2)), []).ratio, 0.5);
   assert.deepEqual(equalize(one), one);
 });
+
+// ---- drag to dock (plan to-do t4) ----
+import { EDGE_SHARE, dockAction, paneDropZone as dropZone, zoneBox } from "../src/panes.ts";
+
+test("a drop near an edge of a pane names that edge; the middle is the centre", () => {
+  assert.equal(dropZone(10, 300, 800, 600), "left");
+  assert.equal(dropZone(790, 300, 800, 600), "right");
+  assert.equal(dropZone(400, 10, 800, 600), "up");
+  assert.equal(dropZone(400, 590, 800, 600), "down");
+  assert.equal(dropZone(400, 300, 800, 600), "center");
+  assert.equal(dropZone(800 * EDGE_SHARE + 1, 300, 800, 600), "center", "just inside the band's limit is the centre");
+  assert.equal(dropZone(5, 5, 800, 600), "left", "a corner goes to the nearer edge, left / right on a tie");
+  assert.equal(dropZone(400, 5, 800, 600), "up");
+  assert.equal(dropZone(-20, 300, 800, 600), "left", "a pointer just outside is clamped to the pane");
+  assert.equal(dropZone(10, 10, 0, 600), "center", "a pane with no size has only a centre");
+});
+
+test("a zone outlines the half the new pane takes, or the whole pane", () => {
+  assert.deepEqual(zoneBox("left"), { x: 0, y: 0, w: 0.5, h: 1 });
+  assert.deepEqual(zoneBox("right"), { x: 0.5, y: 0, w: 0.5, h: 1 });
+  assert.deepEqual(zoneBox("up"), { x: 0, y: 0, w: 1, h: 0.5 });
+  assert.deepEqual(zoneBox("down"), { x: 0, y: 0.5, w: 1, h: 0.5 });
+  assert.deepEqual(zoneBox("center"), { x: 0, y: 0, w: 1, h: 1 });
+});
+
+test("a drop on a strip or a centre moves the tab; on an edge it splits that pane on that side", () => {
+  assert.deepEqual(dockAction("p1", 2, "p2", "strip"), { kind: "move", to: "p2" });
+  assert.deepEqual(dockAction("p1", 1, "p2", "center"), { kind: "move", to: "p2" });
+  assert.deepEqual(dockAction("p1", 2, "p1", "center"), { kind: "none" }, "back into its own pane: nothing");
+  assert.deepEqual(dockAction("p1", 2, "p1", "strip"), { kind: "none" });
+  assert.deepEqual(dockAction("p1", 2, "p1", "right"), { kind: "split", at: "p1", dir: "right", before: false });
+  assert.deepEqual(dockAction("p1", 2, "p1", "left"), { kind: "split", at: "p1", dir: "right", before: true });
+  assert.deepEqual(dockAction("p1", 1, "p2", "up"), { kind: "split", at: "p2", dir: "down", before: true });
+  assert.deepEqual(dockAction("p1", 1, "p2", "down"), { kind: "split", at: "p2", dir: "down", before: false });
+  assert.deepEqual(dockAction("p1", 1, "p1", "right"), { kind: "none" }, "a pane's only tab cannot split its own pane");
+  assert.deepEqual(dockAction(null, 0, "p1", "right"), { kind: "split", at: "p1", dir: "right", before: false }, "a drawer terminal may split any pane");
+  assert.deepEqual(dockAction(null, 0, "p1", "center"), { kind: "move", to: "p1" });
+});
+
+// ---- the tree across restarts (plan to-do t5) ----
+import { absInside, readSaved, relInside, saveTree, savedLeaves, treeOf } from "../src/panes.ts";
+
+test("saved paths stay inside the folder", () => {
+  assert.equal(relInside("/r/app", "/r/app/src/a.ts"), "src/a.ts");
+  assert.equal(relInside("/r/app/", "/r/app"), "");
+  assert.equal(relInside("/r/app", "/r/apple/a.ts"), null, "a sibling folder with the same prefix is outside");
+  assert.equal(relInside("/r/app", "/etc/passwd"), null);
+  assert.equal(relInside("/r/app", "/r/app/a/../../x"), null);
+  assert.equal(absInside("/r/app", "src/a.ts"), "/r/app/src/a.ts");
+  assert.equal(absInside("/r/app", ""), "/r/app");
+  assert.equal(absInside("/r/app", "."), "/r/app");
+  assert.equal(absInside("/r/app", "/etc/passwd"), null);
+  assert.equal(absInside("/r/app", "a/../../x"), null);
+  assert.equal(absInside("/r/app", "a//b"), null);
+});
+
+test("a tree saves with each pane's tabs and reads back to the same tree", () => {
+  const tree = { split: "right", ratio: 0.4, a: { pane: "p1" }, b: { split: "down", ratio: 0.5, a: { pane: "p3" }, b: { pane: "p2" } } };
+  const tabs = { p1: { tabs: [{ file: "src/a.ts" }, { file: "README.md", mode: "preview" }], active: 1 }, p2: { tabs: [{ terminal: "src" }], active: 0 }, p3: { tabs: [], active: null } };
+  const saved = saveTree(tree, (id) => tabs[id]);
+  assert.deepEqual(saved.a, { pane: "p1", tabs: tabs.p1.tabs, active: 1 });
+  assert.deepEqual(saved.b.a, { pane: "p3", tabs: [] }, "no shown tab: no active");
+  const back = readSaved(JSON.parse(JSON.stringify({ tree: saved, focused: "p2", at: 5 })));
+  assert.ok(back);
+  assert.deepEqual(treeOf(back.tree), tree);
+  assert.equal(back.focused, "p2");
+  assert.deepEqual(savedLeaves(back.tree).map((l) => l.pane), ["p1", "p3", "p2"]);
+  assert.equal(savedLeaves(back.tree)[0].active, 1);
+});
+
+test("a hand-edited tree Colony cannot trust reads as nothing (one pane)", () => {
+  const leaf = (id, extra = {}) => ({ pane: id, tabs: [], ...extra });
+  const ok = { tree: { split: "right", ratio: 0.5, a: leaf("p1"), b: leaf("p2") }, focused: "p1" };
+  assert.ok(readSaved(ok));
+  const bad = [
+    null,
+    "x",
+    { tree: leaf("p1") },
+    { tree: leaf("p1"), focused: "p2" },
+    { tree: { split: "diagonal", ratio: 0.5, a: leaf("p1"), b: leaf("p2") }, focused: "p1" },
+    { tree: { split: "right", ratio: 1, a: leaf("p1"), b: leaf("p2") }, focused: "p1" },
+    { tree: { split: "right", ratio: 0.5, a: leaf("p1"), b: leaf("p1") }, focused: "p1" },
+    { tree: { split: "right", ratio: 0.5, a: leaf("p1") }, focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "../x" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "/etc/passwd" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "a", mode: "raw" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ terminal: "../up" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ chat: "abc" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "a" }], active: 3 }), focused: "p1" },
+  ];
+  for (const b of bad) assert.equal(readSaved(b), null, JSON.stringify(b));
+  let wide = leaf("w0");
+  for (let i = 1; i <= MAX_PANES; i++) wide = { split: "right", ratio: 0.5, a: leaf(`w${i}`), b: wide };
+  assert.equal(readSaved({ tree: wide, focused: "w0" }), null, "more panes than Colony opens");
+});

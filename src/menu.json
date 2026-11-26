@@ -77,7 +77,9 @@
             { "id": "pane-resize-up", "label": "Move the border up" },
             { "id": "pane-resize-down", "label": "Move the border down" },
             { "id": "pane-equalize", "label": "Equalize the panes" },
-            { "id": "pane-zoom", "label": "Zoom the pane (toggle)" }
+            { "id": "pane-zoom", "label": "Zoom the pane (toggle)" },
+            { "separator": true },
+            { "id": "pane-layout-reset", "label": "Reset the layout" }
           ]
         }
       ]

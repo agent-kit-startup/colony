@@ -27,7 +27,7 @@ import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { type EditorView, Editors, editorStatus } from "./editor";
-import { cycle, type Dir, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, resizeToward, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
+import { type Box, cycle, pathTo, type Dir, type DockMove, dockAction, paneDropZone, zoneBox, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, readSaved, relInside, absInside, removePane, resizeToward, type SavedPanes, type SavedTab, saveTree, savedLeaves, treeOf, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
 import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -67,7 +67,7 @@ import { OligarchyView } from "./oligarchyview";
 import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, REAP_AUDIT, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
-import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
+import { dragStarted, dropPlace, isPtyTab, moveLabel, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
 import menuSpec from "./menu.json";
@@ -233,6 +233,12 @@ const panes = new Map<string, Pane>();
 let paneTree: PaneNode = { pane: "p1" };
 /** The pane zoomed to fill the tree, others hidden (null: none). */
 let zoomed: Pane | null = null;
+/** The folder whose saved tree this window has restored (ui.layout.panes, plan t5): the tree
+ *  is saved only for it, so a folder switch or a start never writes a half-built tree. */
+let panesFor: string | null = null;
+let panesTimer = 0;
+let panesSavedJson = "";
+let panesSaved: Promise<unknown> = Promise.resolve();
 /** A file tab has no element of its own: each pane shows it in its own editor view. */
 const fileTabEl = h("div", { class: "file-tab-el", hidden: "" });
 
@@ -331,6 +337,7 @@ function renderPaneTree() {
   root.style.flex = "1 1 0";
   $("panes").replaceChildren(root);
   $("panes").classList.toggle("multi", panes.size > 1);
+  panesChanged();
 }
 
 /** A divider drag sets its split's ratio (the drawer's splitter helper, then every visible
@@ -366,6 +373,7 @@ function focusPane(p: Pane, render = true) {
   p.el.classList.add("focused");
   editors.current = p.editor;
   activeTab = p.shown ?? "";
+  panesChanged();
   if (render) {
     renderRail();
     renderTopActions();
@@ -667,6 +675,152 @@ function moveTabToPane(id: string, from: Pane, to: Pane) {
   if (panes.has(to.id)) showIn(to, id);
 }
 
+// ---- the tree across restarts (plan colony-free-tiling t5; amend 2026-11-19 point 6) -----
+// settings.json ui.layout.panes["<folder>"]: the tree, each pane's files (with the Markdown
+// mode) and shells (their last folder), the shown tab of each pane and the focused pane. Saved
+// on its own patch after any change to the tree, a strip, a shown tab or the focus (debounced,
+// only when it differs from the last write); restored when the folder opens. Agent tabs, runs
+// and PTY processes are not restored: a shell comes back as a fresh shell in its last folder,
+// a missing file drops its tab, never the layout.
+
+/** Something in the tree changed: save it soon (only once this folder's tree is restored). */
+function panesChanged() {
+  if (!workspace || panesFor !== workspace.root) return;
+  window.clearTimeout(panesTimer);
+  panesTimer = window.setTimeout(() => {
+    panesTimer = 0;
+    void savePanes();
+  }, 500);
+}
+
+/** The tree as saved: a shell's folder is read from its process (its current directory). */
+async function panesSnapshot(root: string): Promise<SavedPanes> {
+  const tabsOf = new Map<string, { tabs: SavedTab[]; active: number | null }>();
+  for (const p of paneList()) {
+    const out: SavedTab[] = [];
+    let active: number | null = null;
+    for (const id of p.strip.order) {
+      let t: SavedTab | null = null;
+      if (isFile(id)) {
+        const rel = relInside(root, id);
+        const mode = tabs.get(id)?.mode;
+        if (rel) t = mode ? { file: rel, mode } : { file: rel };
+      } else if (id.startsWith("drawer:")) {
+        const v = centerTerms.get(id);
+        const cwd = v && !v.exited && v.id >= 0 ? await api.ptyCwd(v.id).catch(() => null) : null;
+        t = { terminal: relInside(root, cwd ?? root) ?? "" };
+      }
+      if (!t) continue;
+      if (p.shown === id) active = out.length;
+      out.push(t);
+    }
+    tabsOf.set(p.id, { tabs: out, active });
+  }
+  return { tree: saveTree(paneTree, (id) => tabsOf.get(id) ?? { tabs: [], active: null }), focused: focused.id };
+}
+
+async function savePanes() {
+  const root = workspace?.root;
+  if (!root || panesFor !== root) return;
+  const snap = await panesSnapshot(root);
+  if (workspace?.root !== root || panesFor !== root) return;
+  const json = JSON.stringify(snap);
+  if (json === panesSavedJson) return;
+  panesSavedJson = json;
+  panesSaved = api.settingsSetLayout({ panes: { [root]: snap } }).catch((e) => status(`Layout: ${errText(e)}`));
+  await panesSaved;
+}
+
+/** A pending save goes out now (before a folder switch). */
+async function flushPanes() {
+  if (panesTimer) {
+    window.clearTimeout(panesTimer);
+    panesTimer = 0;
+    await savePanes();
+  }
+  await panesSaved;
+}
+
+/** Restore `root`'s saved tree into the one pane a folder opens with. Saves for `root` start
+ *  only after this, so a start never overwrites the saved tree with a half-built one. */
+async function restorePanes(root: string): Promise<{ panes: number; dropped: string[] }> {
+  panesFor = null;
+  const dropped: string[] = [];
+  const info = await api.settingsGet().catch(() => null);
+  const all = (info?.settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout?.panes;
+  const saved = readSaved(all?.[root]);
+  if (workspace?.root !== root) return { panes: 0, dropped };
+  if (saved) {
+    // Saved ids map onto this window's panes: the first onto the pane the folder opened with.
+    const list = savedLeaves(saved.tree);
+    const first = paneList()[0];
+    const ids = new Map<string, Pane>([[list[0].pane, first]]);
+    for (const leaf of list.slice(1)) {
+      const p = makePane(freshPaneId([...panes.keys(), ...list.map((l) => l.pane)]));
+      panes.set(p.id, p);
+      ids.set(leaf.pane, p);
+    }
+    const rename = (n: PaneNode): PaneNode => (isLeaf(n) ? { pane: ids.get(n.pane)!.id } : { ...n, a: rename(n.a), b: rename(n.b) });
+    paneTree = rename(treeOf(saved.tree));
+    renderPaneTree();
+    for (const leaf of list) {
+      const p = ids.get(leaf.pane)!;
+      const opened: (string | null)[] = [];
+      for (const t of leaf.tabs) {
+        if ("file" in t) {
+          const abs = absInside(root, t.file);
+          if (abs && workspace?.root === root) await openFile(abs, t.mode, p);
+          const ok = !!abs && tabs.has(abs) && p.strip.order.includes(abs);
+          if (!ok) dropped.push(t.file);
+          opened.push(ok ? abs : null);
+        } else {
+          const dir = absInside(root, t.terminal) ?? root;
+          const made = terminals.create(undefined, dir === root ? undefined : dir.slice(dir.lastIndexOf("/") + 1), dir);
+          const key = terminals.newestKey;
+          movePty(key, "editor", { auto: true, pane: p });
+          opened.push(key);
+          void made.catch(() => {});
+        }
+      }
+      const show = typeof leaf.active === "number" ? opened[leaf.active] : null;
+      if (show && tabs.has(show) && p.strip.order.includes(show)) showIn(p, show, false);
+      else if (!p.shown || (p !== first && !p.strip.order.includes(p.shown))) {
+        p.shown = p.strip.order[p.strip.order.length - 1] ?? null;
+        if (p.shown) showIn(p, p.shown, false);
+        else paintPane(p);
+      }
+    }
+    const f = ids.get(saved.focused);
+    if (f) focusPane(f);
+    renderTabs();
+    relayout();
+  }
+  if (workspace?.root !== root) return { panes: 0, dropped };
+  panesFor = root;
+  panesSavedJson = "";
+  // What came back (missing files dropped) is the tree from now on.
+  panesChanged();
+  if (saved) status(`Layout restored: ${panes.size} pane${panes.size === 1 ? "" : "s"}${dropped.length ? `; not found: ${dropped.join(", ")}` : ""}`);
+  return { panes: saved ? panes.size : 0, dropped };
+}
+
+/** View → Splits → Reset the layout: one pane again, every tab kept (they gather in the pane
+ *  that takes the space), and this folder's saved tree cleared. */
+async function resetLayout() {
+  if (!workspace) return status("Open a folder first");
+  const root = workspace.root;
+  setZoom(null);
+  while (panes.size > 1) closePane(paneList()[paneList().length - 1]);
+  window.clearTimeout(panesTimer);
+  panesTimer = 0;
+  await panesSaved;
+  panesSaved = api.settingsSetLayout({ panes: { [root]: null } }).catch((e) => status(`Layout: ${errText(e)}`));
+  await panesSaved;
+  // The next change saves the tree again; until then the folder has none.
+  panesSavedJson = workspace?.root === root ? JSON.stringify(await panesSnapshot(root)) : "";
+  status("Layout reset: one pane; the saved layout of this folder is cleared");
+}
+
 /**
  * Primary navigation: every kit item at first level, in the operator's order (ADR 2026-10-24
  * amend 2026-10-28; plan colony-sidebar-native-kit). A rail item shows one view, or a group of
@@ -863,6 +1017,7 @@ function renderTabs() {
   refreshDrawer();
   markSettings();
   for (const p of paneList()) renderStrip(p);
+  panesChanged();
 }
 
 function renderStrip(p: Pane) {
@@ -1074,14 +1229,16 @@ function setDocMode(mode: DocMode, p: Pane = focused) {
   if (!t?.mode || t.mode === mode) return;
   t.mode = mode;
   for (const q of paneList()) if (q.shown === t.id) renderDocMode(q, t.id, q === p);
+  panesChanged();
   if (mode === "editor" && focusPolicy.enabled) requestAnimationFrame(() => p.editor?.editor.focus());
 }
 
 /** Open `path` in a file tab. `mode` for a Markdown file (default: the editor, with the
- *  switch to the preview); an open tab keeps the mode it has. */
-async function openFile(path: string, mode?: DocMode) {
-  // The pane that holds the file already (the focused one first), else the focused pane.
-  const pane = paneFor(path);
+ *  switch to the preview); an open tab keeps the mode it has. `into`: that pane (a restored
+ *  layout), else the pane that holds the file already (the focused one first), else the
+ *  focused pane. */
+async function openFile(path: string, mode?: DocMode, into?: Pane) {
+  const pane = into && panes.has(into.id) ? into : paneFor(path);
   try {
     await editors.open(path, editorViewOf(pane));
   } catch (e) {
@@ -1602,9 +1759,10 @@ const px = (name: string) => {
   const v = Number.parseFloat(shell.style.getPropertyValue(name));
   return Number.isFinite(v) ? Math.round(v) : null;
 };
-/** The panel layout this window shows. The remembered terminal placement is not part of it:
- *  it is written only when a tab moves (its own patch), so this save never overwrites it. */
-type PanelLayout = Omit<LayoutSettings, "terminalPlacement">;
+/** The panel layout this window shows. The remembered terminal placement and the split tree
+ *  are not part of it: each is written on its own patch (a tab move, a tree change), so this
+ *  save never overwrites them. */
+type PanelLayout = Omit<LayoutSettings, "terminalPlacement" | "panes">;
 function layoutNow(): Required<{ [K in keyof PanelLayout]: PanelLayout[K] | null }> {
   return {
     terminalDock: dock(),
@@ -1648,6 +1806,8 @@ layoutChanged = () => {
   layoutTimer = window.setTimeout(() => {
     layoutSaved = api.settingsSetLayout(layoutNow()).catch((e) => status(`Layout: ${errText(e)}`));
   }, 400);
+  // A divider drag ends here too: the split ratios are part of the tree.
+  panesChanged();
 };
 
 $("term-tabs").querySelector(".dock-group")!.addEventListener("click", (ev) => {
@@ -1950,26 +2110,98 @@ function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
   return from ? { id, from } : null;
 }
 
-// Drag: pointer events tracked by tab id on the two bars, like the splitters (the centre
-// strip is rebuilt on every snapshot, and the window keeps its OS file-drop handler). A press
-// that travels less than the threshold stays a click; Escape cancels. The bar under the
-// pointer marks itself as the drop target with its border colour only. A drawer terminal
-// dropped on a pane's strip opens in that pane (moving tabs between panes is the free tiling
-// plan's t4).
+// Drag: pointer events tracked by tab id on the pane strips and the drawer bar, like the
+// splitters (strips are rebuilt on every snapshot, and the window keeps its OS file-drop
+// handler: no HTML5 drag and drop). A press that travels less than the threshold stays a click;
+// Escape cancels. Any document tab drags between panes (plan colony-free-tiling t4, kit ADR
+// 2026-10-24 amend 2026-11-19 point 5): over a strip it moves into that pane, over a pane's
+// edge band it splits that pane on that side, over the rest of a pane it moves into it. A
+// terminal tab also drags to and from the drawer bar. The target shows only a 1px border
+// colour: the strip's outline, or an unfilled box over the part of the pane the tab would take.
+const dropBox = h("div", { class: "drop-zone", hidden: "" });
+/** The pane an element sits in (its strip or its view area). */
+const paneAt = (el: Element | null): Pane | null => panes.get(el?.closest<HTMLElement>(".pane")?.dataset.pane ?? "") ?? null;
+/** The document tab id under a press in a pane strip, or the terminal tab id in the drawer bar. */
+function dragSource(el: Element | null): { id: string; from: Place; pane: Pane | null } | null {
+  const strip = el?.closest<HTMLElement>(".pane-tabs .tab[data-tab]");
+  if (strip) {
+    const id = strip.dataset.tab!;
+    const t = tabs.get(id);
+    const pane = paneAt(strip);
+    return t && !t.pinned && pane ? { id, from: "editor", pane } : null;
+  }
+  const pty = ptyTabAt(el);
+  return pty?.from === "panel" ? { ...pty, pane: null } : null;
+}
+/** A new pane beside `at` (`dir`, first when `before`), drawn; null when the tree is full. */
+function paneBeside(at: Pane, dir: SplitDir, before: boolean): Pane | null {
+  if (panes.size >= MAX_PANES) {
+    status(`Split: at most ${MAX_PANES} panes`);
+    return null;
+  }
+  const fresh = freshPaneId(panes.keys());
+  const p = makePane(fresh);
+  panes.set(fresh, p);
+  paneTree = splitPane(paneTree, at.id, dir, fresh, before);
+  renderPaneTree();
+  return p;
+}
+/** Carry out a drop of tab `id` (from pane `from`, or the drawer when null). */
+function dockTab(id: string, from: Pane | null, d: DockMove) {
+  if (d.kind === "none") return;
+  const into = d.kind === "move" ? panes.get(d.to) : paneBeside(panes.get(d.at)!, d.dir, d.before);
+  if (!into) return;
+  if (!from) movePty(id, "editor", { pane: into });
+  else {
+    if (isFile(id) && from.editor && from.editor.active === id) editorViewOf(into).states.set(id, from.editor.editor.saveViewState());
+    moveTabToPane(id, from, into);
+  }
+  relayout();
+}
 for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("pointerdown", (down) => {
     if (down.button !== 0 || (down.target as HTMLElement).closest(".tab-close")) return;
-    const src = ptyTabAt(down.target as Element);
+    const src = dragSource(down.target as Element);
     if (!src) return;
+    const pty = !!ptyPlace(src.id);
     let dragging = false;
-    let over: Place | null = null;
-    let overPane: Pane | null = null;
-    const mark = (p: Place | null, at: Element | null = null) => {
-      over = p;
-      const strip = p === "editor" && src.from !== "editor" ? at?.closest<HTMLElement>(".pane-tabs") : null;
-      overPane = strip ? (paneList().find((x) => x.bar === strip) ?? null) : null;
+    let drop: (() => void) | null = null;
+    const mark = (at: Element | null, x: number, y: number) => {
+      drop = null;
+      let strip: HTMLElement | null = null;
+      let zoneIn: { host: HTMLElement; box: Box } | null = null;
+      let panel = false;
+      const place = dropPlace(at);
+      const over = paneAt(at);
+      if (place === "panel") {
+        if (pty && src.from === "editor") {
+          panel = true;
+          drop = () => movePty(src.id, "panel");
+        }
+      } else if (over && at?.closest(".pane-tabs")) {
+        const d = dockAction(src.pane?.id ?? null, src.pane?.strip.order.length ?? 0, over.id, "strip");
+        if (d.kind !== "none") {
+          strip = over.bar;
+          drop = () => dockTab(src.id, src.pane, d);
+        }
+      } else if (over && at?.closest(".pane-views")) {
+        const r = over.host.getBoundingClientRect();
+        const zone = paneDropZone(x - r.left, y - r.top, r.width, r.height);
+        const d = dockAction(src.pane?.id ?? null, src.pane?.strip.order.length ?? 0, over.id, zone);
+        if (d.kind !== "none") {
+          zoneIn = { host: over.host, box: zoneBox(zone) };
+          drop = () => dockTab(src.id, src.pane, d);
+        }
+      }
       for (const x of paneList()) x.bar.classList.toggle("drop-target", x.bar === strip);
-      $("term-tabs").classList.toggle("drop-target", p === "panel" && src.from !== "panel");
+      $("term-tabs").classList.toggle("drop-target", panel);
+      dropBox.hidden = !zoneIn;
+      if (zoneIn) {
+        if (!dropBox.isConnected) document.body.append(dropBox);
+        const r = zoneIn.host.getBoundingClientRect();
+        const b = zoneIn.box;
+        Object.assign(dropBox.style, { left: `${r.left + b.x * r.width}px`, top: `${r.top + b.y * r.height}px`, width: `${b.w * r.width}px`, height: `${b.h * r.height}px` });
+      }
     };
     const move = (ev: PointerEvent) => {
       if (!dragging && !dragStarted(ev.clientX - down.clientX, ev.clientY - down.clientY)) return;
@@ -1978,25 +2210,23 @@ for (const bar of [$("center"), $("term-tabs")]) {
         shell.classList.add("tab-dragging");
       }
       ev.preventDefault();
-      const at = document.elementFromPoint(ev.clientX, ev.clientY);
-      mark(dropPlace(at), at);
+      mark(document.elementFromPoint(ev.clientX, ev.clientY), ev.clientX, ev.clientY);
     };
-    const end = (drop: boolean) => {
+    const end = (ok: boolean) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key, true);
       shell.classList.remove("tab-dragging");
-      const to = drop ? moveTarget(src.from, over) : null;
-      const intoPane = overPane;
-      mark(null);
+      const run = ok ? drop : null;
+      mark(null, 0, 0);
       if (!dragging) return;
       // The release after a drag is not a click on whatever is under it (the click, when the
       // engine sends one, comes in the same task as the release).
       const eat = (ev: MouseEvent) => ev.stopPropagation();
       window.addEventListener("click", eat, true);
       window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
-      if (to) movePty(src.id, to, { pane: intoPane ?? undefined });
+      run?.();
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -2852,6 +3082,7 @@ const ACTIONS: Record<string, () => unknown> = {
   "pane-resize-down": () => resizeDir("down"),
   "pane-equalize": () => equalizePanes(),
   "pane-zoom": () => toggleZoom(),
+  "pane-layout-reset": () => void resetLayout(),
   "quick-open": () => showQuick(),
   commands: () => palette.show(),
   "explorer-reveal": () => revealInExplorer(),
@@ -3197,9 +3428,15 @@ async function openWorkspace(path: string) {
     const dirty = editors.paths().filter((p) => editors.isDirty(p));
     if (dirty.length && !(await ask(`${dirty.length} file(s) have unsaved changes. Switch folder anyway?`, { title: "Colony", kind: "warning" }))) return;
   }
+  // The tree of the folder being left goes out first; nothing is saved until the new folder's
+  // tree is restored.
+  await flushPanes();
+  const leaving = panesFor;
+  panesFor = null;
   try {
     workspace = await api.openWorkspace(path);
   } catch (e) {
+    panesFor = leaving;
     return status(errText(e));
   }
   remember(workspace.root);
@@ -3244,6 +3481,8 @@ async function openWorkspace(path: string) {
   showTab("mission");
   await tree.setRoot(workspace.root);
   await controls.loadWorkspace(workspace.root);
+  // The folder's saved split tree, its files and fresh shells (plan colony-free-tiling t5).
+  await restorePanes(workspace.root);
   if (!shell.classList.contains("no-bottom")) void terminals.create();
   pushShellStatus();
   await startMc();
@@ -3449,10 +3688,56 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     {
       const now = layoutNow();
       const sideW = Math.round($("side").getBoundingClientRect().width);
-      const want = Object.entries(bootLayout).filter(([k]) => k !== "terminalPlacement") as [keyof PanelLayout, unknown][];
+      const want = Object.entries(bootLayout).filter(([k]) => k !== "terminalPlacement" && k !== "panes") as [keyof PanelLayout, unknown][];
       const mismatch = want.filter(([k, v]) => now[k] !== v).map(([k, v]) => `${k}: saved ${v}, applied ${now[k]}`);
       const widthOk = bootLayout.explorerWidth === undefined || bootLayout.explorerVisible === false || sideW === bootLayout.explorerWidth;
       await log("layout-boot", !mismatch.length && widthOk, { saved: bootLayout, applied: now, explorerWidth: sideW, mismatch });
+    }
+    // The split tree across a restart (plan colony-free-tiling t5): the previous launch on this
+    // settings.json ended with panes-seed (two panes; a Markdown file in preview and a shell
+    // in .cursor on the right, a file that was then deleted on the left). This launch restored
+    // them when the folder opened: the tree and its ratio, the file in its pane and mode, a
+    // fresh shell in its last folder, the missing file dropped and its pane kept, the focus.
+    // Then View → Splits → Reset the layout gives one pane and clears the saved tree. A first
+    // launch (nothing saved) only notes it.
+    const panesOnDisk = async () => (((await api.settingsGet()).settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout?.panes ?? {})[root];
+    {
+      const seeded = readSaved(bootLayout.panes?.[root]);
+      if (!seeded) await log("panes-restart", true, { skipped: "first launch on this settings.json: no saved tree (panes-seed records one for the next launch)" });
+      else {
+        const r: Record<string, unknown> = {};
+        const md = `${root}/smoke-restore.md`;
+        const gone = `${root}/smoke-restore-gone.txt`;
+        const [q1, q2] = paneList();
+        const top = nodeAt(paneTree, []);
+        r.treeRestored = panes.size === 2 && !!top && !isLeaf(top) && top.split === "right" && Math.abs(top.ratio - 0.6) < 1e-9 ? true : { tree: JSON.stringify(paneTree) };
+        r.fileInItsPaneAndMode = !!q2 && q2.strip.order.includes(md) && tabs.get(md)?.mode === "preview" && q2.shown === md && !q1.strip.order.includes(md);
+        const sh = q2?.strip.order.find((id) => id.startsWith("drawer:")) ?? "";
+        let cwd = "";
+        for (let i = 0; i < 15 && cwd !== `${root}/.cursor`; i++) {
+          await wait(200);
+          const v = centerTerms.get(sh);
+          cwd = v && v.id >= 0 ? ((await api.ptyCwd(v.id).catch(() => null)) ?? "") : "";
+        }
+        r.freshShellInLastFolder = !!sh && cwd === `${root}/.cursor` ? true : { sh, cwd };
+        r.missingFileDroppedPaneKept = !tabs.has(gone) && !!q1 && panes.has(q1.id) && !q1.strip.order.includes(gone) && q1.strip.order.length > 0;
+        r.focusRestored = focused === q2;
+        await wait(800);
+        await panesSaved;
+        const disk = readSaved(await panesOnDisk());
+        r.diskDropsMissing = !!disk && !savedLeaves(disk.tree)[0].tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && savedLeaves(disk.tree)[1].tabs.length === 2 ? true : disk;
+        runAction("pane-layout-reset");
+        await wait(300);
+        await panesSaved;
+        r.resetOnePane = panes.size === 1 && tabs.has(md) && paneList()[0].strip.order.includes(md);
+        r.resetClearsDisk = (await panesOnDisk()) === undefined;
+        await closeTab(md);
+        if (sh && tabs.has(sh)) await closeTab(sh);
+        await wait(150);
+        await log("panes-restart", Object.values(r).every((v) => v === true), { saved: seeded, ...r });
+        focused.nav.reset();
+        showTab("mission");
+      }
     }
     await log("tree", $("tree").querySelectorAll(".tree-row").length > 0, `${$("tree").querySelectorAll(".tree-row").length} rows`);
     // Native views from the kit server's snapshot (GET + SSE through the Rust proxy).
@@ -4442,6 +4727,102 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       while (panes.size > 1) closePane(paneList()[1]);
       sk.backToOnePane = panes.size === 1 && !tabs.has(keyDoc) ? true : state();
       await log("split-keys", Object.values(sk).every((v) => v === true), sk);
+      focused.nav.reset();
+      showTab("mission");
+    }
+    // COLONY_SMOKE split-drag (plan colony-free-tiling t4): in-page pointer events drag a tab
+    // from a pane strip to a pane edge (split there, an unfilled 1px box over the half it would
+    // take), onto another strip and into the middle of a pane (move); Escape cancels; a press
+    // with no travel stays a click; a pane's only tab cannot split its own pane.
+    {
+      const sd: Record<string, unknown> = {};
+      const state = () => ({ tree: JSON.stringify(paneTree), panes: paneList().map((p) => `${p.id}:${p.shown ? relPath(p.shown) : "-"}:[${p.strip.order.map((x) => relPath(x)).join(",")}]`), focused: focused.id });
+      const tabEl = (p: Pane, id: string) => p.bar.querySelector<HTMLElement>(`.tab[data-tab="${CSS.escape(id)}"]`);
+      /** Press on tab `id` of pane `p`, travel to (x, y), then release (or Escape first). */
+      const drag = async (p: Pane, id: string, x: number, y: number, opts: { escape?: boolean; probe?: () => void } = {}) => {
+        const el = tabEl(p, id);
+        const a = el?.getBoundingClientRect();
+        if (!el || !a) return false;
+        el.dispatchEvent(new PointerEvent("pointerdown", { clientX: a.left + 8, clientY: a.top + 8, button: 0, bubbles: true }));
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX: (a.left + 8 + x) / 2, clientY: (a.top + 8 + y) / 2, bubbles: true }));
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
+        opts.probe?.();
+        if (opts.escape) window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        window.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+        await wait(200);
+        return true;
+      };
+      const docA = `${root}/smoke-drag-a.txt`;
+      const docB = `${root}/smoke-drag-b.txt`;
+      await api.writeTextFile(docA, "drag a\n".repeat(20));
+      await api.writeTextFile(docB, "drag b\n".repeat(20));
+      // The drags run in a pane of their own, right of the one earlier steps left (it keeps
+      // its tabs): a view shown when splitting leaves the new pane empty.
+      const d0 = focused;
+      showTab("mission");
+      runAction("split-right");
+      await wait(150);
+      const d1 = focused;
+      await openFile(docA, undefined, d1);
+      await openFile(docB, undefined, d1);
+      const order = (...ps: (Pane | undefined)[]) => JSON.stringify(leaves(paneTree)) === JSON.stringify(ps.map((p) => p?.id));
+      const parentOf = (p: Pane) => nodeAt(paneTree, (pathTo(paneTree, p.id) ?? []).slice(0, -1)) as PaneSplit | null;
+      // B to the right edge of its own pane: d1 splits, B goes to the new right half.
+      let host = d1.host.getBoundingClientRect();
+      let box: Record<string, unknown> | null = null;
+      await drag(d1, docB, host.right - 10, host.top + host.height / 2, {
+        probe: () => {
+          const z = document.querySelector<HTMLElement>(".drop-zone");
+          const r = z?.getBoundingClientRect();
+          const cs = z ? getComputedStyle(z) : null;
+          box = z && r && cs ? { shown: !z.hidden, halfWidth: Math.abs(r.width - host.width / 2) < 3, onRight: Math.abs(r.right - host.right) < 3, unfilled: cs.backgroundColor === "rgba(0, 0, 0, 0)" || cs.backgroundColor === "transparent", border1px: cs.borderTopWidth === "1px" && cs.borderLeftWidth === "1px" } : { zone: !!z };
+        },
+      });
+      const d2 = paneList().find((p) => p !== d1 && p !== d0);
+      sd.edgeBoxShown = !!box && Object.values(box as Record<string, unknown>).every((v) => v === true) ? true : box;
+      sd.edgeSplitsRight = panes.size === 3 && !!d2 && order(d0, d1, d2) && parentOf(d2)?.split === "right" && d2.shown === docB && !d1.strip.order.includes(docB) && d1.shown === docA ? true : state();
+      sd.zoneHiddenAfter = document.querySelector<HTMLElement>(".drop-zone")?.hidden !== false && !paneList().some((p) => p.bar.classList.contains("drop-target"));
+      // A onto d2's strip: d1 loses its only tab and goes, d2 holds both.
+      if (d2) {
+        const b = d2.bar.getBoundingClientRect();
+        await drag(d1, docA, b.right - 30, b.top + b.height / 2);
+        sd.stripMoves = panes.size === 2 && !panes.has(d1.id) && order(d0, d2) && d2.strip.order.includes(docA) && d2.strip.order.includes(docB) && d2.shown === docA ? true : state();
+        // B to the bottom edge: split down, B below.
+        host = d2.host.getBoundingClientRect();
+        await drag(d2, docB, host.left + host.width / 2, host.bottom - 8);
+        const d3 = paneList().find((p) => p !== d2 && p !== d0);
+        sd.edgeSplitsDown = panes.size === 3 && !!d3 && parentOf(d3)?.split === "down" && order(d0, d2, d3) && d3.shown === docB ? true : state();
+        if (d3) {
+          // Escape cancels a drag: nothing moves.
+          const before = JSON.stringify(state());
+          const c = d2.host.getBoundingClientRect();
+          await drag(d3, docB, c.left + c.width / 2, c.top + c.height / 2, { escape: true });
+          sd.escapeCancels = JSON.stringify(state()) === before ? true : state();
+          // A pane's only tab dropped on its own edge: nothing.
+          const own = d3.host.getBoundingClientRect();
+          await drag(d3, docB, own.right - 8, own.top + own.height / 2);
+          sd.onlyTabOwnEdgeNoop = JSON.stringify(state()) === before ? true : state();
+          // B into the middle of d2: d3 goes, one pane holds both.
+          await drag(d3, docB, c.left + c.width / 2, c.top + c.height / 2);
+          sd.centreMoves = panes.size === 2 && !panes.has(d3.id) && order(d0, d2) && d2.strip.order.includes(docB) && d2.shown === docB ? true : state();
+          // A press with no travel is still a click: it shows the tab, nothing moves.
+          const ta = tabEl(d2, docA);
+          const r = ta?.getBoundingClientRect();
+          if (ta && r) {
+            ta.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left + 8, clientY: r.top + 8, button: 0, bubbles: true }));
+            window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 9, clientY: r.top + 8, bubbles: true }));
+            ta.click();
+          }
+          await wait(100);
+          sd.pressIsClick = panes.size === 2 && d2.shown === docA ? true : state();
+        }
+      }
+      await closeTab(docA);
+      await closeTab(docB);
+      await wait(150);
+      while (panes.size > 1) closePane(paneList()[panes.size - 1]);
+      sd.backToOnePane = panes.size === 1 && !tabs.has(docA) && !tabs.has(docB) ? true : state();
+      await log("split-drag", Object.values(sd).every((v) => v === true), sd);
       focused.nav.reset();
       showTab("mission");
     }
@@ -5584,6 +5965,48 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       if (keyBefore && terminals.has(keyBefore)) terminals.focusKey(keyBefore);
       toggleTerminal(shownBefore);
       await log("tab-placement-seed", Object.values(r).every((v) => v === true), { shell: s1, a: a?.id ?? null, terminalPlacement: raw, ...r });
+    }
+    // Seed for panes-restart (plan colony-free-tiling t5), after the placement seed: a launch
+    // with no saved tree builds two panes and saves them, deletes the left pane's file, then
+    // stops saving so no later step changes what the next launch restores.
+    if (!readSaved(bootLayout.panes?.[root])) {
+      const r: Record<string, unknown> = {};
+      const md = `${root}/smoke-restore.md`;
+      const gone = `${root}/smoke-restore-gone.txt`;
+      await api.writeTextFile(md, "# Restore\n\nPanes smoke.\n");
+      await api.writeTextFile(gone, "gone\n");
+      setZoom(null);
+      while (panes.size > 1) closePane(paneList()[panes.size - 1]);
+      const s1 = paneList()[0];
+      focusPane(s1);
+      await openFile(gone, undefined, s1);
+      // A view shown when splitting: the new pane starts empty.
+      showTab("mission");
+      runAction("split-right");
+      await wait(200);
+      const s2 = focused;
+      await openFile(md, "preview", s2);
+      const made = terminals.create(undefined, "seed", `${root}/.cursor`);
+      const key = terminals.newestKey;
+      movePty(key, "editor", { auto: true, pane: s2 });
+      await made.catch(() => {});
+      showIn(s2, md);
+      paneTree = setRatio(paneTree, [], 0.6);
+      renderPaneTree();
+      await wait(1500);
+      panesChanged();
+      await flushPanes();
+      const disk = readSaved(await panesOnDisk());
+      const [l1, l2] = disk ? savedLeaves(disk.tree) : [];
+      r.saved = !!disk && disk.focused === s2.id && !!l2 && l1.tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && l1.active == null && JSON.stringify(l2.tabs) === JSON.stringify([{ file: "smoke-restore.md", mode: "preview" }, { terminal: ".cursor" }]) && l2.active === 0 ? true : disk;
+      // The panel-change save leaves the tree alone.
+      layoutChanged();
+      await wait(600);
+      await layoutSaved;
+      r.panelSaveKeepsTree = JSON.stringify(readSaved(await panesOnDisk())) === JSON.stringify(disk);
+      panesFor = null;
+      await api.trashPath(gone).catch(() => {});
+      await log("panes-seed", Object.values(r).every((v) => v === true), r);
     }
     // Process tree (kit ADR 2026-10-19 amend 2026-11-16 point 7), last so no later step needs
     // the folder's one run: the fake's `--model smoke-tree` run starts an agent child and a

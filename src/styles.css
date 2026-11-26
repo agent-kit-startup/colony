@@ -1019,6 +1019,9 @@ button.kv-filter.on { background: transparent; border-color: var(--border-active
    colour, drawn as an outline so nothing shifts. No fill, no accent bar, no inset shadow. */
 #shell.tab-dragging, #shell.tab-dragging * { cursor: grabbing; user-select: none; }
 .tabbar.drop-target { outline: 1px solid var(--blue); outline-offset: -1px; }
+/* Drag to dock (free tiling t4): the part of a pane a dropped tab would take, as an unfilled
+   1px box, never a fill or an accent bar. */
+.drop-zone { position: fixed; z-index: 50; border: 1px solid var(--blue); background: none; pointer-events: none; box-sizing: border-box; }
 
 /* Conflict window (src/conflicts.ts): file list | hunks, each hunk ours | theirs | result.
    Selected and resolved items change their 1px border colour only (no bar, no tint). */

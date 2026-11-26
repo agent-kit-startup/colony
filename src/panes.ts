@@ -216,6 +216,55 @@ export function equalize(root: PaneNode): PaneNode {
   return walk(root);
 }
 
+// ---- drag to dock (plan to-do t4) ---------------------------------------------------------
+
+/** Where a dragged tab lands in a pane's view area: an edge splits the pane on that side, the
+ *  centre moves the tab into the pane. */
+export type PaneZone = Dir | "center";
+/** The band along each edge, as a share of the pane's width or height, that splits. */
+export const EDGE_SHARE = 0.25;
+
+/** The zone under a pointer at (x, y) inside a view area `w` by `h` (pixels from its top
+ *  left): the nearest edge when the pointer is inside that edge's band (ties: left / right
+ *  first), else the centre. */
+export function paneDropZone(x: number, y: number, w: number, h: number, edge = EDGE_SHARE): PaneZone {
+  if (!(w > 0) || !(h > 0)) return "center";
+  const fx = Math.min(1, Math.max(0, x / w));
+  const fy = Math.min(1, Math.max(0, y / h));
+  const near: [Dir, number][] = [["left", fx], ["right", 1 - fx], ["up", fy], ["down", 1 - fy]];
+  let best = near[0];
+  for (const n of near) if (n[1] < best[1]) best = n;
+  return best[1] < edge ? best[0] : "center";
+}
+
+/** The part of the pane a zone outlines while the tab is over it (shares of the view area):
+ *  the half the new pane would take, or the whole pane. */
+export function zoneBox(z: PaneZone): Box {
+  switch (z) {
+    case "left":
+      return { x: 0, y: 0, w: 0.5, h: 1 };
+    case "right":
+      return { x: 0.5, y: 0, w: 0.5, h: 1 };
+    case "up":
+      return { x: 0, y: 0, w: 1, h: 0.5 };
+    case "down":
+      return { x: 0, y: 0.5, w: 1, h: 0.5 };
+    default:
+      return { x: 0, y: 0, w: 1, h: 1 };
+  }
+}
+
+/** What a drop does. `from`: the pane the tab leaves (null: a drawer terminal), `tabs`: how
+ *  many tabs that pane holds, `to`: the pane under the pointer, `zone`: its zone, or `strip`
+ *  for its tab strip. A move into the pane it came from, or a split of a pane by its only tab,
+ *  changes nothing. */
+export type DockMove = { kind: "none" } | { kind: "move"; to: string } | { kind: "split"; at: string; dir: SplitDir; before: boolean };
+export function dockAction(from: string | null, tabs: number, to: string, zone: PaneZone | "strip"): DockMove {
+  if (zone === "center" || zone === "strip") return from === to ? { kind: "none" } : { kind: "move", to };
+  if (from === to && tabs < 2) return { kind: "none" };
+  return { kind: "split", at: to, dir: axis(zone), before: !forward(zone) };
+}
+
 // ---- the tabs of each pane ---------------------------------------------------------------
 
 /** A pane's strip: its document tabs in order. */
@@ -264,4 +313,111 @@ export function freshPaneId(taken: Iterable<string>): string {
   let n = 1;
   while (used.has(`p${n}`)) n++;
   return `p${n}`;
+}
+
+// ---- the tree across restarts (plan to-do t5; amend 2026-11-19 point 6) -----------------
+// settings.json ui.layout.panes["<folder>"] = {tree, focused}: a leaf {pane, tabs, active?},
+// a split {split, ratio, a, b}. Tabs are files (a path inside the folder, with the Markdown
+// mode) and shells (their last folder, restored as a fresh shell). settings.rs merge_panes
+// refuses a malformed write; a hand-edited file is read through readSaved, which gives null
+// for anything it cannot trust (the window then keeps one pane).
+
+export type SavedTab = { file: string; mode?: "preview" | "editor" } | { terminal: string };
+export interface SavedLeaf {
+  pane: string;
+  tabs: SavedTab[];
+  active?: number | null;
+}
+export interface SavedSplit {
+  split: SplitDir;
+  ratio: number;
+  a: SavedNode;
+  b: SavedNode;
+}
+export type SavedNode = SavedLeaf | SavedSplit;
+export interface SavedPanes {
+  tree: SavedNode;
+  focused: string;
+}
+/** The same limits as settings.rs. */
+export const MAX_SAVED_DEPTH = 16;
+export const MAX_SAVED_TABS = 64;
+
+/** `abs` as a path relative to `root` ("" for the folder itself), or null outside it. */
+export function relInside(root: string, abs: string): string | null {
+  const r = root.replace(/\/+$/, "");
+  if (abs === r) return "";
+  if (!abs.startsWith(`${r}/`)) return null;
+  const rel = abs.slice(r.length + 1);
+  return rel.split("/").some((s) => s === ".." || s === "") ? null : rel;
+}
+
+/** The absolute path of a saved relative path, or null when it would leave the folder. */
+export function absInside(root: string, rel: string): string | null {
+  const r = root.replace(/\/+$/, "");
+  if (rel === "" || rel === ".") return r;
+  if (rel.startsWith("/") || rel.split("/").some((s) => s === ".." || s === "")) return null;
+  return `${r}/${rel}`;
+}
+
+/** The tree to save: each leaf's tabs and shown tab from `tabsOf`. */
+export function saveTree(n: PaneNode, tabsOf: (pane: string) => { tabs: SavedTab[]; active: number | null }): SavedNode {
+  if (isLeaf(n)) {
+    const { tabs, active } = tabsOf(n.pane);
+    return active === null ? { pane: n.pane, tabs } : { pane: n.pane, tabs, active };
+  }
+  return { split: n.split, ratio: n.ratio, a: saveTree(n.a, tabsOf), b: saveTree(n.b, tabsOf) };
+}
+
+/** The split tree of a saved tree (the tabs left out). */
+export function treeOf(n: SavedNode): PaneNode {
+  return "pane" in n ? { pane: n.pane } : { split: n.split, ratio: clampRatio(n.ratio), a: treeOf(n.a), b: treeOf(n.b) };
+}
+
+/** The saved leaves in reading order. */
+export function savedLeaves(n: SavedNode): SavedLeaf[] {
+  return "pane" in n ? [n] : [...savedLeaves(n.a), ...savedLeaves(n.b)];
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const relOk = (v: unknown, emptyOk: boolean): v is string => typeof v === "string" && (emptyOk || (v !== "" && v !== ".")) && absInside("/x", v) !== null;
+
+function readTab(v: unknown): SavedTab | null {
+  if (!isObj(v)) return null;
+  if ("file" in v) {
+    if (!relOk(v.file, false)) return null;
+    if (v.mode === "preview" || v.mode === "editor") return { file: v.file, mode: v.mode };
+    return v.mode === undefined ? { file: v.file } : null;
+  }
+  return "terminal" in v && relOk(v.terminal, true) ? { terminal: v.terminal } : null;
+}
+
+function readNode(v: unknown, depth: number, ids: Set<string>): SavedNode | null {
+  if (!isObj(v) || depth > MAX_SAVED_DEPTH) return null;
+  if ("pane" in v) {
+    const id = v.pane;
+    if (typeof id !== "string" || !id || id.length > 16 || ids.has(id)) return null;
+    ids.add(id);
+    if (ids.size > MAX_PANES) return null;
+    const raw = v.tabs === undefined ? [] : v.tabs;
+    if (!Array.isArray(raw) || raw.length > MAX_SAVED_TABS) return null;
+    const tabs = raw.map(readTab);
+    if (tabs.some((t) => !t)) return null;
+    const active = v.active;
+    if (active !== undefined && active !== null && !(Number.isInteger(active) && (active as number) >= 0 && (active as number) < tabs.length)) return null;
+    return { pane: id, tabs: tabs as SavedTab[], active: typeof active === "number" ? active : null };
+  }
+  if ((v.split !== "right" && v.split !== "down") || typeof v.ratio !== "number" || !(v.ratio > 0 && v.ratio < 1)) return null;
+  const a = readNode(v.a, depth + 1, ids);
+  const b = a && readNode(v.b, depth + 1, ids);
+  return a && b ? { split: v.split, ratio: v.ratio, a, b } : null;
+}
+
+/** A folder's saved tree read from settings.json, or null when it is missing or malformed. */
+export function readSaved(v: unknown): SavedPanes | null {
+  if (!isObj(v)) return null;
+  const ids = new Set<string>();
+  const tree = readNode(v.tree, 0, ids);
+  if (!tree || typeof v.focused !== "string" || !ids.has(v.focused)) return null;
+  return { tree, focused: v.focused };
 }
