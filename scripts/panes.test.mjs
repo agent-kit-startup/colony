@@ -210,3 +210,60 @@ test("a drop on a strip or a centre moves the tab; on an edge it splits that pan
   assert.deepEqual(dockAction(null, 0, "p1", "right"), { kind: "split", at: "p1", dir: "right", before: false }, "a drawer terminal may split any pane");
   assert.deepEqual(dockAction(null, 0, "p1", "center"), { kind: "move", to: "p1" });
 });
+
+// ---- the tree across restarts (plan to-do t5) ----
+import { absInside, readSaved, relInside, saveTree, savedLeaves, treeOf } from "../src/panes.ts";
+
+test("saved paths stay inside the folder", () => {
+  assert.equal(relInside("/r/app", "/r/app/src/a.ts"), "src/a.ts");
+  assert.equal(relInside("/r/app/", "/r/app"), "");
+  assert.equal(relInside("/r/app", "/r/apple/a.ts"), null, "a sibling folder with the same prefix is outside");
+  assert.equal(relInside("/r/app", "/etc/passwd"), null);
+  assert.equal(relInside("/r/app", "/r/app/a/../../x"), null);
+  assert.equal(absInside("/r/app", "src/a.ts"), "/r/app/src/a.ts");
+  assert.equal(absInside("/r/app", ""), "/r/app");
+  assert.equal(absInside("/r/app", "."), "/r/app");
+  assert.equal(absInside("/r/app", "/etc/passwd"), null);
+  assert.equal(absInside("/r/app", "a/../../x"), null);
+  assert.equal(absInside("/r/app", "a//b"), null);
+});
+
+test("a tree saves with each pane's tabs and reads back to the same tree", () => {
+  const tree = { split: "right", ratio: 0.4, a: { pane: "p1" }, b: { split: "down", ratio: 0.5, a: { pane: "p3" }, b: { pane: "p2" } } };
+  const tabs = { p1: { tabs: [{ file: "src/a.ts" }, { file: "README.md", mode: "preview" }], active: 1 }, p2: { tabs: [{ terminal: "src" }], active: 0 }, p3: { tabs: [], active: null } };
+  const saved = saveTree(tree, (id) => tabs[id]);
+  assert.deepEqual(saved.a, { pane: "p1", tabs: tabs.p1.tabs, active: 1 });
+  assert.deepEqual(saved.b.a, { pane: "p3", tabs: [] }, "no shown tab: no active");
+  const back = readSaved(JSON.parse(JSON.stringify({ tree: saved, focused: "p2", at: 5 })));
+  assert.ok(back);
+  assert.deepEqual(treeOf(back.tree), tree);
+  assert.equal(back.focused, "p2");
+  assert.deepEqual(savedLeaves(back.tree).map((l) => l.pane), ["p1", "p3", "p2"]);
+  assert.equal(savedLeaves(back.tree)[0].active, 1);
+});
+
+test("a hand-edited tree Colony cannot trust reads as nothing (one pane)", () => {
+  const leaf = (id, extra = {}) => ({ pane: id, tabs: [], ...extra });
+  const ok = { tree: { split: "right", ratio: 0.5, a: leaf("p1"), b: leaf("p2") }, focused: "p1" };
+  assert.ok(readSaved(ok));
+  const bad = [
+    null,
+    "x",
+    { tree: leaf("p1") },
+    { tree: leaf("p1"), focused: "p2" },
+    { tree: { split: "diagonal", ratio: 0.5, a: leaf("p1"), b: leaf("p2") }, focused: "p1" },
+    { tree: { split: "right", ratio: 1, a: leaf("p1"), b: leaf("p2") }, focused: "p1" },
+    { tree: { split: "right", ratio: 0.5, a: leaf("p1"), b: leaf("p1") }, focused: "p1" },
+    { tree: { split: "right", ratio: 0.5, a: leaf("p1") }, focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "../x" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "/etc/passwd" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "a", mode: "raw" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ terminal: "../up" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ chat: "abc" }] }), focused: "p1" },
+    { tree: leaf("p1", { tabs: [{ file: "a" }], active: 3 }), focused: "p1" },
+  ];
+  for (const b of bad) assert.equal(readSaved(b), null, JSON.stringify(b));
+  let wide = leaf("w0");
+  for (let i = 1; i <= MAX_PANES; i++) wide = { split: "right", ratio: 0.5, a: leaf(`w${i}`), b: wide };
+  assert.equal(readSaved({ tree: wide, focused: "w0" }), null, "more panes than Colony opens");
+});
