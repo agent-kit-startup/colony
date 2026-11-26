@@ -27,7 +27,7 @@ import { type DocTodo, renderDoc } from "./docpreview";
 import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { type EditorView, Editors, editorStatus } from "./editor";
-import { cycle, type Dir, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, resizeToward, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
+import { type Box, cycle, type Dir, type DockMove, dockAction, paneDropZone, zoneBox, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, removePane, resizeToward, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
 import { checkForUpdates, openAboutPanel } from "./about";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -66,7 +66,7 @@ import { OligarchyView } from "./oligarchyview";
 import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
-import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
+import { dragStarted, dropPlace, isPtyTab, moveLabel, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
 import { AgentTab } from "./transcript";
 import { icon, type IconKind } from "./icons";
 import menuSpec from "./menu.json";
@@ -1928,26 +1928,98 @@ function ptyTabAt(el: Element | null): { id: string; from: Place } | null {
   return from ? { id, from } : null;
 }
 
-// Drag: pointer events tracked by tab id on the two bars, like the splitters (the centre
-// strip is rebuilt on every snapshot, and the window keeps its OS file-drop handler). A press
-// that travels less than the threshold stays a click; Escape cancels. The bar under the
-// pointer marks itself as the drop target with its border colour only. A drawer terminal
-// dropped on a pane's strip opens in that pane (moving tabs between panes is the free tiling
-// plan's t4).
+// Drag: pointer events tracked by tab id on the pane strips and the drawer bar, like the
+// splitters (strips are rebuilt on every snapshot, and the window keeps its OS file-drop
+// handler: no HTML5 drag and drop). A press that travels less than the threshold stays a click;
+// Escape cancels. Any document tab drags between panes (plan colony-free-tiling t4, kit ADR
+// 2026-10-24 amend 2026-11-19 point 5): over a strip it moves into that pane, over a pane's
+// edge band it splits that pane on that side, over the rest of a pane it moves into it. A
+// terminal tab also drags to and from the drawer bar. The target shows only a 1px border
+// colour: the strip's outline, or an unfilled box over the part of the pane the tab would take.
+const dropBox = h("div", { class: "drop-zone", hidden: "" });
+/** The pane an element sits in (its strip or its view area). */
+const paneAt = (el: Element | null): Pane | null => panes.get(el?.closest<HTMLElement>(".pane")?.dataset.pane ?? "") ?? null;
+/** The document tab id under a press in a pane strip, or the terminal tab id in the drawer bar. */
+function dragSource(el: Element | null): { id: string; from: Place; pane: Pane | null } | null {
+  const strip = el?.closest<HTMLElement>(".pane-tabs .tab[data-tab]");
+  if (strip) {
+    const id = strip.dataset.tab!;
+    const t = tabs.get(id);
+    const pane = paneAt(strip);
+    return t && !t.pinned && pane ? { id, from: "editor", pane } : null;
+  }
+  const pty = ptyTabAt(el);
+  return pty?.from === "panel" ? { ...pty, pane: null } : null;
+}
+/** A new pane beside `at` (`dir`, first when `before`), drawn; null when the tree is full. */
+function paneBeside(at: Pane, dir: SplitDir, before: boolean): Pane | null {
+  if (panes.size >= MAX_PANES) {
+    status(`Split: at most ${MAX_PANES} panes`);
+    return null;
+  }
+  const fresh = freshPaneId(panes.keys());
+  const p = makePane(fresh);
+  panes.set(fresh, p);
+  paneTree = splitPane(paneTree, at.id, dir, fresh, before);
+  renderPaneTree();
+  return p;
+}
+/** Carry out a drop of tab `id` (from pane `from`, or the drawer when null). */
+function dockTab(id: string, from: Pane | null, d: DockMove) {
+  if (d.kind === "none") return;
+  const into = d.kind === "move" ? panes.get(d.to) : paneBeside(panes.get(d.at)!, d.dir, d.before);
+  if (!into) return;
+  if (!from) movePty(id, "editor", { pane: into });
+  else {
+    if (isFile(id) && from.editor && from.editor.active === id) editorViewOf(into).states.set(id, from.editor.editor.saveViewState());
+    moveTabToPane(id, from, into);
+  }
+  relayout();
+}
 for (const bar of [$("center"), $("term-tabs")]) {
   bar.addEventListener("pointerdown", (down) => {
     if (down.button !== 0 || (down.target as HTMLElement).closest(".tab-close")) return;
-    const src = ptyTabAt(down.target as Element);
+    const src = dragSource(down.target as Element);
     if (!src) return;
+    const pty = !!ptyPlace(src.id);
     let dragging = false;
-    let over: Place | null = null;
-    let overPane: Pane | null = null;
-    const mark = (p: Place | null, at: Element | null = null) => {
-      over = p;
-      const strip = p === "editor" && src.from !== "editor" ? at?.closest<HTMLElement>(".pane-tabs") : null;
-      overPane = strip ? (paneList().find((x) => x.bar === strip) ?? null) : null;
+    let drop: (() => void) | null = null;
+    const mark = (at: Element | null, x: number, y: number) => {
+      drop = null;
+      let strip: HTMLElement | null = null;
+      let zoneIn: { host: HTMLElement; box: Box } | null = null;
+      let panel = false;
+      const place = dropPlace(at);
+      const over = paneAt(at);
+      if (place === "panel") {
+        if (pty && src.from === "editor") {
+          panel = true;
+          drop = () => movePty(src.id, "panel");
+        }
+      } else if (over && at?.closest(".pane-tabs")) {
+        const d = dockAction(src.pane?.id ?? null, src.pane?.strip.order.length ?? 0, over.id, "strip");
+        if (d.kind !== "none") {
+          strip = over.bar;
+          drop = () => dockTab(src.id, src.pane, d);
+        }
+      } else if (over && at?.closest(".pane-views")) {
+        const r = over.host.getBoundingClientRect();
+        const zone = paneDropZone(x - r.left, y - r.top, r.width, r.height);
+        const d = dockAction(src.pane?.id ?? null, src.pane?.strip.order.length ?? 0, over.id, zone);
+        if (d.kind !== "none") {
+          zoneIn = { host: over.host, box: zoneBox(zone) };
+          drop = () => dockTab(src.id, src.pane, d);
+        }
+      }
       for (const x of paneList()) x.bar.classList.toggle("drop-target", x.bar === strip);
-      $("term-tabs").classList.toggle("drop-target", p === "panel" && src.from !== "panel");
+      $("term-tabs").classList.toggle("drop-target", panel);
+      dropBox.hidden = !zoneIn;
+      if (zoneIn) {
+        if (!dropBox.isConnected) document.body.append(dropBox);
+        const r = zoneIn.host.getBoundingClientRect();
+        const b = zoneIn.box;
+        Object.assign(dropBox.style, { left: `${r.left + b.x * r.width}px`, top: `${r.top + b.y * r.height}px`, width: `${b.w * r.width}px`, height: `${b.h * r.height}px` });
+      }
     };
     const move = (ev: PointerEvent) => {
       if (!dragging && !dragStarted(ev.clientX - down.clientX, ev.clientY - down.clientY)) return;
@@ -1956,25 +2028,23 @@ for (const bar of [$("center"), $("term-tabs")]) {
         shell.classList.add("tab-dragging");
       }
       ev.preventDefault();
-      const at = document.elementFromPoint(ev.clientX, ev.clientY);
-      mark(dropPlace(at), at);
+      mark(document.elementFromPoint(ev.clientX, ev.clientY), ev.clientX, ev.clientY);
     };
-    const end = (drop: boolean) => {
+    const end = (ok: boolean) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key, true);
       shell.classList.remove("tab-dragging");
-      const to = drop ? moveTarget(src.from, over) : null;
-      const intoPane = overPane;
-      mark(null);
+      const run = ok ? drop : null;
+      mark(null, 0, 0);
       if (!dragging) return;
       // The release after a drag is not a click on whatever is under it (the click, when the
       // engine sends one, comes in the same task as the release).
       const eat = (ev: MouseEvent) => ev.stopPropagation();
       window.addEventListener("click", eat, true);
       window.setTimeout(() => window.removeEventListener("click", eat, true), 0);
-      if (to) movePty(src.id, to, { pane: intoPane ?? undefined });
+      run?.();
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -4311,6 +4381,94 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       while (panes.size > 1) closePane(paneList()[1]);
       sk.backToOnePane = panes.size === 1 && !tabs.has(keyDoc) ? true : state();
       await log("split-keys", Object.values(sk).every((v) => v === true), sk);
+      focused.nav.reset();
+      showTab("mission");
+    }
+    // COLONY_SMOKE split-drag (plan colony-free-tiling t4): in-page pointer events drag a tab
+    // from a pane strip to a pane edge (split there, an unfilled 1px box over the half it would
+    // take), onto another strip and into the middle of a pane (move); Escape cancels; a press
+    // with no travel stays a click; a pane's only tab cannot split its own pane.
+    {
+      const sd: Record<string, unknown> = {};
+      const state = () => ({ tree: JSON.stringify(paneTree), panes: paneList().map((p) => `${p.id}:${p.shown ? relPath(p.shown) : "-"}:[${p.strip.order.map((x) => relPath(x)).join(",")}]`), focused: focused.id });
+      const tabEl = (p: Pane, id: string) => p.bar.querySelector<HTMLElement>(`.tab[data-tab="${CSS.escape(id)}"]`);
+      /** Press on tab `id` of pane `p`, travel to (x, y), then release (or Escape first). */
+      const drag = async (p: Pane, id: string, x: number, y: number, opts: { escape?: boolean; probe?: () => void } = {}) => {
+        const el = tabEl(p, id);
+        const a = el?.getBoundingClientRect();
+        if (!el || !a) return false;
+        el.dispatchEvent(new PointerEvent("pointerdown", { clientX: a.left + 8, clientY: a.top + 8, button: 0, bubbles: true }));
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX: (a.left + 8 + x) / 2, clientY: (a.top + 8 + y) / 2, bubbles: true }));
+        window.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
+        opts.probe?.();
+        if (opts.escape) window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        window.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+        await wait(200);
+        return true;
+      };
+      const docA = `${root}/smoke-drag-a.txt`;
+      const docB = `${root}/smoke-drag-b.txt`;
+      await api.writeTextFile(docA, "drag a\n".repeat(20));
+      await api.writeTextFile(docB, "drag b\n".repeat(20));
+      await openFile(docA);
+      await openFile(docB);
+      const d1 = focused;
+      // B to the right edge of its own pane: d1 splits, B goes to the new right half.
+      let host = d1.host.getBoundingClientRect();
+      let box: Record<string, unknown> | null = null;
+      await drag(d1, docB, host.right - 10, host.top + host.height / 2, {
+        probe: () => {
+          const z = document.querySelector<HTMLElement>(".drop-zone");
+          const r = z?.getBoundingClientRect();
+          const cs = z ? getComputedStyle(z) : null;
+          box = z && r && cs ? { shown: !z.hidden, halfWidth: Math.abs(r.width - host.width / 2) < 3, onRight: Math.abs(r.right - host.right) < 3, unfilled: cs.backgroundColor === "rgba(0, 0, 0, 0)" || cs.backgroundColor === "transparent", border1px: cs.borderTopWidth === "1px" && cs.borderLeftWidth === "1px" } : { zone: !!z };
+        },
+      });
+      const d2 = paneList().find((p) => p !== d1);
+      sd.edgeBoxShown = !!box && Object.values(box as Record<string, unknown>).every((v) => v === true) ? true : box;
+      sd.edgeSplitsRight = panes.size === 2 && !!d2 && JSON.stringify(leaves(paneTree)) === JSON.stringify([d1.id, d2.id]) && (nodeAt(paneTree, []) as PaneSplit).split === "right" && d2.shown === docB && !d1.strip.order.includes(docB) && d1.shown === docA ? true : state();
+      sd.zoneHiddenAfter = document.querySelector<HTMLElement>(".drop-zone")?.hidden !== false && !paneList().some((p) => p.bar.classList.contains("drop-target"));
+      // A onto d2's strip: d1 loses its only tab and goes, d2 holds both.
+      if (d2) {
+        const b = d2.bar.getBoundingClientRect();
+        await drag(d1, docA, b.right - 30, b.top + b.height / 2);
+        sd.stripMoves = panes.size === 1 && !panes.has(d1.id) && d2.strip.order.includes(docA) && d2.strip.order.includes(docB) && d2.shown === docA ? true : state();
+        // B to the bottom edge: split down, B below.
+        host = d2.host.getBoundingClientRect();
+        await drag(d2, docB, host.left + host.width / 2, host.bottom - 8);
+        const d3 = paneList().find((p) => p !== d2);
+        sd.edgeSplitsDown = panes.size === 2 && !!d3 && (nodeAt(paneTree, []) as PaneSplit).split === "down" && JSON.stringify(leaves(paneTree)) === JSON.stringify([d2.id, d3.id]) && d3.shown === docB ? true : state();
+        if (d3) {
+          // Escape cancels a drag: nothing moves.
+          const before = JSON.stringify(state());
+          const c = d2.host.getBoundingClientRect();
+          await drag(d3, docB, c.left + c.width / 2, c.top + c.height / 2, { escape: true });
+          sd.escapeCancels = JSON.stringify(state()) === before ? true : state();
+          // A pane's only tab dropped on its own edge: nothing.
+          const own = d3.host.getBoundingClientRect();
+          await drag(d3, docB, own.right - 8, own.top + own.height / 2);
+          sd.onlyTabOwnEdgeNoop = JSON.stringify(state()) === before ? true : state();
+          // B into the middle of d2: d3 goes, one pane holds both.
+          await drag(d3, docB, c.left + c.width / 2, c.top + c.height / 2);
+          sd.centreMoves = panes.size === 1 && !panes.has(d3.id) && d2.strip.order.includes(docB) && d2.shown === docB ? true : state();
+          // A press with no travel is still a click: it shows the tab, nothing moves.
+          const ta = tabEl(d2, docA);
+          const r = ta?.getBoundingClientRect();
+          if (ta && r) {
+            ta.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left + 8, clientY: r.top + 8, button: 0, bubbles: true }));
+            window.dispatchEvent(new PointerEvent("pointerup", { clientX: r.left + 9, clientY: r.top + 8, bubbles: true }));
+            ta.click();
+          }
+          await wait(100);
+          sd.pressIsClick = panes.size === 1 && d2.shown === docA ? true : state();
+        }
+      }
+      await closeTab(docA);
+      await closeTab(docB);
+      await wait(150);
+      while (panes.size > 1) closePane(paneList()[1]);
+      sd.backToOnePane = panes.size === 1 && !tabs.has(docA) && !tabs.has(docB) ? true : state();
+      await log("split-drag", Object.values(sd).every((v) => v === true), sd);
       focused.nav.reset();
       showTab("mission");
     }

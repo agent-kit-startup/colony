@@ -216,6 +216,55 @@ export function equalize(root: PaneNode): PaneNode {
   return walk(root);
 }
 
+// ---- drag to dock (plan to-do t4) ---------------------------------------------------------
+
+/** Where a dragged tab lands in a pane's view area: an edge splits the pane on that side, the
+ *  centre moves the tab into the pane. */
+export type PaneZone = Dir | "center";
+/** The band along each edge, as a share of the pane's width or height, that splits. */
+export const EDGE_SHARE = 0.25;
+
+/** The zone under a pointer at (x, y) inside a view area `w` by `h` (pixels from its top
+ *  left): the nearest edge when the pointer is inside that edge's band (ties: left / right
+ *  first), else the centre. */
+export function paneDropZone(x: number, y: number, w: number, h: number, edge = EDGE_SHARE): PaneZone {
+  if (!(w > 0) || !(h > 0)) return "center";
+  const fx = Math.min(1, Math.max(0, x / w));
+  const fy = Math.min(1, Math.max(0, y / h));
+  const near: [Dir, number][] = [["left", fx], ["right", 1 - fx], ["up", fy], ["down", 1 - fy]];
+  let best = near[0];
+  for (const n of near) if (n[1] < best[1]) best = n;
+  return best[1] < edge ? best[0] : "center";
+}
+
+/** The part of the pane a zone outlines while the tab is over it (shares of the view area):
+ *  the half the new pane would take, or the whole pane. */
+export function zoneBox(z: PaneZone): Box {
+  switch (z) {
+    case "left":
+      return { x: 0, y: 0, w: 0.5, h: 1 };
+    case "right":
+      return { x: 0.5, y: 0, w: 0.5, h: 1 };
+    case "up":
+      return { x: 0, y: 0, w: 1, h: 0.5 };
+    case "down":
+      return { x: 0, y: 0.5, w: 1, h: 0.5 };
+    default:
+      return { x: 0, y: 0, w: 1, h: 1 };
+  }
+}
+
+/** What a drop does. `from`: the pane the tab leaves (null: a drawer terminal), `tabs`: how
+ *  many tabs that pane holds, `to`: the pane under the pointer, `zone`: its zone, or `strip`
+ *  for its tab strip. A move into the pane it came from, or a split of a pane by its only tab,
+ *  changes nothing. */
+export type DockMove = { kind: "none" } | { kind: "move"; to: string } | { kind: "split"; at: string; dir: SplitDir; before: boolean };
+export function dockAction(from: string | null, tabs: number, to: string, zone: PaneZone | "strip"): DockMove {
+  if (zone === "center" || zone === "strip") return from === to ? { kind: "none" } : { kind: "move", to };
+  if (from === to && tabs < 2) return { kind: "none" };
+  return { kind: "split", at: to, dir: axis(zone), before: !forward(zone) };
+}
+
 // ---- the tabs of each pane ---------------------------------------------------------------
 
 /** A pane's strip: its document tabs in order. */

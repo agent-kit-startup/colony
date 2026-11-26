@@ -172,3 +172,41 @@ test("equalize gives every pane along an axis the same room", () => {
   assert.equal(nodeAt(equalize(setRatio(tee(), [], 0.2)), []).ratio, 0.5);
   assert.deepEqual(equalize(one), one);
 });
+
+// ---- drag to dock (plan to-do t4) ----
+import { EDGE_SHARE, dockAction, paneDropZone as dropZone, zoneBox } from "../src/panes.ts";
+
+test("a drop near an edge of a pane names that edge; the middle is the centre", () => {
+  assert.equal(dropZone(10, 300, 800, 600), "left");
+  assert.equal(dropZone(790, 300, 800, 600), "right");
+  assert.equal(dropZone(400, 10, 800, 600), "up");
+  assert.equal(dropZone(400, 590, 800, 600), "down");
+  assert.equal(dropZone(400, 300, 800, 600), "center");
+  assert.equal(dropZone(800 * EDGE_SHARE + 1, 300, 800, 600), "center", "just inside the band's limit is the centre");
+  assert.equal(dropZone(5, 5, 800, 600), "left", "a corner goes to the nearer edge, left / right on a tie");
+  assert.equal(dropZone(400, 5, 800, 600), "up");
+  assert.equal(dropZone(-20, 300, 800, 600), "left", "a pointer just outside is clamped to the pane");
+  assert.equal(dropZone(10, 10, 0, 600), "center", "a pane with no size has only a centre");
+});
+
+test("a zone outlines the half the new pane takes, or the whole pane", () => {
+  assert.deepEqual(zoneBox("left"), { x: 0, y: 0, w: 0.5, h: 1 });
+  assert.deepEqual(zoneBox("right"), { x: 0.5, y: 0, w: 0.5, h: 1 });
+  assert.deepEqual(zoneBox("up"), { x: 0, y: 0, w: 1, h: 0.5 });
+  assert.deepEqual(zoneBox("down"), { x: 0, y: 0.5, w: 1, h: 0.5 });
+  assert.deepEqual(zoneBox("center"), { x: 0, y: 0, w: 1, h: 1 });
+});
+
+test("a drop on a strip or a centre moves the tab; on an edge it splits that pane on that side", () => {
+  assert.deepEqual(dockAction("p1", 2, "p2", "strip"), { kind: "move", to: "p2" });
+  assert.deepEqual(dockAction("p1", 1, "p2", "center"), { kind: "move", to: "p2" });
+  assert.deepEqual(dockAction("p1", 2, "p1", "center"), { kind: "none" }, "back into its own pane: nothing");
+  assert.deepEqual(dockAction("p1", 2, "p1", "strip"), { kind: "none" });
+  assert.deepEqual(dockAction("p1", 2, "p1", "right"), { kind: "split", at: "p1", dir: "right", before: false });
+  assert.deepEqual(dockAction("p1", 2, "p1", "left"), { kind: "split", at: "p1", dir: "right", before: true });
+  assert.deepEqual(dockAction("p1", 1, "p2", "up"), { kind: "split", at: "p2", dir: "down", before: true });
+  assert.deepEqual(dockAction("p1", 1, "p2", "down"), { kind: "split", at: "p2", dir: "down", before: false });
+  assert.deepEqual(dockAction("p1", 1, "p1", "right"), { kind: "none" }, "a pane's only tab cannot split its own pane");
+  assert.deepEqual(dockAction(null, 0, "p1", "right"), { kind: "split", at: "p1", dir: "right", before: false }, "a drawer terminal may split any pane");
+  assert.deepEqual(dockAction(null, 0, "p1", "center"), { kind: "move", to: "p1" });
+});
