@@ -461,18 +461,21 @@ export class CommandsView extends ListView {
       ];
     }
     const layers = ["kit", "project", "factory"];
-    const filters: [string, string, number][] = [["all", "All", c.commands.length], ...layers.map((l): [string, string, number] => [l, l[0].toUpperCase() + l.slice(1), c.commands.filter((r) => r.layer === l).length]).filter((f) => f[2] > 0)];
-    const shown = c.commands.filter((r) => (this.filter === "all" || r.layer === this.filter) && this.matches(r.name, r.description));
+    // A meta row outside the factory workspace is not shown (catalog `hidden`, amend 2026-11-16 decision 5).
+    const rows = c.commands.filter((r) => !r.hidden);
+    const filters: [string, string, number][] = [["all", "All", rows.length], ...layers.map((l): [string, string, number] => [l, l[0].toUpperCase() + l.slice(1), rows.filter((r) => r.layer === l).length]).filter((f) => f[2] > 0)];
+    const shown = rows.filter((r) => (this.filter === "all" || r.layer === this.filter) && this.matches(r.name, r.description));
     return [
       this.toolbar(filters),
-      h("p", { class: "dim small" }, `Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion}. Run opens your agent with the command (Colony's allowlist decides which); Copy is for your agent's chat input. /git-prod and /kit-prod are never run from here.`),
+      h("p", { class: "dim small" }, `Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion}. Run opens your agent already running the command with its context (the goal, plan, branch, PR or SHA it takes); Colony's allowlist decides which rows run. /git-prod and /kit-prod open interactively after a confirmation, and their own production gate in the session is the yes. Copy is for your agent's chat input.`),
       card(
-        { title: "Commands", icon: "commands", aside: [h("span", { class: "card-count" }, `${shown.length} of ${c.commands.length}`)] },
+        { title: "Commands", icon: "commands", aside: [h("span", { class: "card-count" }, `${shown.length} of ${rows.length}`)] },
         ...(shown.length
           ? shown.map((r) => {
               const slash = `/${r.name}`;
+              const asks = r.interactiveOnly || r.layer === "project";
               const act = r.run
-                ? btn("Run", () => void this.host.interactive(slash, `Workspace → Commands: ${r.description}`), { class: "link", "data-act": "run", title: `Open your agent with ${slash} (asks first)` })
+                ? btn("Run", () => void this.host.launch(r, `Workspace → Commands: ${r.description}`), { class: "link", "data-act": "run", title: `Open your agent already running ${slash} with its context${asks ? " (asks first)" : ""}` })
                 : btn("Copy", () => this.host.copy(slash, slash), { class: "link", "data-act": "copy", title: `Copy ${slash} for your agent's chat input` });
               return row([h("strong", { class: "mono small" }, slash), chip(r.layer), ...(r.headless ? [chip("headless")] : []), h("span", { class: "grow" }), act, this.openBtn(`.cursor/commands/${r.name}.md`)], r.description, undefined, r.name);
             })

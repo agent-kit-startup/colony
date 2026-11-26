@@ -18,7 +18,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { RunControls } from "./agent";
 import { chats } from "./chats";
 import { chatSmoke } from "./chatsmoke";
-import { api, Channel, errText, type FileManagerLaunch, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
+import { api, Channel, type CommandRow, errText, type FileManagerLaunch, focusPolicy, h, type InstanceEvent, type LayoutSettings, type NewWindowLaunch, type StartupInfo, type TickReview, type WorkspaceInfo } from "./api";
 import { DriverChat, type DriverChatHost } from "./driverchat";
 import { ActivityView, BACKLOG_ADD_TIP, BACKLOG_ADD_WHY, ChatsView, FlightLogView, MissionView, NEW_PLAN_TIP, NEW_PLAN_WHY, PlansView, QueueView, RUN_QUEUE_TIP } from "./cockpit";
 import { ContextStrip } from "./contextstrip";
@@ -43,6 +43,7 @@ import { hostApi, hostRequests, inboxRequests, RequestsSection } from "./hostreq
 import { forgeUxSmoke, gitCicdSmoke, hostSmoke } from "./hostsmoke";
 import { InboxView } from "./inbox";
 import { launches, promptPlan } from "./launches";
+import { composePrompt, contextLabel, contextOf, GOAL_COMMANDS, type LaunchContext, needsConfirm, PROD_ONLY, promptName } from "./launchctx";
 import { type DropHit, dropPoint, dropTarget, dropZone, terminalText } from "./droproute";
 import { type ColonyAction, CommandPalette } from "./palette";
 import { readiness } from "./readiness";
@@ -1158,18 +1159,34 @@ async function saveAs() {
   }
 }
 
-/** One line of text typed in Colony (Save as…): the value on Enter, null on Escape or when
- *  the field loses focus. */
-function promptText(label: string, value: string): Promise<string | null> {
+/** One line of text typed in Colony (Save as…, a command's context): the value on Enter,
+ *  null on Escape or when the field loses focus. `suggest` fills the field's drop-down list
+ *  (text nodes only: plan files are repository text); `hint` replaces the key hint. */
+function promptText(label: string, value: string, o: { hint?: string; suggest?: readonly string[] } = {}): Promise<string | null> {
   const box = $("prompt");
   const input = $<HTMLInputElement>("prompt-input");
+  const hint = $("prompt-hint");
   $("prompt-label").textContent = label;
+  hint.textContent = o.hint ?? "Enter saves, Escape cancels";
+  let list = document.getElementById("prompt-suggest");
+  if (!list) {
+    list = h("datalist", { id: "prompt-suggest" });
+    box.append(list);
+  }
+  list.replaceChildren(...(o.suggest ?? []).map((v) => {
+    const opt = h("option");
+    opt.setAttribute("value", v);
+    return opt;
+  }));
+  if (o.suggest?.length) input.setAttribute("list", "prompt-suggest");
+  else input.removeAttribute("list");
   input.value = value;
   box.hidden = false;
   input.focus();
   const dot = value.lastIndexOf(".");
   const slash = value.lastIndexOf("/");
-  input.setSelectionRange(slash + 1, dot > slash ? dot : value.length);
+  if (o.hint) input.select();
+  else input.setSelectionRange(slash + 1, dot > slash ? dot : value.length);
   return new Promise((resolve) => {
     const done = (v: string | null) => {
       input.removeEventListener("keydown", onKey);
@@ -1678,6 +1695,8 @@ splitter($("side-resizer"), (() => {
 
 // ---- center terminal tabs: interactive vendor CLI, queue runner ------------------------
 const centerTerms = new Map<string, TermView>();
+/** Terminal tabs running the interactive `claude` CLI, oldest first (built-ins are typed there). */
+const claudeTabs = new Set<string>();
 let termCounter = 0;
 
 /** An agent in a terminal tab: listed under Agent runs, with its context sources strip. */
@@ -1712,6 +1731,7 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
     close: () => {
       view.dispose();
       centerTerms.delete(id);
+      claudeTabs.delete(id);
       ptyKinds.delete(id);
       launches.dropTerm(id);
       ttys.closed(id);
@@ -1726,10 +1746,12 @@ async function openTermTab(argv: string[], label: string, tip: string, icon: Ico
   };
   if (agent && workspace) launches.addTerm({ tabId: id, kind: agent.kind, plan: agent.plan, backend: agent.backend, root: workspace.root, label, view, el });
   if (agent?.kind === "interactive" && agent.engine === "claude") {
+    claudeTabs.add(id);
     // Claude Code has saved (or updated) the session by now: list it under Chats.
     const prevExit = view.onExit;
     view.onExit = (code) => {
       prevExit(code);
+      claudeTabs.delete(id);
       void chats.refresh();
     };
   }
@@ -2046,6 +2068,26 @@ const chatTabs = new Map<string, string>();
 /** Saved chats whose resume tab is still opening: a second click must not open another. */
 const resuming = new Set<string>();
 
+/** The composer of a launch: the value typed after `/name` ("" = none, null = cancelled).
+ *  A plan defaults to the HANDOFF plan with the folder's plans to pick from; a branch to the
+ *  checked-out one; a goal, PR or SHA starts empty. Values are checked by composePrompt. */
+async function askContext(name: string, context: LaunchContext): Promise<string | null> {
+  const label = contextLabel(name, context);
+  if (!label) return "";
+  let value = "";
+  let suggest: string[] = [];
+  if (context === "plan") {
+    value = snapshot.activePlanFile;
+    suggest = [...new Set(snapshot.plans().map((p) => p.file).filter(Boolean))];
+  } else if (context === "branch") {
+    value = await api.gitStatus().then(
+      (g) => (g.isRepo && !/\s/.test(g.branch) ? g.branch : ""),
+      () => "",
+    );
+  }
+  return promptText(label, value, { hint: "Enter opens your agent already running it, Escape cancels", suggest });
+}
+
 let confirmAction = (message: string, title: string) => ask(message, { title, kind: "info" });
 let smokeDryRun = false;
 
@@ -2148,11 +2190,15 @@ const host: DriverChatHost = {
       status(`Run queue: ${errText(e)}`);
     }
   },
-  interactive: async (prompt, why) => {
+  interactive: async (prompt, why, o) => {
     if (!workspace) return status("Open a folder first");
     const engine = controls.backend.value;
-    if (prompt) {
-      const ok = await confirmAction(`${why ? `${why}\n\n` : ""}Open your agent (${engine}) in a terminal tab with ${prompt}? It runs on your own login.`, "Ask agent");
+    // Run with context (ADR 2026-10-22 amend 2026-11-16, decision 3): the click is the intent.
+    // Production and project rows confirm first, whatever the caller passed.
+    if (prompt && needsConfirm(prompt, o?.project)) {
+      const prod = PROD_ONLY.includes(promptName(prompt));
+      const tail = prod ? " The routine asks its own production gate inside the session: that answer is the yes." : " This command comes from this folder's own .cursor/commands/.";
+      const ok = await confirmAction(`${why ? `${why}\n\n` : ""}Open your agent (${engine}) in a terminal tab with ${prompt}? It runs on your own login.${tail}`, prod ? "Promote to production" : "Ask agent");
       if (!ok) return status("Agent not opened");
     }
     try {
@@ -2163,6 +2209,29 @@ const host: DriverChatHost = {
     } catch (e) {
       status(`Open interactive: ${errText(e)}`);
     }
+  },
+  launch: async (cmd, why) => {
+    if (!workspace) return status("Open a folder first");
+    const name = typeof cmd === "string" ? cmd : cmd.name;
+    let row: CommandRow | undefined = typeof cmd === "string" ? undefined : cmd;
+    if (!row) {
+      try {
+        row = (await api.commandsCatalog()).commands.find((r) => r.name === name);
+        if (!row || row.hidden) return status(`/${name}: this folder's kit has no such command (update the kit in this folder)`);
+      } catch (e) {
+        // No catalog (an engine older than `agent-kit commands`): the compiled goal commands
+        // still launch with their goal, as the top bar did before; anything else names the gate.
+        if (!GOAL_COMMANDS.includes(name)) return status(`/${name}: ${errText(e)}`);
+      }
+    }
+    if (row && !row.run) return status(`/${name}: Colony does not run it in this folder`);
+    const context = row ? contextOf(row.context) : "goal";
+    const project = row?.layer === "project";
+    const value = await askContext(name, context);
+    if (value === null) return status(`/${name} not launched`);
+    const c = composePrompt(name, context, value, project);
+    if ("error" in c) return status(c.error);
+    return host.interactive(c.prompt, why ?? row?.description, { project });
   },
   resumeChat: async (id, title) => {
     if (!workspace) return status("Open a folder first");
@@ -2788,8 +2857,12 @@ const ACTIONS: Record<string, () => unknown> = {
   "run-queue": () => host.runQueue(),
   "run-elsewhere": () => controls.startElsewhere(),
   interactive: () => host.interactive(),
-  "start-project": () => host.interactive("/start-project", NEW_PLAN_WHY),
-  "backlog-add": () => host.interactive("/backlog-add", BACKLOG_ADD_WHY),
+  "start-project": () => host.launch("start-project", NEW_PLAN_WHY),
+  "backlog-add": () => host.launch("backlog-add", BACKLOG_ADD_WHY),
+  hotfix: () => host.launch("hotfix", "/hotfix fixes what you describe as a hotfix branch and PR, with its own confirmations in the session."),
+  qa: () => host.launch("qa", "/qa tests a release or reproduces a bug and checks the CHANGELOG claims."),
+  "git-staging": () => host.launch("git-staging", "/git-staging brings this branch to the pre-production branch, with its own checks and gates in the session."),
+  "git-prod": () => host.launch("git-prod", "/git-prod promotes staging to production. Colony opens it interactively only; the routine's own production gate in the session is the yes."),
   about: () => openAboutPanel(status),
   shortcuts: () => openShortcutsPanel(shortcutRows(menuItems(), CTRL_DIGITS.map((id) => RAIL.find((r) => r.id === id)!.label))),
   "check-updates": () => checkForUpdates(status),
@@ -2873,21 +2946,67 @@ const paletteActions = (): ColonyAction[] => {
   const sections = WORKSPACE_SECTIONS.filter((s) => !listed.has(`view:${s}`)).map((s) => ({ id: `view:${s}`, name: `Go to Workspace → ${sectionInfo(s).label}`, description: "Workspace" }));
   return [...rows, ...sections];
 };
+/** The unmodified `claude` in a terminal tab, no prompt (the palette's Claude Code section:
+ *  `claude` itself, not the engine choice, which may be codex). */
+async function openClaudeTab(): Promise<{ id: string; view: TermView } | undefined> {
+  if (!workspace) {
+    status("Open a folder first");
+    return;
+  }
+  try {
+    const l = await api.termLaunch({ kind: "interactive", engine: "claude" });
+    return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
+  } catch (e) {
+    status(`Open Claude: ${errText(e)}`);
+  }
+}
+
+/** A Claude Code built-in from the palette (ADR 2026-10-22 amend 2026-11-16, decision 7):
+ *  `/<name>` typed into the focused Claude terminal, the bytes the user would type, without
+ *  Enter (the user adds arguments and sends it; `/clear` and the like never fire on a click).
+ *  No Claude tab open: one opens first and the name is typed once its screen has settled
+ *  (output quiet for 1.2 s); if it never settles the name is not typed and the status says so.
+ *  Colony reads nothing back from the PTY beyond that settle check. */
+async function typeBuiltin(name: string) {
+  if (!/^[a-z0-9][a-z0-9:-]{0,63}$/.test(name)) return status(`/${name} is not a built-in name`);
+  const live = (id: string) => !!ptyView(id) && !ptyView(id)!.exited;
+  let id = claudeTabs.has(activeTab) && live(activeTab) ? activeTab : [...claudeTabs].reverse().find(live);
+  if (!id) {
+    const t = await openClaudeTab();
+    if (!t) return;
+    id = t.id;
+    let last = -1;
+    let quietSince = Date.now();
+    let settled = false;
+    for (const end = Date.now() + 20000; !settled && Date.now() < end && !t.view.exited; ) {
+      await new Promise((r) => setTimeout(r, 200));
+      const n = t.view.output.length;
+      if (n !== last) {
+        last = n;
+        quietSince = Date.now();
+      }
+      settled = n > 0 && Date.now() - quietSince >= 1200;
+    }
+    if (!settled) return status(`Claude tab opened; it did not settle in 20 s, so /${name} was not typed: pick it again`);
+  }
+  const view = ptyView(id);
+  if (!view || view.exited) return status(`/${name}: the Claude tab closed`);
+  focusPty(id);
+  try {
+    await view.send(`/${name}`);
+    status(`Typed /${name} in ${tabs.get(id)?.label ?? "the Claude tab"}: add arguments, then Enter`);
+  } catch (e) {
+    status(`/${name}: ${errText(e)}`);
+  }
+}
+
 const palette = new CommandPalette({
   status,
   hasFolder: () => !!workspace,
-  interactive: (prompt, why) => host.interactive(prompt, why),
+  launch: (row, why) => host.launch(row, why),
+  typeBuiltin,
   showEngine,
-  // The Claude Code section: `claude` itself, not the engine choice (which may be codex).
-  openClaude: async () => {
-    if (!workspace) return status("Open a folder first");
-    try {
-      const l = await api.termLaunch({ kind: "interactive", engine: "claude" });
-      return openTermTab(l.argv, l.label, `${l.argv.join(" ")}\n(the vendor CLI, unmodified, on your login; Colony passes no credentials)`, "terminals", { kind: "interactive", plan: "", backend: "claude", engine: "claude" });
-    } catch (e) {
-      status(`Open Claude: ${errText(e)}`);
-    }
-  },
+  openClaude: openClaudeTab,
   actions: paletteActions,
   runAction: (id) => void runAction(id),
 });
@@ -5400,7 +5519,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       }
       await log(
         "interactive-tab",
-        !!iBtn && iTab.startsWith("term:") && iProof.includes("args: --model smoke-model\n") && iProof.includes(`cwd: ${root}`) && pProof.includes(`args: --model smoke-model /run-plan ${planFile}`) && confirmed.includes(`/run-plan ${planFile}`),
+        !!iBtn && iTab.startsWith("term:") && iProof.includes("args: --model smoke-model\n") && iProof.includes(`cwd: ${root}`) && pProof.includes(`args: --model smoke-model /run-plan ${planFile}`) && !confirmed.includes("/run-plan"),
         { tab: tabs.get(iTab)?.label, proof: iProof.trim(), promptTab: p ? tabs.get(p.id)?.label : null, promptProof: pProof.trim() },
       );
       if (p) await closeTab(p.id);

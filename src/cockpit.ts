@@ -4,7 +4,7 @@
 // queue runner or an interactive vendor CLI in a terminal tab (a saved chat resumed
 // included), opening a plan or file.
 // Nothing here runs /git-prod or any production promotion.
-import { type ChatSession, h } from "./api";
+import { type ChatSession, type CommandRow, h } from "./api";
 import type { RunControls } from "./agent";
 import { chats } from "./chats";
 import { pendingGates } from "./gates";
@@ -33,8 +33,13 @@ export interface CockpitHost {
   /** `agent-kit run-plan-all` after a confirmation: a driver run (gates in the Inbox) or,
    *  on an engine without its driver mode, a terminal tab. Needs no stored queue. */
   runQueue(): Promise<unknown>;
-  /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command. */
-  interactive(prompt?: string, why?: string): Promise<unknown>;
+  /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command, with
+   *  its context. Launches on the click; `/git-prod`, `/kit-prod` and a `project` row
+   *  (`o.project`) confirm first (launchctx.ts `needsConfirm`). */
+  interactive(prompt?: string, why?: string, o?: { project?: boolean }): Promise<unknown>;
+  /** Run catalog command `name` with context: its catalog row's `context` picks the composer
+   *  (goal typed inline, plan picked, branch from git), then `interactive`. */
+  launch(cmd: string | CommandRow, why?: string): Promise<unknown>;
   /** `claude --resume <id>` in a terminal tab labelled `title`, or focus its open tab. */
   resumeChat(id: string, title: string): Promise<unknown>;
   showTab(id: string): void;
@@ -370,11 +375,11 @@ export const NEW_PLAN_TIP = "/start-project in your agent, interactively: a new 
 export const BACKLOG_ADD_TIP = "/backlog-add in your agent, interactively: a new plan in the backlog, not activated";
 
 function newPlanBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
+  return iconBtn("plans", "New plan", () => void host.launch("start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
 }
 
 function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
+  return btn("Add to backlog", () => void host.launch("backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
 }
 
 /**
@@ -727,7 +732,7 @@ export class MissionView extends View {
       headline: "No runs in this window",
       support: "Each run opens as its own tab: Run plan, Open interactive and the plan actions start one.",
       compact: true,
-      actions: [plan ? { label: "Run plan", onClick: () => void this.host.runPlan(), act: "empty-run-plan" } : { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" }, { label: "Open interactive", onClick: () => void this.host.interactive(), act: "empty-interactive" }],
+      actions: [plan ? { label: "Run plan", onClick: () => void this.host.runPlan(), act: "empty-run-plan" } : { label: "New plan", onClick: () => void this.host.launch("start-project", NEW_PLAN_WHY), act: "empty-new-plan" }, { label: "Open interactive", onClick: () => void this.host.interactive(), act: "empty-interactive" }],
     });
   }
 
@@ -897,8 +902,8 @@ export class PlansView extends View {
         headline: "No plans yet",
         support: "A plan is a list of to-dos the agent runs one tick at a time. /start-project makes one active; /backlog-add parks one in the backlog.",
         actions: [
-          { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" },
-          { label: "Add to backlog", onClick: () => void this.host.interactive("/backlog-add", BACKLOG_ADD_WHY), act: "empty-backlog-add" },
+          { label: "New plan", onClick: () => void this.host.launch("start-project", NEW_PLAN_WHY), act: "empty-new-plan" },
+          { label: "Add to backlog", onClick: () => void this.host.launch("backlog-add", BACKLOG_ADD_WHY), act: "empty-backlog-add" },
         ],
       });
     return emptyCta({
