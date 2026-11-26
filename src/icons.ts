@@ -44,6 +44,8 @@ const PATHS = {
   workspace: '<rect x="1.5" y="1.5" width="5" height="5" rx="1"/><rect x="9.5" y="1.5" width="5" height="5" rx="1"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>',
   // Colony: a habitat dome on the ground
   colony: '<path d="M2.5 11.5V9a5.5 5.5 0 0111 0v2.5"/><path d="M1 11.5h14M6.5 11.5v-3h2v3"/>',
+  // Memory: a stack of records (a database drum)
+  memory: '<path d="M2.5 4v8.5c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V4"/><path d="M2.5 4c0-1.1 2.5-2 5.5-2s5.5.9 5.5 2-2.5 2-5.5 2-5.5-.9-5.5-2z"/><path d="M2.5 8.25c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2"/>',
   // Workspace sections and cards (the former dashboard spaceIconSvg kinds)
   monitor: '<circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2.5"/><path d="M8 8l4.5-4.5"/>',
   "field-report": '<rect x="3.5" y="3.5" width="9" height="11" rx="1"/><path d="M5.5 3.5v-1a2.5 2.5 0 015 0v1"/><path d="M6 7.5h4M6 10.5h4"/>',

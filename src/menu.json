@@ -1,5 +1,5 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Plans, then the Explorer, the data reload and the Splits submenu: split the focused pane right or down, close a pane, focus, move the tab, swap or move the pane by direction, move a border, equalize, zoom), Go (go to a file, a command, the active file, back and forward), Terminal, Run (the agent runs, then the kit commands that start from a goal or ship: Hotfix, QA, Git staging, Promote to production), Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An item with `items` is a submenu (one level, no id of its own). An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Workspace last, then the Explorer, the data reload and the Splits submenu: split the focused pane right or down, close a pane, focus, move the tab, swap or move the pane by direction, move a border, equalize, zoom), Go (go to a file, a command, the active file, back and forward), Terminal, Run (the agent runs, then the kit commands that start from a goal or ship: Hotfix, QA, Git staging, Promote to production), Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An item with `items` is a submenu (one level, no id of its own). An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -32,11 +32,12 @@
         { "id": "view:review", "label": "Review" },
         { "id": "view:ship", "label": "Ship" },
         { "id": "view:activity", "label": "Activity" },
+        { "id": "view:plans", "label": "Plans" },
+        { "id": "view:memory", "label": "Memory" },
         { "id": "view:terminals", "label": "Terminals" },
         { "id": "view:processes", "label": "Processes" },
-        { "id": "view:workspace", "label": "Workspace" },
         { "id": "view:colony", "label": "Oligarchy" },
-        { "id": "view:plans", "label": "Plans" },
+        { "id": "view:workspace", "label": "Workspace" },
         { "separator": true },
         { "id": "explorer", "label": "Show or hide the Explorer" },
         { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },

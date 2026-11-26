@@ -249,11 +249,11 @@ mod tests {
     fn the_six_menus_hold_their_ids() {
         assert_eq!(menu_ids("File"), ["new-window", "open-folder", "new-file", "new-folder", "save", "save-as", "open-in-editor", "file-manager", "settings", "close-window"]);
         let view = menu_ids("View");
-        assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 13, "{view:?}");
-        assert_eq!(view[..13].iter().filter(|i| i.starts_with("view:")).count(), 13, "the views come first: {view:?}");
-        assert_eq!(view[12], "view:plans", "Plans after the rail items: {view:?}");
-        assert_eq!(view[13..17], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
-        assert_eq!(view[17..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom", "pane-layout-reset"]);
+        assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 14, "{view:?}");
+        assert_eq!(view[..14].iter().filter(|i| i.starts_with("view:")).count(), 14, "the rail items come first: {view:?}");
+        assert_eq!(view[13], "view:workspace", "Workspace last, as on the rail: {view:?}");
+        assert_eq!(view[14..18], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
+        assert_eq!(view[18..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom", "pane-layout-reset"]);
         assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
         assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add", "hotfix", "qa", "git-staging", "git-prod"]);
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn view_lists_the_rail_in_rail_order() {
         let rail: Vec<String> = main_ts_block("const RAIL: RailItem[] = [", "\n];").lines().filter_map(|l| l.trim_start().strip_prefix("{ id: \"")?.split('"').next().map(|id| format!("view:{id}"))).collect();
-        assert_eq!(rail.len(), 12, "{rail:?}");
-        assert_eq!(menu_ids("View")[..12], rail[..]);
+        assert_eq!(rail.len(), 14, "{rail:?}");
+        assert_eq!(menu_ids("View")[..14], rail[..]);
     }
 
     /// Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
