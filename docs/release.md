@@ -13,8 +13,8 @@ Colony publishes under its own identity, not the personal `dadado` account (the 
 | App private key (`.pem`) | in `~/.config/colony-release/` (700 / 600); move into the password manager | operator, owed |
 | Release signing key | Tauri signer key (minisign format), key id `9A9BB4349C2248C6`, private key in the operator's `~/.tauri/colony-updater.key`; secrets `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` set. The public key is pinned in `packaging/install.sh`. | operator |
 | npm account | none: Colony is not on npm, and installs without npm | - |
-| Game content deploy key | a read-only deploy key on the private `agent-kit-startup/colony-game` (title `colony release (read-only)`); its private key is the secret `COLONY_GAME_DEPLOY_KEY` of the Environment `game-content`, whose deployment policy admits only `v*` tags. The release job names that Environment and reads `content/catalog.json` with it (see [Game content](../README.md#game-content)). | operator, owed |
-| CI auth without surprise expiry | the release job uses only the per-run `GITHUB_TOKEN`, the signing key and the game content deploy key (none expires) | - |
+| Game content deploy key | unused since Colony stopped running the game engine (kit ADR 2026-11-17 point 1; the game is the web page loaded from its origin): the read-only deploy key on the private `agent-kit-startup/colony-game` (title `colony release (read-only)`) and the secret `COLONY_GAME_DEPLOY_KEY` of the Environment `game-content` can be deleted. The release job still names that Environment for its deployment policy, which admits only `v*` tags. | operator |
+| CI auth without surprise expiry | the release job uses only the per-run `GITHUB_TOKEN` and the signing key (neither expires) | - |
 | Download host | the GitHub Releases of this public repository (default base of `install.sh`; operator decision `Usar GitHub Releases`, 2026-10-23). No separate release host. | - |
 | `colony.missionkit.io` | a redirect only: `/install.sh` to `https://github.com/agent-kit-startup/colony/releases/latest/download/install.sh` (and `/` to the repository). DNS and the redirect are not set up yet. | operator, owed |
 
@@ -22,7 +22,7 @@ Colony publishes under its own identity, not the personal `dadado` account (the 
 
 1. Bump the same version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json` (merged to `main`).
 2. Push the tag `v<version>` on that commit. Pushing a tag is a release: operator only.
-3. `.github/workflows/release.yml` checks that the tag matches the three versions and that the signing key secret exists (it refuses an unsigned release), fetches the game's catalog from `agent-kit-startup/colony-game` with the `game-content` deploy key and checks it against the engine (an official release without the key or the file fails here), builds with `pnpm tauri build`, runs `cargo test`, assembles the files with `packaging/make-release.sh`, signs `SHA256SUMS` with `pnpm tauri signer sign`, installs the result with `packaging/install.sh` from a `file://` base on the runner, and creates the GitHub release with the files.
+3. `.github/workflows/release.yml` checks that the tag matches the three versions and that the signing key secret exists (it refuses an unsigned release), builds with `pnpm tauri build`, runs `cargo test`, assembles the files with `packaging/make-release.sh`, signs `SHA256SUMS` with `pnpm tauri signer sign`, installs the result with `packaging/install.sh` from a `file://` base on the runner, and creates the GitHub release with the files.
 4. A plain `v<x.y.z>` tag becomes the **Latest** release, which is what `install.sh` installs by default. A tag with a pre-release suffix (`v0.2.0-rc.1`) is created as a prerelease: GitHub never reports a prerelease as latest, so it is only installed with `--version 0.2.0-rc.1`. The version check of step 3 still applies, so the three version files must carry the same suffixed version. The suffix carries into every file name as is: `v0.3.0-rc.1` produced `colony-0.3.0-rc.1-linux-x86_64.tar.gz`, `Colony_0.3.0-rc.1_amd64.deb` and `Colony_0.3.0-rc.1_amd64.AppImage` (release run 41219807456).
 
 Release files:
@@ -119,8 +119,16 @@ Environment: `COLONY_DOWNLOAD_BASE` (`https://` or `file://`; default `https://g
 
 `packaging/smoke/install-smoke.sh` runs offline: it signs a fake release (stub binary, built with `packaging/make-release.sh`) with a throwaway key, serves it over `file://` and installs it into a scratch `HOME` with a `PATH` without `minisign`. Checks: the install with the OpenSSL verifier (and with `minisign` when installed), refusal of a changed `SHA256SUMS`, of a signature by another key, of a changed trusted comment, of a changed tarball and of a non-https base, an upgrade that keeps exactly the previous version, the uninstall (engine kept), and that a foreign launcher is not overwritten.
 
+## Engine signature
+
+The engine Colony installs is a kit release, not part of the Colony release, and it has its own key. `ENGINE_SIGNING_PUBKEY` in `src-tauri/src/engine.rs` pins the kit's engine signing public key (minisign key id `EE66495404D7ADCF`). The kit's tag CI signs the engine's `SHA256SUMS` with the secret `ENGINE_SIGNING_KEY` and publishes `SHA256SUMS.minisig` next to it. `Install engine` and `Update engine` download that file, check it over `SHA256SUMS` before the sha256 is trusted, and refuse a release without a valid one.
+
+- Kit releases up to v6.16.1 have no `SHA256SUMS.minisig`, so a Colony built with the key does not install them, by version or as the newest one. An engine that is already installed keeps running and stays available to `Roll back`: the check runs when an engine is installed, not when it starts.
+- The updater installs the newest kit release inside `ENGINE_PROTOCOL_RANGE` and does not fall back to an older signed one: when that newest release is unsigned, the install fails with `this release has no engine signature`.
+- Before cutting a Colony release, check that the newest kit release inside the range is signed by the pinned key, or a fresh install has no engine to install. Download its `SHA256SUMS` and `SHA256SUMS.minisig` into one folder, then `minisign -Vm SHA256SUMS -P <the RW... line>`, or `COLONY_TEST_ENGINE_SUMS=<folder>/SHA256SUMS cargo test --manifest-path src-tauri/Cargo.toml -- --ignored the_pinned_key_verifies_a_kit_release`.
+- A new key means a new Colony release: the key is a constant in the binary.
+
 ## Not yet
 
 - `install.sh` installing the AppImage (so the curl install updates itself too): the AppImage needs FUSE (`fuse2`) on the host, which Omarchy and Arch do not install by default.
 - macOS and Windows builds, arm64.
-- The managed engine's signature check is implemented (`verify_sums_signature` in `src-tauri/src/engine.rs`: minisign over `SHA256SUMS`, fails closed without `SHA256SUMS.minisig`) but off: `ENGINE_SIGNING_PUBKEY` stays `None` until the kit's engine signing key exists; then its `RW...` public key line goes there.

@@ -39,6 +39,9 @@ export interface LayoutSettings {
   /** Where new terminal tabs of each kind open (unset kind: its default). Saved on its own
    *  patch when the operator moves a tab, never by the panel-change save. */
   terminalPlacement?: { shell?: "editor" | "panel"; interactive?: "editor" | "panel"; queue?: "editor" | "panel" };
+  /** The centre split tree per folder (panes.ts SavedPanes, plus the write time `at`). Saved on
+   *  its own patch whenever the tree or a strip changes; `{ "<folder>": null }` resets one. */
+  panes?: Record<string, unknown>;
 }
 export interface WorkspaceInfo { root: string; name: string; isGit: boolean; hasKit: boolean; hasHandoff: boolean }
 export interface Entry { name: string; path: string; isDir: boolean }
@@ -119,8 +122,10 @@ export interface ContextSource { label: string; kind: string; path: string; exis
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
 /** One row of the kit's commands catalog; `run` is Colony's Rust-side allowlist verdict. */
-export interface CommandRow { name: string; description: string; layer: string; headless: boolean; run: boolean }
-export interface CommandsCatalog { catalogVersion: string; kitVersion: string; commands: CommandRow[]; dropped: number }
+/** One catalog row (catalog.rs `CommandRow`). `context`, `interactiveOnly`, `audience` and
+ *  `hidden` come from catalog 1.1.0; Rust fills today's defaults for an older catalog. */
+export interface CommandRow { name: string; description: string; layer: string; headless: boolean; run: boolean; context?: string; interactiveOnly?: boolean; audience?: string; hidden?: boolean }
+export interface CommandsCatalog { catalogVersion: string; kitVersion: string; commands: CommandRow[]; dropped: number; factory?: boolean }
 export interface TermLaunch { argv: string[]; label: string; bin: string; note: string }
 export interface ChatSession { id: string; title: string; titleSource: "custom" | "ai" | "first-prompt" | "none"; modified: number; sizeBytes: number }
 export interface ChatList { vendor: string; status: "ok" | "unsupported"; note: string; dir: string | null; total: number; sessions: ChatSession[] }

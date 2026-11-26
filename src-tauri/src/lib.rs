@@ -15,6 +15,7 @@ mod dragdrop;
 mod engine;
 mod filemanager;
 mod forge;
+mod gameframe;
 mod gitops;
 mod hostreq;
 #[cfg(unix)]
@@ -462,6 +463,13 @@ pub fn run() {
                 // `navigator.clipboard.readText()` and `execCommand('paste')` are refused, so
                 // the terminal's Ctrl+Shift+V and Monaco's menu Paste paste nothing.
                 .enable_clipboard_access()
+                // Colony's own page and the Oligarchy game's origin only, in any frame.
+                .on_navigation(gameframe::navigation_allowed)
+                .on_page_load(|_, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Started {
+                        gameframe::app_committed();
+                    }
+                })
                 .build()?;
             Ok(())
         })
@@ -544,11 +552,13 @@ mod tests {
     }
 
     #[test]
-    fn no_frames_no_web_panel() {
+    fn one_frame_the_game_no_web_panel() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let csp = conf["app"]["security"]["csp"].as_str().unwrap();
-        assert!(csp.contains("frame-src 'none'"), "{csp}");
-        assert!(!csp.contains("127.0.0.1"), "{csp}");
+        // The game's origin is the only frame source (gameframe.rs checks the exact value).
+        assert!(csp.contains(&format!("frame-src {};", crate::gameframe::GAME_ORIGIN)), "{csp}");
+        assert!(!csp.contains("127.0.0.1") && !csp.contains('*'), "{csp}");
+        assert!(include_str!("../../src/oligarchyview.ts").contains("sandbox: FRAME_SANDBOX"), "the game frame is sandboxed");
         let main = include_str!("../../src/main.ts");
         for gone in ["h(\"iframe\"", "__MISSION_CONTROL_ACTIONS__", "openWebPanel", "mc-action"] {
             assert!(!main.contains(gone), "src/main.ts still has {gone}");

@@ -15,7 +15,38 @@ export const SHORTCUTS: Readonly<Record<string, string>> = {
   terminal: "Ctrl+`",
   "nav-back": "Alt+Left",
   "nav-forward": "Alt+Right",
+  // The split tree (View → Splits; kit ADR 2026-10-24 amend 2026-11-19 point 4): Ctrl+Alt,
+  // clear of Alt+arrows (Back / Forward), Ctrl+digits (the rail), Ctrl+Shift+C / V (terminal
+  // copy and paste) and Monaco's Linux keys. paneKey maps the key events to these ids.
+  "split-right": "Ctrl+Alt+\\",
+  "split-down": "Ctrl+Alt+-",
+  "pane-focus-left": "Ctrl+Alt+Left",
+  "pane-focus-right": "Ctrl+Alt+Right",
+  "pane-focus-up": "Ctrl+Alt+Up",
+  "pane-focus-down": "Ctrl+Alt+Down",
+  "pane-focus-next": "Ctrl+Alt+PageDown",
+  "pane-focus-prev": "Ctrl+Alt+PageUp",
+  "tab-to-pane-left": "Ctrl+Alt+Shift+Left",
+  "tab-to-pane-right": "Ctrl+Alt+Shift+Right",
+  "tab-to-pane-up": "Ctrl+Alt+Shift+Up",
+  "tab-to-pane-down": "Ctrl+Alt+Shift+Down",
+  "pane-equalize": "Ctrl+Alt+0",
+  "pane-zoom": "Ctrl+Alt+Z",
 };
+
+const ARROW: Readonly<Record<string, string>> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+
+/** The split-tree action a Ctrl+Alt key press runs (`code`: KeyboardEvent.code, so the key
+ *  position counts, not the layout), or null. Ctrl+Alt+Shift+Up / Down are left to a focused
+ *  editor (`inEditor`), where Monaco copies the line up / down. */
+export function paneKey(code: string, shift: boolean, inEditor: boolean): string | null {
+  const dir = ARROW[code];
+  if (dir && !shift) return `pane-focus-${dir}`;
+  if (dir) return inEditor && (dir === "up" || dir === "down") ? null : `tab-to-pane-${dir}`;
+  if (shift) return null;
+  const plain: Record<string, string> = { PageDown: "pane-focus-next", PageUp: "pane-focus-prev", Digit0: "pane-equalize", KeyZ: "pane-zoom", Backslash: "split-right", Minus: "split-down" };
+  return plain[code] ?? null;
+}
 
 export interface ShortcutRow { keys: string; name: string }
 

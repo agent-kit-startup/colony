@@ -181,7 +181,7 @@ button.has-icon { display: inline-flex; align-items: center; gap: 4px; }
 .rail-item.active { color: var(--text-primary); border-color: var(--border-active); }
 .rail-item.on { color: var(--text-primary); }
 .rail-item.on .rail-icon { color: var(--green); }
-#tabs.tabbar-empty { display: none; }
+.pane-tabs.tabbar-empty { display: none; }
 /* Whole words only: a label wraps between words (Flight Log), never inside one. */
 .rail-item .lbl { max-width: 100%; text-align: center; }
 .rail-icon-wrap { position: relative; display: inline-flex; }
@@ -256,7 +256,30 @@ button.icon { padding: 0 6px; background: transparent; border-color: transparent
 .tab-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
 .tab.exited { opacity: 0.6; }
 .tab-add { border: 0; background: transparent; padding: 0 12px; font-size: 16px; color: var(--text-secondary); }
-#views { flex: 1; position: relative; min-height: 0; }
+/* The centre split tree (kit ADR 2026-10-24 amend 2026-11-19): nested flex boxes of panes,
+   a divider between two halves. Each pane: its strip, then its views host. */
+#panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.pane-split { display: flex; min-width: 0; min-height: 0; }
+.pane-split[data-dir="right"] { flex-direction: row; }
+.pane-split[data-dir="down"] { flex-direction: column; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1 1 0; }
+/* With more than one pane, the focused one shows by its 1px border colour only (no accent
+   bar, no tint); one pane looks as before splits. */
+#panes.multi .pane { border: 1px solid transparent; }
+#panes.multi .pane.focused { border-color: var(--border-active); }
+/* Zoom (View → Splits → Zoom the pane, Ctrl+Alt+Z): the zoomed pane fills the tree, the other
+   panes and the dividers are hidden, the ratios are kept for when the zoom ends. */
+#panes.zoomed .pane:not(.zoomed), #panes.zoomed .pane-divider, #panes.zoomed .pane-split:not(:has(.pane.zoomed)) { display: none; }
+#panes.zoomed .pane-split > * { flex: 1 1 0 !important; }
+.pane-divider { flex: none; background: var(--border); position: relative; z-index: 1; }
+.pane-divider[data-dir="right"] { width: 1px; cursor: col-resize; }
+.pane-divider[data-dir="down"] { height: 1px; cursor: row-resize; }
+/* A wider grab area than the 1px line. */
+.pane-divider::after { content: ""; position: absolute; inset: 0; }
+.pane-divider[data-dir="right"]::after { left: -3px; right: -3px; }
+.pane-divider[data-dir="down"]::after { top: -3px; bottom: -3px; }
+.pane-views { flex: 1; position: relative; min-height: 0; }
+.pane-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
 .view { position: absolute; inset: 0; }
 #welcome { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg-primary); }
 #welcome h1 { display: flex; align-items: center; gap: 12px; margin: 0; font-weight: 600; }
@@ -429,12 +452,12 @@ label.check { display: flex; gap: 6px; align-items: center; color: var(--text-se
 .tabbar .tab.active .tab-icon { color: var(--blue); }
 .tabbar .tab .badge { margin-left: -2px; }
 .badge.muted { background: var(--bg-card-hover); color: var(--text-secondary); }
-#tabs { overflow: hidden; }
+.pane-tabs { overflow: hidden; }
 .tabs-docs { display: flex; gap: 1px; overflow-x: auto; min-width: 0; flex: 1; }
 .tabs-docs::-webkit-scrollbar { height: 3px; }
 .tab-sep { width: 1px; background: var(--border); margin: 6px 4px; flex: none; }
-/* Back / Forward head the strip, built once (only #tabs-rest is re-rendered). */
-#tabs-rest { display: contents; }
+/* Back / Forward head each strip, built once (only .tabs-rest is re-rendered). */
+.tabs-rest { display: contents; }
 .tab-nav { display: flex; flex: none; align-items: center; gap: 2px; padding: 0 4px 0 6px; }
 .tab-nav button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border-color: transparent; color: var(--text-secondary); }
 .tab-nav button:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-active); }
@@ -851,13 +874,13 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .md-link-text { text-decoration: underline dotted; text-underline-offset: 2px; }
 
 /* ---- Markdown file tabs: Preview | Editor (plans and HANDOFF open rendered) ------------ */
-#view-editor { display: flex; flex-direction: column; }
-#monaco-host { flex: 1; min-height: 0; position: relative; }
-#doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-#doc-bar button { padding: 2px 10px; background: transparent; }
+.pane-editor { display: flex; flex-direction: column; }
+.monaco-host { flex: 1; min-height: 0; position: relative; }
+.doc-bar { display: flex; flex: none; gap: 4px; align-items: center; padding: 4px 10px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.doc-bar button { padding: 2px 10px; background: transparent; }
 /* The shown mode: its border colour only. */
-#doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
-#doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.doc-bar button.active { border-color: var(--border-active); color: var(--text-primary); }
+.doc-preview { flex: 1; min-height: 0; overflow: auto; outline: none; }
 .md-doc { max-width: 980px; margin: 0 auto; padding: 16px 24px 40px; }
 .md-doc.prose, .md-doc .prose { font-size: 14px; }
 .md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4, .md-doc h5, .md-doc h6 { margin: 18px 0 6px; line-height: 1.3; color: var(--text-primary); }
@@ -982,47 +1005,29 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
 #btn-settings[aria-current="page"] { border-color: var(--border-active); }
 
-/* Native kit views (src/kitviews.ts): list rows, and the Colony game. Active filters and
+/* Native kit views (src/kitviews.ts): list rows. Active filters and
    rows change only their 1px border colour (no bar, no inset, no tint). */
 .kv-row { display: flex; flex-direction: column; gap: 2px; padding: var(--mc-space-sm) 0; border-top: 1px solid var(--border); min-width: 0; }
 .card-header + .kv-row { border-top: 0; }
 .kv-row .row { padding: 0; }
 .kv-row .now-meta { margin-top: 2px; }
 button.kv-filter.on { background: transparent; border-color: var(--border-active); }
-.colony-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr); gap: var(--mc-space-xl); align-items: start; }
-@media (max-width: 1100px) { .colony-layout { grid-template-columns: minmax(0, 1fr); } }
-.colony-map { display: block; width: 100%; max-width: 420px; margin: 0 auto; height: auto; }
-.colony-tile { stroke: var(--bg-primary); stroke-width: 1; }
-.colony-tile[data-tile="fog"] { fill: var(--bg-secondary); }
-.colony-tile[data-tile="barren"] { fill: #4b5563; }
-.colony-tile[data-tile="green"] { fill: #3f7d5a; }
-.colony-tile[data-tile="ground"] { fill: #5b6148; }
-.colony-tile[data-tile="ground"][data-terrain="v"] { fill: #3d4a3a; }
-.colony-tile[data-tile="ground"][data-terrain="s"] { fill: #565e66; }
-.colony-tile[data-tile="ground"][data-terrain="e"] { fill: #66704f; }
-.colony-tile[data-hex] { cursor: default; }
-.colony-tile.selected { stroke: var(--border-active); stroke-width: 1; }
-.colony-glyph { font: 600 11px var(--mc-font-mono); fill: #f5e6c8; pointer-events: auto; }
-.colony-glyph[data-mark="queued"] { opacity: 0.55; }
-.colony-glyph[data-mark="offline"] { fill: #e08a6b; }
-.colony-counters { display: flex; flex-wrap: wrap; gap: 6px; }
-.colony-counters button:disabled { cursor: not-allowed; opacity: 0.6; }
-.colony-card-art-none { display: grid; place-items: center; }
-.colony-card-glyph { font: 600 22px var(--mc-font-mono); color: var(--text-secondary); }
-.colony-side { display: flex; flex-direction: column; gap: var(--mc-space-lg); }
-.colony-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--mc-space-md); }
-.colony-resource { border: 1px solid var(--border); border-radius: var(--mc-radius); padding: var(--mc-space-md); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.colony-resource-value { font: 600 20px var(--mc-font-mono); color: var(--text-primary); }
-.colony-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--mc-space-lg); }
-.colony-card { gap: 6px; }
-.colony-card-art { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--mc-radius-chrome); background: var(--bg-secondary); }
-.colony-card button { align-self: flex-start; }
-.colony-card button:disabled { cursor: not-allowed; opacity: 0.6; }
+/* Oligarchy (src/oligarchyview.ts): the web game in a frame that fills the view, a one-line
+   bar above it, and the network-needed state. Border colour only, no fill, no accent bar. */
+.kv-oligarchy { overflow: hidden; }
+.kv-oligarchy .cv-body { height: 100%; padding: 0; gap: 0; }
+.oligarchy-bar { display: flex; align-items: center; gap: var(--mc-space-md); padding: var(--mc-space-sm) var(--mc-space-lg); border-bottom: 1px solid var(--border); min-width: 0; }
+.oligarchy-bar .oligarchy-origin { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oligarchy-frame { flex: 1; display: block; width: 100%; min-height: 0; border: 0; background: var(--bg-primary); }
+.oligarchy-offline { flex: 1; display: grid; place-items: center; padding: var(--mc-space-xl); }
 /* Terminal tabs move between the editor area and the panel (kit ADR 2026-10-24 amend
    2026-11-07): while a tab is dragged, the bar it would land on shows a 1px line in the accent
    colour, drawn as an outline so nothing shifts. No fill, no accent bar, no inset shadow. */
 #shell.tab-dragging, #shell.tab-dragging * { cursor: grabbing; user-select: none; }
 .tabbar.drop-target { outline: 1px solid var(--blue); outline-offset: -1px; }
+/* Drag to dock (free tiling t4): the part of a pane a dropped tab would take, as an unfilled
+   1px box, never a fill or an accent bar. */
+.drop-zone { position: fixed; z-index: 50; border: 1px solid var(--blue); background: none; pointer-events: none; box-sizing: border-box; }
 
 /* Conflict window (src/conflicts.ts): file list | hunks, each hunk ours | theirs | result.
    Selected and resolved items change their 1px border colour only (no bar, no tint). */

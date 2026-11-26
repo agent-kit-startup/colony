@@ -15,8 +15,11 @@ import { runLabel, runs } from "./runs";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { ago, btn, card, chip, empty, pill, rerender } from "./ui";
 
-/** Kit commands the Inbox may hand to an interactive agent: a subset of src-tauri vendor.rs PROMPT_SLASH (pinned by its tests). */
-const ASKABLE = /^\/(plan-review-triage|field-report-resolve|continue-plan|run-plan|backlog-edit|archive-plan|backlog-cancel|backlog-delete|cancel-plan|agent-kit-onboard|start-project|backlog-add)( [A-Za-z0-9._:/-]{1,240})?$/;
+/** Kit commands the Inbox may hand to an interactive agent: the user-audience names of
+ *  src-tauri vendor.rs PROMPT_SLASH (pinned by its tests) without /git-prod and /kit-prod
+ *  (never from the Inbox), plus at most one plain token that does not start with `-` and has
+ *  no `..` segment (vendor.rs `valid_token`, so Rust never refuses a click after the fact). */
+export const ASKABLE = /^\/(agent-kit-onboard|archive-plan|backlog-add|backlog-cancel|backlog-delete|backlog-edit|cancel-plan|context-status|continue-plan|dashboard|dashboard-broadcast|dogfood|field-report-resolve|git-staging|handoff|hotfix|plan-review-triage|qa|run-plan|run-plan-all|start-project|summary|tips|update)( (?!-)(?!(?:[^ ]*\/)?\.\.(?:\/|$))[A-Za-z0-9._:/-]{1,240})?$/;
 
 /** The plan remove commands (also in the plan CRUD dropdown): they archive or drop a plan. */
 const REMOVES = /^\/(archive-plan|backlog-cancel|backlog-delete) /;

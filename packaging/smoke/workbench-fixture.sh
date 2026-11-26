@@ -3,8 +3,13 @@
 # colony-explorer-git-workbench x8). Run by the smoke from a terminal tab in the scratch
 # workspace, after every other git step, so the history it adds never meets them:
 #   graph     a side branch merged with --no-ff (the commit graph draws a merge)
-#   conflict  two files changed on both sides, then a merge that stops on them
+#   conflict  two files changed on both sides, then a merge that stops on them (the
+#             shape of the operator's dogfood repo: one changed line per file, so the kit
+#             reads the merge base of both from the index)
 #   commit    the merge commit, once the window has staged every resolved file
+#   theme     switch the Omarchy theme under $HOME to the stock theme named in
+#             COLONY_SMOKE_THEME_SWITCH (a skip without it, so a real HOME is never touched)
+#   theme-restore  put the theme back as it was before `theme`
 # Commits name only their own paths, and the merges refuse a staged index, so the other
 # steps' leftovers (an edited README, untracked proofs) stay out of every commit.
 # Use it on a scratch clone only.
@@ -31,16 +36,16 @@ case "${1:-}" in
   conflict)
     clean_index
     mkdir -p smoke-merge
-    printf 'name = colony\nport = 8080\n\nmode = dev\nlevel = 1\n' > smoke-merge/app.conf
-    printf 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n' > smoke-merge/config.ts
+    printf 'name = colony\nport = 8080\nlog = info\n' > smoke-merge/app.conf
+    printf 'export const mode = "dev";\nexport const retries = 3;\n' > smoke-merge/config.ts
     commit_dir smoke-merge "feat: conflict base (Colony smoke)"
     $G checkout -q -b smoke/conflict-theirs
-    printf 'name = colony\nport = 9090\n\nmode = prod\nlevel = 1\n' > smoke-merge/app.conf
-    printf 'export const a = 1;\nexport const b = 20;\nexport const c = 3;\n' > smoke-merge/config.ts
+    printf 'name = colony\nport = 9090\nlog = info\n' > smoke-merge/app.conf
+    printf 'export const mode = "prod";\nexport const retries = 3;\n' > smoke-merge/config.ts
     commit_dir smoke-merge "feat: conflict theirs (Colony smoke)"
     $G checkout -q "$here"
-    printf 'name = colony\nport = 7070\n\nmode = test\nlevel = 1\n' > smoke-merge/app.conf
-    printf 'export const a = 1;\nexport const b = 200;\nexport const c = 3;\n' > smoke-merge/config.ts
+    printf 'name = colony\nport = 8081\nlog = info\n' > smoke-merge/app.conf
+    printf 'export const mode = "staging";\nexport const retries = 3;\n' > smoke-merge/config.ts
     commit_dir smoke-merge "feat: conflict ours (Colony smoke)"
     if $G merge -q --no-edit smoke/conflict-theirs; then echo "fixture: the merge did not conflict" >&2; exit 1; fi
     git ls-files -u | cut -f2 | sort -u
@@ -50,8 +55,26 @@ case "${1:-}" in
     $G commit -q --no-edit
     $G log --oneline -1
     ;;
+  theme)
+    [ -n "${COLONY_SMOKE_THEME_SWITCH:-}" ] || { echo "skip: COLONY_SMOKE_THEME_SWITCH is not set"; exit 0; }
+    cur="$HOME/.local/state/omarchy/current"
+    src="/usr/share/omarchy/themes/$COLONY_SMOKE_THEME_SWITCH/colors.toml"
+    [ -f "$cur/theme/colors.toml" ] && [ -f "$src" ] || { echo "fixture: no Omarchy theme to switch" >&2; exit 1; }
+    [ -f "$cur/theme/colors.toml.smoke-orig" ] || cp "$cur/theme/colors.toml" "$cur/theme/colors.toml.smoke-orig"
+    [ -f "$cur/theme.name.smoke-orig" ] || cp "$cur/theme.name" "$cur/theme.name.smoke-orig" 2>/dev/null || true
+    cp "$src" "$cur/theme/colors.toml.new" && mv "$cur/theme/colors.toml.new" "$cur/theme/colors.toml"
+    printf '%s\n' "$COLONY_SMOKE_THEME_SWITCH" > "$cur/theme.name"
+    echo "switched to $COLONY_SMOKE_THEME_SWITCH"
+    ;;
+  theme-restore)
+    cur="$HOME/.local/state/omarchy/current"
+    [ -f "$cur/theme/colors.toml.smoke-orig" ] || { echo "skip: nothing to restore"; exit 0; }
+    mv "$cur/theme/colors.toml.smoke-orig" "$cur/theme/colors.toml"
+    [ ! -f "$cur/theme.name.smoke-orig" ] || mv "$cur/theme.name.smoke-orig" "$cur/theme.name"
+    echo restored
+    ;;
   *)
-    echo "usage: workbench-fixture.sh graph|conflict|commit" >&2
+    echo "usage: workbench-fixture.sh graph|conflict|commit|theme|theme-restore" >&2
     exit 64
     ;;
 esac

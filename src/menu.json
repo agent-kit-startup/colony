@@ -1,5 +1,5 @@
 {
-  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Workspace last, then the Explorer and the data reload), Go (go to a file, a command, the active file, back and forward), Terminal, Run, Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
+  "$comment": "One command source. `menus` is the native menu bar (src-tauri/src/menu.rs builds it; the custom title bar opens the same menus as popups): File (windows, folders, files, Settings…), View (the rail items in rail order, Workspace last, then the Explorer, the data reload and the Splits submenu: split the focused pane right or down, close a pane, focus, move the tab, swap or move the pane by direction, move a border, equalize, zoom), Go (go to a file, a command, the active file, back and forward), Terminal, Run (the agent runs, then the kit commands that start from a goal or ship: Hotfix, QA, Git staging, Promote to production), Help. `config` is the action rows of the Settings view (the top bar gear and File → Settings… show it), which holds settings only: src/main.ts renders each row under its `group` label, after the Appearance choices (Skin, Title bar, Rail) of its own markup; `omarchyOnly` rows show on Omarchy only. An item with `items` is a submenu (one level, no id of its own). An id lives in exactly one of the two (menu.rs tests check it against the action map in src/main.ts, runAction), and the Commands palette lists both. No mnemonics (& or _) and no accelerators: GTK would take those keys from the terminals and the editor.",
   "menus": [
     {
       "label": "File",
@@ -36,14 +36,53 @@
         { "id": "view:memory", "label": "Memory" },
         { "id": "view:terminals", "label": "Terminals" },
         { "id": "view:processes", "label": "Processes" },
-        { "id": "view:colony", "label": "Colony" },
+        { "id": "view:colony", "label": "Oligarchy" },
         { "id": "view:workspace", "label": "Workspace" },
         { "separator": true },
         { "id": "explorer", "label": "Show or hide the Explorer" },
         { "id": "explorer-collapse", "label": "Collapse folders in the Explorer" },
         { "id": "explorer-refresh", "label": "Refresh the Explorer" },
         { "separator": true },
-        { "id": "refresh", "label": "Reload Mission Control data" }
+        { "id": "refresh", "label": "Reload Mission Control data" },
+        { "separator": true },
+        {
+          "label": "Splits",
+          "items": [
+            { "id": "split-right", "label": "Split right" },
+            { "id": "split-down", "label": "Split down" },
+            { "id": "pane-close", "label": "Close pane" },
+            { "separator": true },
+            { "id": "pane-focus-left", "label": "Focus the pane on the left" },
+            { "id": "pane-focus-right", "label": "Focus the pane on the right" },
+            { "id": "pane-focus-up", "label": "Focus the pane above" },
+            { "id": "pane-focus-down", "label": "Focus the pane below" },
+            { "id": "pane-focus-next", "label": "Focus the next pane" },
+            { "id": "pane-focus-prev", "label": "Focus the previous pane" },
+            { "separator": true },
+            { "id": "tab-to-pane-left", "label": "Move the tab to the pane on the left" },
+            { "id": "tab-to-pane-right", "label": "Move the tab to the pane on the right" },
+            { "id": "tab-to-pane-up", "label": "Move the tab to the pane above" },
+            { "id": "tab-to-pane-down", "label": "Move the tab to the pane below" },
+            { "separator": true },
+            { "id": "pane-swap-left", "label": "Swap with the pane on the left" },
+            { "id": "pane-swap-right", "label": "Swap with the pane on the right" },
+            { "id": "pane-swap-up", "label": "Swap with the pane above" },
+            { "id": "pane-swap-down", "label": "Swap with the pane below" },
+            { "id": "pane-move-left", "label": "Move the pane left" },
+            { "id": "pane-move-right", "label": "Move the pane right" },
+            { "id": "pane-move-up", "label": "Move the pane up" },
+            { "id": "pane-move-down", "label": "Move the pane down" },
+            { "separator": true },
+            { "id": "pane-resize-left", "label": "Move the border left" },
+            { "id": "pane-resize-right", "label": "Move the border right" },
+            { "id": "pane-resize-up", "label": "Move the border up" },
+            { "id": "pane-resize-down", "label": "Move the border down" },
+            { "id": "pane-equalize", "label": "Equalize the panes" },
+            { "id": "pane-zoom", "label": "Zoom the pane (toggle)" },
+            { "separator": true },
+            { "id": "pane-layout-reset", "label": "Reset the layout" }
+          ]
+        }
       ]
     },
     {
@@ -83,7 +122,12 @@
         { "id": "interactive", "label": "Interactive agent" },
         { "separator": true },
         { "id": "start-project", "label": "Start a project…" },
-        { "id": "backlog-add", "label": "Create plan (backlog)…" }
+        { "id": "backlog-add", "label": "Create plan (backlog)…" },
+        { "separator": true },
+        { "id": "hotfix", "label": "Hotfix…" },
+        { "id": "qa", "label": "QA…" },
+        { "id": "git-staging", "label": "Git staging…" },
+        { "id": "git-prod", "label": "Promote to production…" }
       ]
     },
     {

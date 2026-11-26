@@ -89,6 +89,15 @@ pub struct LayoutSettings {
     /// operator moves a tab, never with the rest of the layout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_placement: Option<TerminalPlacement>,
+    /// The centre split tree per workspace folder (kit ADR 2026-10-24, amend 2026-11-19 free
+    /// tiling point 6): `{ "<folder>": { "tree", "focused", "at" } }`. A leaf is
+    /// `{pane, tabs, active?}`, a split `{split: "right" | "down", ratio, a, b}`; a tab is
+    /// `{file, mode?}` (a path inside the folder) or `{terminal}` (a shell's last folder,
+    /// restored as a fresh shell). `at` (ms since the epoch) is set here on every write; past
+    /// `MAX_PANE_FOLDERS` the oldest folder goes. Written on its own patch, never by the
+    /// panel-change save; see `merge_panes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panes: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// The remembered bar per terminal kind: `editor` (the centre tab bar) or `panel` (the
@@ -156,6 +165,7 @@ pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<
             "terminalHeight" => l.terminal_height = px(v)?,
             "terminalWidth" => l.terminal_width = px(v)?,
             "terminalPlacement" => l.terminal_placement = merge_placement(l.terminal_placement.take().unwrap_or_default(), v)?,
+            "panes" => l.panes = merge_panes(l.panes.take().unwrap_or_default(), v, now_ms())?,
             _ => return Err(format!("Unknown layout field: {k}")),
         }
     }
@@ -184,6 +194,158 @@ fn merge_placement(mut p: TerminalPlacement, v: &serde_json::Value) -> Result<Op
         };
     }
     Ok(if p == TerminalPlacement::default() { None } else { Some(p) })
+}
+
+/// Limits of a saved split tree: more panes than Colony opens (`MAX_PANES` in src/panes.ts),
+/// a deeper tree, or more tabs than this in one pane is a hand-edit gone wrong, not a layout.
+pub const MAX_SAVED_PANES: usize = 16;
+pub const MAX_PANE_DEPTH: usize = 16;
+pub const MAX_PANE_TABS: usize = 64;
+/// Folders whose tree is kept; a write past this drops the least recently written one.
+pub const MAX_PANE_FOLDERS: usize = 32;
+const MAX_PANE_PATH: usize = 4096;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// `panes`: `null` clears every folder (Reset layout on every folder); an object maps folder
+/// paths to a tree (validated, then it replaces that folder's tree, stamped `at`) or `null`
+/// (that folder's reset). Folders not named keep their tree, so two windows on two folders
+/// never overwrite each other. Any malformed tree is an error: nothing is written then.
+fn merge_panes(mut all: serde_json::Map<String, serde_json::Value>, v: &serde_json::Value, at: u64) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let obj = v.as_object().ok_or_else(|| format!("layout.panes: {v} is not an object"))?;
+    for (folder, saved) in obj {
+        if !folder.starts_with('/') || folder.len() > MAX_PANE_PATH {
+            return Err(format!("layout.panes: {folder:?} is not an absolute folder path"));
+        }
+        if saved.is_null() {
+            all.remove(folder);
+            continue;
+        }
+        let mut entry = check_saved_panes(saved).map_err(|e| format!("layout.panes[{folder:?}]: {e}"))?;
+        entry.insert("at".into(), at.into());
+        all.insert(folder.clone(), serde_json::Value::Object(entry));
+    }
+    while all.len() > MAX_PANE_FOLDERS {
+        let oldest = all.iter().min_by_key(|(_, e)| e.get("at").and_then(|a| a.as_u64()).unwrap_or(0)).map(|(k, _)| k.clone());
+        match oldest {
+            Some(k) => all.remove(&k),
+            None => break,
+        };
+    }
+    Ok(if all.is_empty() { None } else { Some(all) })
+}
+
+/// One folder's saved tree: `{tree, focused}` (an `at` in the patch is ignored, the write
+/// sets it). Returns the entry to store, without `at`.
+fn check_saved_panes(v: &serde_json::Value) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let obj = v.as_object().ok_or("not an object")?;
+    for k in obj.keys() {
+        if !matches!(k.as_str(), "tree" | "focused" | "at") {
+            return Err(format!("unknown field {k}"));
+        }
+    }
+    let tree = obj.get("tree").ok_or("no tree")?;
+    let mut ids = Vec::new();
+    check_pane_node(tree, 0, &mut ids)?;
+    let focused = obj.get("focused").and_then(|f| f.as_str()).ok_or("focused is not a pane id")?;
+    if !ids.iter().any(|i| i == focused) {
+        return Err(format!("focused {focused:?} is not a pane of the tree"));
+    }
+    let mut out = serde_json::Map::new();
+    out.insert("tree".into(), tree.clone());
+    out.insert("focused".into(), focused.into());
+    Ok(out)
+}
+
+fn check_pane_node(n: &serde_json::Value, depth: usize, ids: &mut Vec<String>) -> Result<(), String> {
+    if depth > MAX_PANE_DEPTH {
+        return Err(format!("deeper than {MAX_PANE_DEPTH} splits"));
+    }
+    let obj = n.as_object().ok_or_else(|| format!("{n} is not a node"))?;
+    if obj.contains_key("pane") {
+        for k in obj.keys() {
+            if !matches!(k.as_str(), "pane" | "tabs" | "active") {
+                return Err(format!("pane: unknown field {k}"));
+            }
+        }
+        let id = obj["pane"].as_str().filter(|s| !s.is_empty() && s.len() <= 16).ok_or("pane id is not a short string")?;
+        if ids.iter().any(|i| i == id) {
+            return Err(format!("pane {id:?} appears twice"));
+        }
+        ids.push(id.to_string());
+        if ids.len() > MAX_SAVED_PANES {
+            return Err(format!("more than {MAX_SAVED_PANES} panes"));
+        }
+        let tabs = match obj.get("tabs") {
+            None => &[][..],
+            Some(t) => t.as_array().map(|a| a.as_slice()).ok_or("tabs is not a list")?,
+        };
+        if tabs.len() > MAX_PANE_TABS {
+            return Err(format!("pane {id:?}: more than {MAX_PANE_TABS} tabs"));
+        }
+        for t in tabs {
+            check_saved_tab(t).map_err(|e| format!("pane {id:?}: {e}"))?;
+        }
+        if let Some(a) = obj.get("active") {
+            if !a.is_null() && !a.as_u64().is_some_and(|i| (i as usize) < tabs.len()) {
+                return Err(format!("pane {id:?}: active {a} is not one of its tabs"));
+            }
+        }
+        return Ok(());
+    }
+    for k in obj.keys() {
+        if !matches!(k.as_str(), "split" | "ratio" | "a" | "b") {
+            return Err(format!("split: unknown field {k}"));
+        }
+    }
+    match obj.get("split").and_then(|s| s.as_str()) {
+        Some("right" | "down") => {}
+        _ => return Err(format!("{n} is neither a pane nor a split (right or down)")),
+    }
+    match obj.get("ratio").and_then(|r| r.as_f64()) {
+        Some(r) if r > 0.0 && r < 1.0 => {}
+        _ => return Err("ratio is not between 0 and 1".into()),
+    }
+    check_pane_node(obj.get("a").ok_or("split without a")?, depth + 1, ids)?;
+    check_pane_node(obj.get("b").ok_or("split without b")?, depth + 1, ids)
+}
+
+/// A saved tab: `{file, mode?}` or `{terminal}`, each a path relative to the folder (no
+/// leading `/`, no `..` or empty part); `""` or `.` for a terminal in the folder itself.
+fn check_saved_tab(t: &serde_json::Value) -> Result<(), String> {
+    let obj = t.as_object().ok_or_else(|| format!("tab {t} is not an object"))?;
+    let rel = |p: &serde_json::Value, empty_ok: bool| -> Result<(), String> {
+        let s = p.as_str().ok_or_else(|| format!("tab path {p} is not a string"))?;
+        if s.len() > MAX_PANE_PATH || s.starts_with('/') || (!s.is_empty() && s.split('/').any(|seg| seg == ".." || seg.is_empty())) || (!empty_ok && (s.is_empty() || s == ".")) {
+            return Err(format!("tab path {s:?} is not inside the folder"));
+        }
+        Ok(())
+    };
+    if let Some(f) = obj.get("file") {
+        for k in obj.keys() {
+            if !matches!(k.as_str(), "file" | "mode") {
+                return Err(format!("file tab: unknown field {k}"));
+            }
+        }
+        rel(f, false)?;
+        return match obj.get("mode") {
+            None => Ok(()),
+            Some(m) if m == "preview" || m == "editor" => Ok(()),
+            Some(m) => Err(format!("file tab: mode {m} (preview or editor)")),
+        };
+    }
+    if let Some(d) = obj.get("terminal") {
+        if obj.len() != 1 {
+            return Err("terminal tab: only `terminal`".into());
+        }
+        return rel(d, true);
+    }
+    Err(format!("tab {t} is neither a file nor a terminal"))
 }
 
 pub const SKINS: &[&str] = &["bare-metal", "legacy", "omarchy"];
@@ -622,6 +784,129 @@ mod tests {
         // no memory: the key is absent, not null
         let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top"}}}"#).unwrap();
         assert!(serde_json::to_value(&s).unwrap()["ui"]["layout"].get("terminalPlacement").is_none());
+    }
+
+    fn two_panes() -> serde_json::Value {
+        serde_json::json!({
+            "tree": {"split": "right", "ratio": 0.4,
+                "a": {"pane": "p1", "tabs": [{"file": "src/main.ts"}, {"file": "README.md", "mode": "preview"}], "active": 1},
+                "b": {"pane": "p2", "tabs": [{"terminal": "src"}, {"terminal": ""}]}},
+            "focused": "p2"
+        })
+    }
+
+    #[test]
+    fn panes_merge_per_folder_and_stamp_the_write() {
+        let base = merge_layout(LayoutSettings::default(), &serde_json::json!({"terminalDock": "side"})).unwrap();
+        let l = merge_panes(Default::default(), &serde_json::json!({"/r/a": two_panes()}), 10).unwrap().unwrap();
+        assert_eq!(l["/r/a"]["tree"], two_panes()["tree"]);
+        assert_eq!(l["/r/a"]["focused"], "p2");
+        assert_eq!(l["/r/a"]["at"], 10);
+        // Another folder joins; the first one keeps its tree (two windows, two folders).
+        let one = serde_json::json!({"tree": {"pane": "p1", "tabs": [], "active": null}, "focused": "p1", "at": 999});
+        let l = merge_panes(l, &serde_json::json!({"/r/b": one}), 20).unwrap().unwrap();
+        assert_eq!(l.len(), 2);
+        assert_eq!(l["/r/b"]["at"], 20, "the write sets `at`, the patch's value is ignored");
+        assert_eq!(l["/r/a"]["at"], 10);
+        // null resets one folder, then every folder.
+        let l = merge_panes(l, &serde_json::json!({"/r/a": null}), 30).unwrap().unwrap();
+        assert_eq!(l.keys().collect::<Vec<_>>(), vec!["/r/b"]);
+        assert_eq!(merge_panes(l.clone(), &serde_json::Value::Null, 40).unwrap(), None);
+        assert_eq!(merge_panes(l, &serde_json::json!({"/r/b": null}), 40).unwrap(), None, "the last folder reset drops the field");
+        // Through merge_layout: its own branch, the other fields untouched.
+        let l = merge_layout(base.clone(), &serde_json::json!({"panes": {"/r/a": two_panes()}})).unwrap();
+        assert_eq!(l.terminal_dock.as_deref(), Some("side"));
+        assert_eq!(l.panes.as_ref().unwrap()["/r/a"]["focused"], "p2");
+        let l = merge_layout(l, &serde_json::json!({"explorerWidth": 300})).unwrap();
+        assert!(l.panes.is_some(), "the panel-change save never touches the tree");
+        let l = merge_layout(l, &serde_json::json!({"panes": null})).unwrap();
+        assert_eq!(l, merge_layout(base, &serde_json::json!({"explorerWidth": 300})).unwrap());
+    }
+
+    #[test]
+    fn panes_keep_the_most_recent_folders() {
+        let mut l = serde_json::Map::new();
+        for i in 0..MAX_PANE_FOLDERS + 3 {
+            l = merge_panes(l, &serde_json::json!({ format!("/f{i}"): two_panes() }), i as u64).unwrap().unwrap();
+        }
+        assert_eq!(l.len(), MAX_PANE_FOLDERS);
+        assert!(!l.contains_key("/f0") && !l.contains_key("/f2") && l.contains_key("/f3"));
+        // Rewriting an old folder makes it recent again.
+        let l = merge_panes(l, &serde_json::json!({"/f3": two_panes()}), 1000).unwrap().unwrap();
+        let l = merge_panes(l, &serde_json::json!({"/new": two_panes()}), 1001).unwrap().unwrap();
+        assert!(l.contains_key("/f3") && !l.contains_key("/f4"));
+    }
+
+    #[test]
+    fn panes_refuse_bad_trees_and_write_nothing() {
+        let leaf = |id: &str| serde_json::json!({"pane": id});
+        let mut deep = leaf("p0");
+        for i in 1..=MAX_PANE_DEPTH + 1 {
+            deep = serde_json::json!({"split": "down", "ratio": 0.5, "a": deep, "b": leaf(&format!("q{i}"))});
+        }
+        let mut wide = leaf("p0");
+        for i in 1..=MAX_SAVED_PANES {
+            wide = serde_json::json!({"split": "right", "ratio": 0.5, "a": leaf(&format!("w{i}")), "b": wide});
+        }
+        let many: Vec<_> = (0..=MAX_PANE_TABS).map(|i| serde_json::json!({"file": format!("f{i}")})).collect();
+        let with = |tree: serde_json::Value, focused: &str| serde_json::json!({"/r": {"tree": tree, "focused": focused}});
+        let bads = [
+            serde_json::json!(["not", "an", "object"]),
+            serde_json::json!({"relative/folder": two_panes()}),
+            serde_json::json!({"/r": "tree"}),
+            serde_json::json!({"/r": {"tree": leaf("p1")}}),
+            serde_json::json!({"/r": {"tree": leaf("p1"), "focused": "p1", "extra": 1}}),
+            with(serde_json::json!({"float": "x"}), "p1"),
+            with(serde_json::json!({"split": "diagonal", "ratio": 0.5, "a": leaf("p1"), "b": leaf("p2")}), "p1"),
+            with(serde_json::json!({"split": "right", "ratio": 1.5, "a": leaf("p1"), "b": leaf("p2")}), "p1"),
+            with(serde_json::json!({"split": "right", "ratio": 0, "a": leaf("p1"), "b": leaf("p2")}), "p1"),
+            with(serde_json::json!({"split": "right", "ratio": 0.5, "a": leaf("p1")}), "p1"),
+            with(serde_json::json!({"split": "right", "ratio": 0.5, "a": leaf("p1"), "b": leaf("p1")}), "p1"),
+            with(leaf("p1"), "p9"),
+            with(leaf(""), ""),
+            with(deep, "p0"),
+            with(wide, "p0"),
+            with(serde_json::json!({"pane": "p1", "tabs": many}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": "/etc/passwd"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": "a/../../x"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": ""}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": "a//b"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": "a", "mode": "raw"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"terminal": "../up"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"terminal": "x", "argv": ["sh"]}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"chat": "abc"}]}), "p1"),
+            with(serde_json::json!({"pane": "p1", "tabs": [{"file": "a"}], "active": 1}), "p1"),
+        ];
+        let l = merge_layout(LayoutSettings::default(), &serde_json::json!({"panes": {"/keep": two_panes()}})).unwrap();
+        for bad in bads {
+            assert!(merge_layout(l.clone(), &serde_json::json!({"panes": bad})).is_err(), "{bad}");
+        }
+        // One bad folder in a patch refuses the whole patch.
+        assert!(merge_layout(l.clone(), &serde_json::json!({"panes": {"/ok": two_panes(), "/bad": {"tree": leaf("p1"), "focused": "p2"}}})).is_err());
+        let path = scratch("panes-refused");
+        let store = Store::at(path.clone());
+        store.update(|s| {
+            s.ui.layout = Some(l.clone());
+            Ok(())
+        }).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let r = store.update(|s| {
+            s.ui.layout = Some(merge_layout(s.ui.layout.clone().unwrap_or_default(), &serde_json::json!({"panes": {"/keep": {"tree": {"pane": "p1", "tabs": [{"file": "../x"}]}, "focused": "p1"}}}))?);
+            Ok(())
+        });
+        assert!(r.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn panes_read_and_round_trip() {
+        let s: Settings = serde_json::from_str(&format!(r#"{{"ui":{{"layout":{{"terminalDock":"top","panes":{{"/r":{}}}}}}}}}"#, serde_json::json!({"tree": two_panes()["tree"], "focused": "p2", "at": 5}))).unwrap();
+        let p = s.ui.layout.as_ref().unwrap().panes.clone().unwrap();
+        assert_eq!(p["/r"]["tree"]["b"]["tabs"][0]["terminal"], "src");
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["ui"]["layout"]["panes"]["/r"]["at"], 5);
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top"}}}"#).unwrap();
+        assert!(serde_json::to_value(&s).unwrap()["ui"]["layout"].get("panes").is_none(), "no tree: the key is absent, not null");
     }
 
     #[test]

@@ -268,6 +268,8 @@ mod tests {
             assert!(e.contains("interactive tab"), "{c}: {e}");
         }
         assert!(super::run_command("git-staging").is_err());
+        // A project row (a command file the folder added) is never a driver command.
+        assert!(super::run_command("deploy-site").is_err() && super::run_command("/deploy-site").is_err());
     }
 
     #[test]
@@ -468,8 +470,9 @@ mod tests {
         assert!(block("$(\"top-actions\").addEventListener(\"click\"", "});").contains("runAction("), "top bar buttons dispatch through runAction");
         assert!(!block("function renderTopActions(", "\n}\n").contains("run-queue"), "top bar Run queue is never disabled");
         let actions = block("const ACTIONS", "\n};");
-        assert!(actions.contains("\"start-project\": () => host.interactive(\"/start-project\", NEW_PLAN_WHY)"), "start-project action");
-        assert!(actions.contains("\"backlog-add\": () => host.interactive(\"/backlog-add\", BACKLOG_ADD_WHY)"), "backlog-add action");
+        // Run with context (ADR 2026-10-22 amend 2026-11-16): the goal composer, then the agent.
+        assert!(actions.contains("\"start-project\": () => host.launch(\"start-project\", NEW_PLAN_WHY)"), "start-project action");
+        assert!(actions.contains("\"backlog-add\": () => host.launch(\"backlog-add\", BACKLOG_ADD_WHY)"), "backlog-add action");
         let run_queue = &main[main.find("runQueue: async () => {").expect("host.runQueue")..];
         let run_queue = &run_queue[..run_queue.find("interactive: async").expect("end of runQueue")];
         assert!(run_queue.contains("queue-confirm"), "the confirm says a run without a queue asks queue-confirm");
