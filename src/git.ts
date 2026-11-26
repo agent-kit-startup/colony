@@ -225,7 +225,7 @@ export class GitView {
     const work = h("section", { class: "card git-work bento-tile bento-work" }, h("div", { class: "card-title" }, "Working tree"));
     this.panel = new GitPanel(work, status, onCommitted);
     this.ship = new ShipLaneTile(ship);
-    this.grid = h("div", { class: "cv-body git-bento", "aria-label": "Git e CI/CD" }, this.ship.el, this.repo, work, this.prodCard());
+    this.grid = h("div", { class: "cv-body git-bento", "aria-label": "Git e CI/CD" }, this.ship.el, this.repo, work, this.prodCard(ship));
     this.el = h("div", { class: "cv cv-git" }, this.grid);
     this.repo.append(card("Repository", this.repoInfo, this.graph.el));
     snapshot.on((why) => {
@@ -310,22 +310,19 @@ export class GitView {
     );
   }
 
-  private prodCard(): HTMLElement {
-    // Copy-only, so no typed yes here: the Git tab's one production yes guards the one
-    // production action Colony runs itself (the Working tree push of a production branch); a
-    // merge into main asks its own on the approval card (ADR 2026-10-23 point 5).
-    const out = h("div", { class: "hint" });
-    const copy = btn("Copy /git-prod", () => {
-      this.copy("/git-prod", "/git-prod");
-      out.replaceChildren(h("code", {}, "/git-prod"), " copied. Paste it in your own agent session (Open interactive in Mission) and answer its gate there.");
-    }, { "data-act": "copy-git-prod" });
+  private prodCard(ship: ShipHost): HTMLElement {
+    // Promote to production (ADR 2026-10-23 points 4-5 and 2026-10-22 amend 2026-11-16): an
+    // interactive agent session already running /git-prod, after the native confirm; the
+    // routine's own production gate inside that session is the yes. Never headless, never the
+    // driver (Rust refuses it there). Copy stays as a secondary action.
+    const run = btn("Promote to production", () => ship.launch("git-prod", "Git → Production promotion: /git-prod promotes staging to main."), { class: "primary", "data-act": "promote-prod", title: "Open your agent already running /git-prod (asks first; its production gate in the session is the yes)" });
+    const copy = btn("Copy /git-prod", () => this.copy("/git-prod", "/git-prod"), { class: "link", "data-act": "copy-git-prod" });
     return h(
       "section",
       { class: "card prod-card bento-tile bento-prod" },
       h("div", { class: "card-title" }, "Production promotion"),
-      h("div", { class: "hint warn" }, "Never run from Colony or from a headless tick. /git-prod stays an operator action in your own agent session; Colony only copies it."),
-      h("div", { class: "prod-confirm" }, copy),
-      out,
+      h("div", { class: "hint warn" }, "Interactive only: Colony opens /git-prod in your agent after a confirmation, and you answer its production gate there. Never from the driver or a headless tick."),
+      h("div", { class: "prod-confirm" }, run, " ", copy),
     );
   }
 }

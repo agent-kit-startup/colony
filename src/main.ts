@@ -64,7 +64,7 @@ import { NavHistory } from "./nav-history";
 import { groupSection, sectionInfo, type WorkspaceSection, workspaceSection } from "./workspace";
 import { playTarget } from "./oligarchyfeed";
 import { OligarchyView } from "./oligarchyview";
-import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, REAP_AUDIT, RulesView, SkillsView, TerminalsView } from "./kitviews";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { dragStarted, dropPlace, isPtyTab, moveLabel, moveTarget, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
@@ -2071,12 +2071,14 @@ const resuming = new Set<string>();
 /** The composer of a launch: the value typed after `/name` ("" = none, null = cancelled).
  *  A plan defaults to the HANDOFF plan with the folder's plans to pick from; a branch to the
  *  checked-out one; a goal, PR or SHA starts empty. Values are checked by composePrompt. */
-async function askContext(name: string, context: LaunchContext): Promise<string | null> {
+async function askContext(name: string, context: LaunchContext, prefill = ""): Promise<string | null> {
   const label = contextLabel(name, context);
   if (!label) return "";
-  let value = "";
+  let value = prefill;
   let suggest: string[] = [];
-  if (context === "plan") {
+  if (prefill) {
+    // The surface already knows the value (a Ship lane row's argument): offered as typed.
+  } else if (context === "plan") {
     value = snapshot.activePlanFile;
     suggest = [...new Set(snapshot.plans().map((p) => p.file).filter(Boolean))];
   } else if (context === "branch") {
@@ -2210,7 +2212,7 @@ const host: DriverChatHost = {
       status(`Open interactive: ${errText(e)}`);
     }
   },
-  launch: async (cmd, why) => {
+  launch: async (cmd, why, prefill) => {
     if (!workspace) return status("Open a folder first");
     const name = typeof cmd === "string" ? cmd : cmd.name;
     let row: CommandRow | undefined = typeof cmd === "string" ? undefined : cmd;
@@ -2227,7 +2229,7 @@ const host: DriverChatHost = {
     if (row && !row.run) return status(`/${name}: Colony does not run it in this folder`);
     const context = row ? contextOf(row.context) : "goal";
     const project = row?.layer === "project";
-    const value = await askContext(name, context);
+    const value = await askContext(name, context, prefill);
     if (value === null) return status(`/${name} not launched`);
     const c = composePrompt(name, context, value, project);
     if ("error" in c) return status(c.error);
@@ -2273,6 +2275,15 @@ const host: DriverChatHost = {
     toggleTerminal(true);
     await terminals.create(argv, "agent-kit install");
     status("Agent Kit install runs in the terminal below; Mission lists the readiness checks once it is done");
+  },
+  reapAuditSessions: async () => {
+    if (!workspace) return status("Open a folder first");
+    const ok = await confirmAction(`Run ${REAP_AUDIT} in ${workspace.name}? It ends the detached agent-kit-audit-* plan-review sessions this folder started; attached sessions are left alone.`, "Reap audit sessions");
+    if (!ok) return status("Reap not started");
+    toggleTerminal(true);
+    const [script, ...args] = REAP_AUDIT.split(" ");
+    await terminals.create([`${workspace.root}/${script}`, ...args], "reap audit sessions", workspace.root);
+    status("Reaping the detached audit sessions in the terminal below");
   },
   retryMc: () => void startMc(),
   mcLogPath: () => mcLog,
@@ -2354,6 +2365,7 @@ const gitView = new GitView(status, () => void tree.refresh(), host.copy, {
       (e) => status(errText(e)),
     ),
   copy: host.copy,
+  launch: (name, why, prefill) => void host.launch(name, why, prefill),
   openEngine: () => showEngine(),
 });
 // Host requests: approval cards for an agent's git / forge actions, the PR list, CI/CD.
@@ -4489,7 +4501,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       palette.rows().every((r) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(r.name));
     await log("command-palette", listed || gated, { error: palette.error || null, rows: palette.rows().map((r) => `${r.name}:${r.layer}:${r.run ? "run" : "copy"}`), rendered: items.length });
     // Claude Code section: the static cited list, shown with or without the engine gate,
-    // every row copy-only, the source URL on screen, and the search reaching it.
+    // every row a Type (into the focused Claude terminal, decision 7 of the 2026-11-16 amend),
+    // the source URL on screen, and the search reaching it.
     const builtins = [...palette.el.querySelectorAll<HTMLElement>(".palette-builtin")];
     const section = palette.el.querySelector(".palette-claude")?.textContent ?? "";
     const pInput = palette.el.querySelector<HTMLInputElement>("#palette-input")!;
@@ -4498,7 +4511,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const found = [...palette.el.querySelectorAll<HTMLElement>(".palette-builtin")].map((el) => el.dataset.name);
     const builtinsOk =
       builtins.length === palette.builtins().length &&
-      builtins.every((el) => el.querySelector(".palette-act")?.textContent === "Copy") &&
+      builtins.every((el) => el.querySelector(".palette-act")?.textContent === "Type") &&
       section.includes("https://code.claude.com/docs/en/commands") &&
       found[0] === "compact" &&
       palette.builtins().every((b) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.name));

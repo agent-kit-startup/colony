@@ -7,7 +7,7 @@
 // feature-detected: an older engine gets an "Update the engine" state, never an error.
 // Repo text (titles, descriptions, commands) is always rendered as text.
 import { type CommandRow, type CommandsCatalog, api, errText, h } from "./api";
-import { type CockpitHost, View } from "./cockpit";
+import { type CockpitHost, launchGoal, View } from "./cockpit";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { type TtySession, ttys } from "./ttys";
 import { ago, btn, card, chip, checkChip, empty, emptyCta, metaRow } from "./ui";
@@ -104,7 +104,12 @@ export class ProcessesView extends View {
         card(
           { title: "Detached audit sessions", icon: "shield", aside: [chip(String(audit.count), "chip-gate")] },
           h("div", { class: "small" }, `${audit.count} host-wide agent-kit-audit-* plan-review ${audit.count === 1 ? "PTY is" : "PTYs are"} still alive${age}. The audit launcher disposes of them on its next spawn, or reap them now from a terminal.`),
-          h("div", { class: "actions" }, btn("Copy reap command", () => this.host.copy(REAP_AUDIT, "reap command"), { class: "status-bar-btn", "data-act": "reap", title: `${REAP_AUDIT}\n(for a terminal in this folder)` })),
+          h(
+            "div",
+            { class: "actions" },
+            btn("Reap now", () => void this.host.reapAuditSessions(), { class: "status-bar-btn", "data-act": "reap-run", title: `${REAP_AUDIT} in a terminal tab of this folder, after a confirmation` }),
+            btn("Copy reap command", () => this.host.copy(REAP_AUDIT, "reap command"), { class: "status-bar-btn link", "data-act": "reap", title: `${REAP_AUDIT}\n(for a terminal in this folder)` }),
+          ),
         ),
       );
     }
@@ -387,7 +392,11 @@ export class SkillsView extends ListView {
     const shown = all.filter((s) => (this.filter === "all" || (this.filter === "kit") === (s.kitManaged === true)) && this.matches(s.id, s.title, s.description, s.category));
     const kit = all.filter((s) => s.kitManaged === true).length;
     return [
-      this.toolbar([["all", "All", all.length], ["kit", "Kit", kit], ["project", "Editable", all.length - kit]], btn("Copy create prompt", () => this.host.copy(SKILL_CREATE, "create prompt"), { class: "status-bar-btn", "data-act": "skill-create", title: "For your agent's chat input" })),
+      this.toolbar(
+        [["all", "All", all.length], ["kit", "Kit", kit], ["project", "Editable", all.length - kit]],
+        btn("New skill", () => void launchGoal(this.host, "backlog-add", SKILL_CREATE, "Skills: /backlog-add plans the new skill with to-dos; it asks for the name and behavior and before it writes."), { class: "status-bar-btn", "data-act": "skill-create-run", title: "Open your agent already running /backlog-add with the create-skill prompt" }),
+        btn("Copy create prompt", () => this.host.copy(SKILL_CREATE, "create prompt"), { class: "status-bar-btn link", "data-act": "skill-create", title: "For your agent's chat input" }),
+      ),
       card(
         { title: "Skills", icon: "checklist", aside: [h("span", { class: "card-count" }, `${shown.length} of ${all.length}`)] },
         ...(shown.length
