@@ -2,15 +2,20 @@
 // the kit's versioned catalog (`agent-kit commands --json`, read by src-tauri catalog.rs).
 // Colony keeps no list: an engine without the catalog shows "Update the engine".
 //  - Run: decided on the Rust side (`run`): a kit or factory name in vendor.rs PROMPT_SLASH,
-//    or a project row (a command file the folder added) under its own name; `/<name>` opens
-//    the interactive agent after a native confirmation, and term_launch checks it again.
-//  - Copy: every other row (a meta row outside the factory workspace, an older catalog's
-//    non-allowlisted rows): `/<name>` to the clipboard, to paste in the agent's chat input.
+//    or a project row (a command file the folder added) under its own name. It runs with
+//    context (host.launch: the row's catalog `context` asks for the goal, plan, branch, PR or
+//    SHA inline, then the agent opens already running `/<name> <context>`); only /git-prod,
+//    /kit-prod and project rows confirm first, and term_launch checks the prompt again.
+//  - Hidden: a meta row outside the factory workspace (catalog `hidden`) is not listed.
+//  - Copy: every other row (an older catalog's non-allowlisted rows): `/<name>` to the
+//    clipboard, to paste in the agent's chat input.
 // Then a "Colony" section: every menu action of src/menu.json (menu bar and the Settings view), run
 // through the window's action map, so the palette reaches what the menus reach.
 // Below them, a "Claude Code" section lists the vendor's built-in commands from the static,
-// cited claude-builtins.ts list: always copy, plus "Open Claude tab" (the unmodified
-// `claude`, no prompt). It does not depend on the engine, so it shows under the gate too.
+// cited claude-builtins.ts list: a row types `/<name>` into the focused Claude terminal (no
+// Enter: the user adds arguments and sends it; amend 2026-11-16 decision 7), opening a Claude
+// tab first when none is open; plus "Open Claude tab" (the unmodified `claude`, no prompt).
+// It does not depend on the engine, so it shows under the gate too.
 // Names and descriptions are untrusted repo text: built with h() as text nodes only.
 import { api, errText, h, type CommandRow, type CommandsCatalog } from "./api";
 import { CLAUDE_BUILTINS, SOURCE_TITLE, SOURCE_URL, VERIFIED_AT, type ClaudeBuiltin } from "./claude-builtins";
@@ -19,8 +24,11 @@ import { chip, copyText } from "./ui";
 export interface PaletteHost {
   status(msg: string): void;
   hasFolder(): boolean;
-  /** The vendor CLI in a terminal tab with `/<name>` as its first prompt (confirms first). */
-  interactive(prompt: string, why: string): Promise<unknown>;
+  /** Run a catalog row with its context (the composer, then the vendor CLI in a terminal tab
+   *  with `/<name> <context>` as its first prompt). */
+  launch(row: CommandRow, why: string): Promise<unknown>;
+  /** Type `/<name>` into the focused Claude terminal (opening one first when none is open). */
+  typeBuiltin(name: string): Promise<unknown>;
   showEngine(): void;
   /** The unmodified `claude` in a terminal tab, no prompt (whatever the engine choice). */
   openClaude(): Promise<unknown>;
@@ -142,9 +150,10 @@ export class CommandPalette {
     this.hide();
   }
 
-  /** The kit catalog's rows (the Claude Code section is builtins()). */
+  /** The kit catalog's shown rows: a meta row outside the factory workspace is hidden
+   *  (the Claude Code section is builtins()). */
   rows(): CommandRow[] {
-    return this.catalog?.commands ?? [];
+    return (this.catalog?.commands ?? []).filter((r) => !r.hidden);
   }
 
   builtins(): readonly ClaudeBuiltin[] {
@@ -166,11 +175,14 @@ export class CommandPalette {
     if (e.kind === "colony") return this.host.runAction(e.row.id);
     const slash = `/${e.row.name}`;
     if (e.kind === "kit" && e.row.run) {
-      void this.host.interactive(slash, `Command palette: ${e.row.description}`);
+      void this.host.launch(e.row, `Command palette: ${e.row.description}`);
       return;
     }
-    const where = e.kind === "claude" ? "Claude's chat input (a Claude Code built-in)" : "your agent's chat input";
-    void copyText(slash).then((ok) => this.host.status(ok ? `Copied ${slash}: paste it in ${where}` : `Could not copy ${slash}`));
+    if (e.kind === "claude") {
+      void this.host.typeBuiltin(e.row.name);
+      return;
+    }
+    void copyText(slash).then((ok) => this.host.status(ok ? `Copied ${slash}: paste it in your agent's chat input` : `Could not copy ${slash}`));
   }
 
   private button(label: string, title: string, act: () => void): HTMLElement {
@@ -195,7 +207,7 @@ export class CommandPalette {
     return h(
       "div",
       { class: "palette-section palette-claude" },
-      h("div", { class: "row" }, h("span", { class: "grow" }, `Claude Code · ${shown} of ${CLAUDE_BUILTINS.length} · Copy for Claude's chat input`), open, " ", link),
+      h("div", { class: "row" }, h("span", { class: "grow" }, `Claude Code · ${shown} of ${CLAUDE_BUILTINS.length} · Type types it in your Claude terminal`), open, " ", link),
       h("div", { class: "dim small ellipsis", title: `${SOURCE_TITLE}, checked ${VERIFIED_AT}` }, `${SOURCE_TITLE} · ${SOURCE_URL} · checked ${VERIFIED_AT}`),
     );
   }
@@ -229,14 +241,14 @@ export class CommandPalette {
     const tag = kit ? e.row.layer : e.row.kind;
     const el = h(
       "div",
-      { class: `quick-item ${kit ? "palette-item" : "palette-builtin"} ${sel ? "sel" : ""}`, title: run ? `Run ${slash} in your agent (asks first)` : `Copy ${slash}` },
+      { class: `quick-item ${kit ? "palette-item" : "palette-builtin"} ${sel ? "sel" : ""}`, title: run ? `Run ${slash} in your agent with its context${e.row.interactiveOnly || e.row.layer === "project" ? " (asks first)" : ""}` : kit ? `Copy ${slash}` : `Type ${slash} in your Claude terminal` },
       h(
         "div",
         { class: "row" },
         h("span", { class: "mono" }, slash),
         h("span", { class: "dim mono small grow ellipsis" }, kit ? "" : (e.row.args ?? "")),
         chip(tag, kit ? `palette-layer layer-${tag}` : `palette-layer kind-${tag}`),
-        h("span", { class: `palette-act ${run ? "run" : ""}` }, run ? "Run" : "Copy"),
+        h("span", { class: `palette-act ${run || !kit ? "run" : ""}` }, run ? "Run" : kit ? "Copy" : "Type"),
       ),
       ...(e.row.description ? [h("div", { class: "dim small ellipsis" }, e.row.description)] : []),
     );
@@ -264,8 +276,8 @@ export class CommandPalette {
     } else if (!c) {
       this.head.replaceChildren("Loading the commands catalog…");
     } else {
-      this.head.replaceChildren(`Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion} · Run opens your agent with it; Copy is for your agent's chat input`);
-      if (!kitShown) kitList.push(h("div", { class: "quick-item dim" }, c.commands.length ? "No command matches" : "This folder has no slash commands (.cursor/commands/)"));
+      this.head.replaceChildren(`Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion} · Run opens your agent already running it with its context; Copy is for your agent's chat input`);
+      if (!kitShown) kitList.push(h("div", { class: "quick-item dim" }, this.rows().length ? "No command matches" : "This folder has no slash commands (.cursor/commands/)"));
     }
     const items = entries.map((e, i) => (e.kind === "colony" ? this.action(e.row, i === this.sel) : this.item(e, i === this.sel)));
     const actionsShown = entries.filter((e) => e.kind === "colony").length;

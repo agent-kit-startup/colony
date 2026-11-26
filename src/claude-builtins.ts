@@ -2,8 +2,9 @@
 // A static, cited copy of the vendor's own reference page (ADR 2026-10-22 colony-commands-
 // catalog-contract point 8): Colony never scrapes or patches the claude binary, so this
 // list is refreshed by hand from SOURCE_URL and stamped with the date it was checked.
-// Rows are copy-only (`/<name>` into Claude's chat input); none of them is ever handed to
-// the agent as a first prompt (vendor.rs PROMPT_SLASH stays the only "Run" gate).
+// A row types `/<name>` into the focused Claude terminal, without Enter (amend 2026-11-16 of
+// that ADR, decision 7); none of them is ever handed to the agent as a first prompt
+// (vendor.rs PROMPT_SLASH stays the only "Run" gate).
 // Rows the page marks "Removed" are left out. kind: builtin command, bundled skill,
 // bundled workflow, or an alias of another row.
 

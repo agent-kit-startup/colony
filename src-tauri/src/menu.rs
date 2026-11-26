@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(view[17..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom"]);
         assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
-        assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add"]);
+        assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add", "hotfix", "qa", "git-staging", "git-prod"]);
         assert_eq!(menu_ids("Help"), ["about", "shortcuts", "check-updates"]);
         // Engine… is a setting: a Settings row, not a Run item.
         assert!(config_ids().iter().any(|i| i == "engine") && !ids().iter().any(|i| i == "engine"));

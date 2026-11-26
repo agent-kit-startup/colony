@@ -7,7 +7,7 @@
 // feature-detected: an older engine gets an "Update the engine" state, never an error.
 // Repo text (titles, descriptions, commands) is always rendered as text.
 import { type CommandRow, type CommandsCatalog, api, errText, h } from "./api";
-import { type CockpitHost, View } from "./cockpit";
+import { type CockpitHost, launchGoal, View } from "./cockpit";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { type TtySession, ttys } from "./ttys";
 import { ago, btn, card, chip, checkChip, empty, emptyCta, metaRow } from "./ui";
@@ -104,7 +104,12 @@ export class ProcessesView extends View {
         card(
           { title: "Detached audit sessions", icon: "shield", aside: [chip(String(audit.count), "chip-gate")] },
           h("div", { class: "small" }, `${audit.count} host-wide agent-kit-audit-* plan-review ${audit.count === 1 ? "PTY is" : "PTYs are"} still alive${age}. The audit launcher disposes of them on its next spawn, or reap them now from a terminal.`),
-          h("div", { class: "actions" }, btn("Copy reap command", () => this.host.copy(REAP_AUDIT, "reap command"), { class: "status-bar-btn", "data-act": "reap", title: `${REAP_AUDIT}\n(for a terminal in this folder)` })),
+          h(
+            "div",
+            { class: "actions" },
+            btn("Reap now", () => void this.host.reapAuditSessions(), { class: "status-bar-btn", "data-act": "reap-run", title: `${REAP_AUDIT} in a terminal tab of this folder, after a confirmation` }),
+            btn("Copy reap command", () => this.host.copy(REAP_AUDIT, "reap command"), { class: "status-bar-btn link", "data-act": "reap", title: `${REAP_AUDIT}\n(for a terminal in this folder)` }),
+          ),
         ),
       );
     }
@@ -387,7 +392,11 @@ export class SkillsView extends ListView {
     const shown = all.filter((s) => (this.filter === "all" || (this.filter === "kit") === (s.kitManaged === true)) && this.matches(s.id, s.title, s.description, s.category));
     const kit = all.filter((s) => s.kitManaged === true).length;
     return [
-      this.toolbar([["all", "All", all.length], ["kit", "Kit", kit], ["project", "Editable", all.length - kit]], btn("Copy create prompt", () => this.host.copy(SKILL_CREATE, "create prompt"), { class: "status-bar-btn", "data-act": "skill-create", title: "For your agent's chat input" })),
+      this.toolbar(
+        [["all", "All", all.length], ["kit", "Kit", kit], ["project", "Editable", all.length - kit]],
+        btn("New skill", () => void launchGoal(this.host, "backlog-add", SKILL_CREATE, "Skills: /backlog-add plans the new skill with to-dos; it asks for the name and behavior and before it writes."), { class: "status-bar-btn", "data-act": "skill-create-run", title: "Open your agent already running /backlog-add with the create-skill prompt" }),
+        btn("Copy create prompt", () => this.host.copy(SKILL_CREATE, "create prompt"), { class: "status-bar-btn link", "data-act": "skill-create", title: "For your agent's chat input" }),
+      ),
       card(
         { title: "Skills", icon: "checklist", aside: [h("span", { class: "card-count" }, `${shown.length} of ${all.length}`)] },
         ...(shown.length
@@ -461,18 +470,21 @@ export class CommandsView extends ListView {
       ];
     }
     const layers = ["kit", "project", "factory"];
-    const filters: [string, string, number][] = [["all", "All", c.commands.length], ...layers.map((l): [string, string, number] => [l, l[0].toUpperCase() + l.slice(1), c.commands.filter((r) => r.layer === l).length]).filter((f) => f[2] > 0)];
-    const shown = c.commands.filter((r) => (this.filter === "all" || r.layer === this.filter) && this.matches(r.name, r.description));
+    // A meta row outside the factory workspace is not shown (catalog `hidden`, amend 2026-11-16 decision 5).
+    const rows = c.commands.filter((r) => !r.hidden);
+    const filters: [string, string, number][] = [["all", "All", rows.length], ...layers.map((l): [string, string, number] => [l, l[0].toUpperCase() + l.slice(1), rows.filter((r) => r.layer === l).length]).filter((f) => f[2] > 0)];
+    const shown = rows.filter((r) => (this.filter === "all" || r.layer === this.filter) && this.matches(r.name, r.description));
     return [
       this.toolbar(filters),
-      h("p", { class: "dim small" }, `Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion}. Run opens your agent with the command (Colony's allowlist decides which); Copy is for your agent's chat input. /git-prod and /kit-prod are never run from here.`),
+      h("p", { class: "dim small" }, `Agent Kit ${c.kitVersion} · catalog ${c.catalogVersion}. Run opens your agent already running the command with its context (the goal, plan, branch, PR or SHA it takes); Colony's allowlist decides which rows run. /git-prod and /kit-prod open interactively after a confirmation, and their own production gate in the session is the yes. Copy is for your agent's chat input.`),
       card(
-        { title: "Commands", icon: "commands", aside: [h("span", { class: "card-count" }, `${shown.length} of ${c.commands.length}`)] },
+        { title: "Commands", icon: "commands", aside: [h("span", { class: "card-count" }, `${shown.length} of ${rows.length}`)] },
         ...(shown.length
           ? shown.map((r) => {
               const slash = `/${r.name}`;
+              const asks = r.interactiveOnly || r.layer === "project";
               const act = r.run
-                ? btn("Run", () => void this.host.interactive(slash, `Workspace → Commands: ${r.description}`), { class: "link", "data-act": "run", title: `Open your agent with ${slash} (asks first)` })
+                ? btn("Run", () => void this.host.launch(r, `Workspace → Commands: ${r.description}`), { class: "link", "data-act": "run", title: `Open your agent already running ${slash} with its context${asks ? " (asks first)" : ""}` })
                 : btn("Copy", () => this.host.copy(slash, slash), { class: "link", "data-act": "copy", title: `Copy ${slash} for your agent's chat input` });
               return row([h("strong", { class: "mono small" }, slash), chip(r.layer), ...(r.headless ? [chip("headless")] : []), h("span", { class: "grow" }), act, this.openBtn(`.cursor/commands/${r.name}.md`)], r.description, undefined, r.name);
             })

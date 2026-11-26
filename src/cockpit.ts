@@ -4,7 +4,8 @@
 // queue runner or an interactive vendor CLI in a terminal tab (a saved chat resumed
 // included), opening a plan or file.
 // Nothing here runs /git-prod or any production promotion.
-import { type ChatSession, h } from "./api";
+import { type ChatSession, type CommandRow, h } from "./api";
+import { composePrompt } from "./launchctx";
 import type { RunControls } from "./agent";
 import { chats } from "./chats";
 import { pendingGates } from "./gates";
@@ -33,8 +34,16 @@ export interface CockpitHost {
   /** `agent-kit run-plan-all` after a confirmation: a driver run (gates in the Inbox) or,
    *  on an engine without its driver mode, a terminal tab. Needs no stored queue. */
   runQueue(): Promise<unknown>;
-  /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command. */
-  interactive(prompt?: string, why?: string): Promise<unknown>;
+  /** The vendor CLI in a terminal tab; `prompt` is one allowlisted kit slash command, with
+   *  its context. Launches on the click; `/git-prod`, `/kit-prod` and a `project` row
+   *  (`o.project`) confirm first (launchctx.ts `needsConfirm`). */
+  interactive(prompt?: string, why?: string, o?: { project?: boolean }): Promise<unknown>;
+  /** `.cursor/scripts/plan-external-review.sh --reap-audit-sessions` in a terminal tab of the
+   *  folder, after a confirmation (a fixed argv, nothing from the snapshot). */
+  reapAuditSessions(): Promise<unknown>;
+  /** Run catalog command `name` with context: its catalog row's `context` picks the composer
+   *  (goal typed inline, plan picked, branch from git), then `interactive`. */
+  launch(cmd: string | CommandRow, why?: string, prefill?: string): Promise<unknown>;
   /** `claude --resume <id>` in a terminal tab labelled `title`, or focus its open tab. */
   resumeChat(id: string, title: string): Promise<unknown>;
   showTab(id: string): void;
@@ -366,15 +375,27 @@ function holdText(hold: { plan: string; inQueue: boolean }, cursorPlan: string):
 // these open the agent interactively with one of them, after a confirmation.
 export const NEW_PLAN_WHY = "/start-project turns what you tell it into a plan with to-dos, with two confirmations before it writes the plan and makes it active.";
 export const BACKLOG_ADD_WHY = "/backlog-add writes a new plan with to-dos and lists it under the HANDOFF backlog, without activating it.";
+
+/** A surface's own text as the goal of a goal command (Flight Log fix prompt, Skills create
+ *  prompt): `/name <text>` straight to the agent, newlines kept; text Rust would refuse (over
+ *  4096 bytes, a control character) gets a status line and the Copy beside it stays. */
+export function launchGoal(host: CockpitHost, name: string, text: string, why: string): Promise<unknown> {
+  const c = composePrompt(name, "goal", text);
+  if ("error" in c) {
+    host.status(`${c.error}: use Copy instead`);
+    return Promise.resolve();
+  }
+  return host.interactive(c.prompt, why);
+}
 export const NEW_PLAN_TIP = "/start-project in your agent, interactively: a new active plan";
 export const BACKLOG_ADD_TIP = "/backlog-add in your agent, interactively: a new plan in the backlog, not activated";
 
 function newPlanBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return iconBtn("plans", "New plan", () => void host.interactive("/start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
+  return iconBtn("plans", "New plan", () => void host.launch("start-project", NEW_PLAN_WHY), { class: cls, "data-act": "new-plan", title: NEW_PLAN_TIP });
 }
 
 function backlogAddBtn(host: CockpitHost, cls = "status-bar-btn"): HTMLButtonElement {
-  return btn("Add to backlog", () => void host.interactive("/backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
+  return btn("Add to backlog", () => void host.launch("backlog-add", BACKLOG_ADD_WHY), { class: cls, "data-act": "backlog-add", title: BACKLOG_ADD_TIP });
 }
 
 /**
@@ -727,7 +748,7 @@ export class MissionView extends View {
       headline: "No runs in this window",
       support: "Each run opens as its own tab: Run plan, Open interactive and the plan actions start one.",
       compact: true,
-      actions: [plan ? { label: "Run plan", onClick: () => void this.host.runPlan(), act: "empty-run-plan" } : { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" }, { label: "Open interactive", onClick: () => void this.host.interactive(), act: "empty-interactive" }],
+      actions: [plan ? { label: "Run plan", onClick: () => void this.host.runPlan(), act: "empty-run-plan" } : { label: "New plan", onClick: () => void this.host.launch("start-project", NEW_PLAN_WHY), act: "empty-new-plan" }, { label: "Open interactive", onClick: () => void this.host.interactive(), act: "empty-interactive" }],
     });
   }
 
@@ -897,8 +918,8 @@ export class PlansView extends View {
         headline: "No plans yet",
         support: "A plan is a list of to-dos the agent runs one tick at a time. /start-project makes one active; /backlog-add parks one in the backlog.",
         actions: [
-          { label: "New plan", onClick: () => void this.host.interactive("/start-project", NEW_PLAN_WHY), act: "empty-new-plan" },
-          { label: "Add to backlog", onClick: () => void this.host.interactive("/backlog-add", BACKLOG_ADD_WHY), act: "empty-backlog-add" },
+          { label: "New plan", onClick: () => void this.host.launch("start-project", NEW_PLAN_WHY), act: "empty-new-plan" },
+          { label: "Add to backlog", onClick: () => void this.host.launch("backlog-add", BACKLOG_ADD_WHY), act: "empty-backlog-add" },
         ],
       });
     return emptyCta({
@@ -1075,7 +1096,12 @@ export class FlightLogView extends View {
           "div",
           { class: "flight-log-card-actions" },
           btn("Open", () => this.host.openRepoFile(source || ".cursor/HANDOFF.md"), { class: "status-bar-btn" }),
-          ...(command ? [btn("Copy fix prompt", () => this.host.copy(command, "fix prompt"), { class: "status-bar-btn", title: "Copied for your agent's chat input" })] : []),
+          ...(command
+            ? [
+                btn("Plan the fix", () => void launchGoal(this.host, "backlog-add", command, "Flight Log: /backlog-add turns this residual into a backlog plan with to-dos; it asks before it writes."), { class: "status-bar-btn", "data-act": "fix-with-agent", title: "Open your agent already running /backlog-add with this fix prompt" }),
+                btn("Copy fix prompt", () => this.host.copy(command, "fix prompt"), { class: "status-bar-btn link", title: "Copied for your agent's chat input" }),
+              ]
+            : []),
         ),
       );
     if (str(f.current)) out.push(entry("Now", str(f.current), str(f.currentKind), str(f.sourcePath), str(obj(f.currentAction).command) || null));

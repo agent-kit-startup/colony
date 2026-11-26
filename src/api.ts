@@ -119,8 +119,10 @@ export interface ContextSource { label: string; kind: string; path: string; exis
 export interface ContextReport { cwd: string; engine: string; family: string; slug: string | null; sources: ContextSource[] }
 export type McEvent = { kind: "snapshot"; data: string } | { kind: "status"; connected: boolean; detail: string };
 /** One row of the kit's commands catalog; `run` is Colony's Rust-side allowlist verdict. */
-export interface CommandRow { name: string; description: string; layer: string; headless: boolean; run: boolean }
-export interface CommandsCatalog { catalogVersion: string; kitVersion: string; commands: CommandRow[]; dropped: number }
+/** One catalog row (catalog.rs `CommandRow`). `context`, `interactiveOnly`, `audience` and
+ *  `hidden` come from catalog 1.1.0; Rust fills today's defaults for an older catalog. */
+export interface CommandRow { name: string; description: string; layer: string; headless: boolean; run: boolean; context?: string; interactiveOnly?: boolean; audience?: string; hidden?: boolean }
+export interface CommandsCatalog { catalogVersion: string; kitVersion: string; commands: CommandRow[]; dropped: number; factory?: boolean }
 export interface TermLaunch { argv: string[]; label: string; bin: string; note: string }
 export interface ChatSession { id: string; title: string; titleSource: "custom" | "ai" | "first-prompt" | "none"; modified: number; sizeBytes: number }
 export interface ChatList { vendor: string; status: "ok" | "unsupported"; note: string; dir: string | null; total: number; sessions: ChatSession[] }

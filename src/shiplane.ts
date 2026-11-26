@@ -5,7 +5,11 @@
 // the host allowlist kinds (src-tauri/src/hostreq.rs KINDS), and the button only opens an
 // approval card under Requests; nothing runs before Approve, and a merge into a production
 // base needs the typed yes there (re-derived from the forge in Rust, never from this file).
-// /git-prod and /kit-prod stay copy-only. Every snapshot string is forge or repo text:
+// A row whose next step is a kit slash command (`/git-staging`, `/git-prod`, `/kit-prod`)
+// gets Run: the agent opens already running it, its argument offered in the composer
+// (ADR 2026-10-22 amend 2026-11-16; git-prod and kit-prod confirm first and their own
+// production gate in the session is the yes). Shell lines (`gh ...`) keep Copy: the
+// approval cards above are their Colony action. Every snapshot string is forge or repo text:
 // rendered as text nodes through h(), never as markup. The open PR list itself is the Pull
 // requests tile (src/forge.ts, live gh): one list, one action per PR (src/prlist.ts).
 // The tile is one status line (src/shipline.ts, plan colony-git-tab-forge-ux r5): it opens
@@ -29,7 +33,15 @@ export interface ShipHost {
   /** Open an approval card for `a` (Requests); resolves when the card exists. */
   request(a: ShipAction, what: string): void;
   copy(text: string, what: string): void;
+  /** Run kit command `name` with its context (`prefill` offered in the composer). */
+  launch(name: string, why: string, prefill?: string): void;
   openEngine(): void;
+}
+
+/** A next step that is one kit slash command with at most one argument: its name and argument. */
+export function slashStep(text: string): { name: string; arg: string } | null {
+  const m = /^\/([a-z0-9][a-z0-9-]{0,63})(?:[ \t]+([^\s]+))?$/.exec(text.trim());
+  return m ? { name: m[1], arg: m[2] ?? "" } : null;
 }
 
 const o = (v: unknown): J => (v && typeof v === "object" && !Array.isArray(v) ? (v as J) : {});
@@ -141,7 +153,7 @@ export class ShipLaneTile {
     if (open) {
       if (lane.note) kids.push(h("div", { class: "hint" }, s(lane.note)));
       kids.push(rows.length ? h("ol", { class: "ship-rows", "aria-label": "Ship lane rows" }, ...rows.map((r) => this.row(r, lane))) : h("div", { class: "empty dim" }, "No ship lane rows for this repository."));
-      kids.push(h("div", { class: "hint" }, "Buttons open an approval card; nothing runs before Approve. A merge into main needs your typed yes there. /git-prod and /kit-prod are copy-only: paste them in your own agent session."));
+      kids.push(h("div", { class: "hint" }, "Merge, Re-run and Open PR open an approval card; nothing runs before Approve, and a merge into main needs your typed yes there. Run opens your agent already running the kit command; /git-prod and /kit-prod ask first and their own production gate in the session is the yes."));
     }
     this.el.dataset.open = String(open);
     this.body.replaceChildren(...kids);
@@ -154,7 +166,9 @@ export class ShipLaneTile {
     const acts: HTMLElement[] = [];
     const act = rowAction(r, lane);
     if (act) acts.push(btn(act.label, () => this.host.request(act.action, act.label), { class: "primary", "data-act": `ship-${act.action.kind}`, title: act.tip }));
-    if (text) acts.push(btn("Copy", () => this.host.copy(text, text), { "data-act": "ship-copy", title: `Copy for the ${s(next.destination) || "terminal"}` }));
+    const step = slashStep(text);
+    if (step) acts.push(btn("Run", () => this.host.launch(step.name, `Ship lane: ${s(r.label) || s(r.id)}`, step.arg), { class: act ? "" : "primary", "data-act": "ship-run", title: `Open your agent already running /${step.name}${step.name.endsWith("-prod") ? " (asks first; its production gate in the session is the yes)" : ""}` }));
+    if (text) acts.push(btn("Copy", () => this.host.copy(text, text), { class: step ? "link" : "", "data-act": "ship-copy", title: `Copy for the ${s(next.destination) || "terminal"}` }));
     const el = h(
       "li",
       { class: `ship-row is-${tone}` },
