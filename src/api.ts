@@ -107,7 +107,13 @@ export interface FileManagerLaunch { argv: string[]; label: string; source: "set
  *  `preanswer`: ask ids the driver chat answers from the setting (kit ADR 2026-10-26 Amend
  *  2026-10-28; only `context-checkpoint`; unset = none). */
 export interface WorkspaceSettings { backend?: string; onLimit?: string; maxTicks?: number; model?: string; chatModel?: string; offerRelaunch?: boolean; tokenBudget?: number; preanswer?: string[] }
-export interface SettingsInfo { path: string; settings: { editor: unknown; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
+/** A command setting (settings.json `editor.command`, `fileManager`): a string split on whitespace, or an argv array. */
+export type CommandSetting = string | string[];
+export interface SettingsInfo { path: string; settings: { editor: { command?: CommandSetting; terminal?: boolean }; fileManager?: CommandSetting; workspaces: Record<string, WorkspaceSettings> } | null; error: string | null }
+/** One field of the Kit config form (kitconfig.rs FIELDS); `path` is dotted (`stack.testCommands`). */
+export interface KitConfigField { path: string; label: string; kind: "choice" | "text" | "lines"; options: string[] }
+/** The open folder's `.cursor/agent-kit.config.json` (kitconfig.rs): `text` as on disk, none when missing; `canCreate`: the folder has `.cursor/`. */
+export interface KitConfigInfo { path: string; exists: boolean; canCreate: boolean; text: string | null; fields: KitConfigField[] }
 /** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }
 /** The kit command a driver run runs: the tick loop or the queue runner (driver protocol 1.2.0). */
@@ -223,6 +229,13 @@ export const api = {
   /** The saved `ui.titleBar`, what the next start opens with (always native on a tiling WM), and that WM. */
   settingsTitleBar: () => invoke<{ saved: string | null; next: "native" | "custom"; tilingWm: string | null }>("settings_title_bar"),
   settingsSetLayout: (patch: Partial<Record<keyof LayoutSettings, unknown>>) => invoke<LayoutSettings>("settings_set_layout", { patch }),
+  /** Settings → Editor and files: `editor.command`, `editor.terminal` or `fileManager`; null clears it. */
+  settingsSetEditor: (key: "editor.command" | "editor.terminal" | "fileManager", value: unknown) => invoke<SettingsInfo>("settings_set_editor", { key, value }),
+  kitConfigRead: () => invoke<KitConfigInfo>("kit_config_read"),
+  /** A form edit: one field's value, written as a targeted text patch (the rest of the file keeps its bytes). */
+  kitConfigSet: (path: string, value: unknown) => invoke<KitConfigInfo>("kit_config_set", { path, value }),
+  /** The raw editor's save: written verbatim once it parses as a JSON object; `base` is the text it started from (null: no file). */
+  kitConfigWriteRaw: (text: string, base: string | null) => invoke<KitConfigInfo>("kit_config_write_raw", { text, base }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),

@@ -1,36 +1,16 @@
-// About panel (Help → About Colony…): version, distribution channel and app updates
-// (src-tauri/src/appupdate.rs). Direct builds check the latest GitHub Release and install
-// the signed AppImage in place; package builds say updates come from the package manager.
-// Help → Check for updates runs the same check and reports it in the status bar.
-import { api, type AppUpdateInfo, type AppUpdateStatus, errText, h } from "./api";
+// About panel (Help → About Colony…): the version (and the license line). The distribution
+// channel and the app update actions live in Settings → App updates (src/appupdates.ts; kit
+// ADR 2026-10-24 amend 2026-11-19 points 6 and 7).
+import { api, errText, h } from "./api";
 import { btn } from "./ui";
 
 let overlay: HTMLElement | null = null;
 
-/** What the update check found, as the About panel and Help → Check for updates word it. */
-function updateText(u: AppUpdateInfo, s: AppUpdateStatus, install: string): string {
-  if (!u.available) return `Colony ${u.current} is up to date.`;
-  return `Colony ${u.available} is available (this is ${u.current}). ${s.canInstall ? install : s.note}`;
+function row(label: string, value: string): HTMLElement {
+  return h("div", { class: "engine-row" }, h("span", { class: "dim" }, label), h("span", {}, value));
 }
 
-/** Help → Check for updates: the About panel's check, reported in the status bar. A build
- *  that cannot check (a package build, a development build) says where its updates come from. */
-export async function checkForUpdates(status: (message: string) => void) {
-  try {
-    const s = await api.appUpdateStatus();
-    if (!s.canCheck) return status(`Colony ${s.version}: ${s.note}`);
-    status("Checking the latest GitHub Release…");
-    status(updateText(await api.appUpdateCheck(), s, "Install it from Help → About Colony… (Update and restart)."));
-  } catch (e) {
-    status(`Check for updates: ${errText(e)}`);
-  }
-}
-
-function row(label: string, value: string | Node): HTMLElement {
-  return h("div", { class: "engine-row" }, h("span", { class: "dim" }, label), typeof value === "string" ? h("span", {}, value) : value);
-}
-
-export async function openAboutPanel(status: (message: string) => void) {
+export async function openAboutPanel() {
   overlay?.remove();
   const box = h("div", { class: "engine-box" });
   overlay = h("div", { id: "about-panel" }, box);
@@ -47,51 +27,11 @@ export async function openAboutPanel(status: (message: string) => void) {
     if (ev.target === overlay) close();
   });
   document.body.append(overlay);
-
-  let s: AppUpdateStatus;
+  const title = h("div", { class: "card-title" }, "Colony", h("span", { class: "spacer" }), btn("✕", close, { class: "icon", title: "Close" }));
   try {
-    s = await api.appUpdateStatus();
+    const s = await api.appUpdateStatus();
+    box.replaceChildren(title, row("Version", s.version), row("License", "Apache-2.0 · github.com/agent-kit-startup/colony"));
   } catch (e) {
-    box.replaceChildren(h("div", { class: "bad" }, errText(e)));
-    return;
+    box.replaceChildren(title, h("div", { class: "bad" }, errText(e)));
   }
-  const msg = h("div", { class: "engine-msg dim" });
-  let busy = false;
-  const act = async (label: string, run: () => Promise<string>) => {
-    if (busy) return;
-    busy = true;
-    msg.textContent = `${label}…`;
-    msg.classList.remove("bad");
-    try {
-      const text = await run();
-      msg.textContent = text;
-      status(text);
-    } catch (e) {
-      msg.textContent = errText(e);
-      msg.classList.add("bad");
-    } finally {
-      busy = false;
-    }
-  };
-  const actions = h("div", { class: "engine-actions" });
-  if (s.canCheck) {
-    actions.append(
-      btn("Check for updates", () =>
-        void act("Checking the latest GitHub Release", async () => updateText(await api.appUpdateCheck(), s, "Install it with Update and restart.")),
-      ),
-    );
-  }
-  if (s.canInstall) {
-    actions.append(btn("Update and restart", () => void act("Downloading and verifying the update", () => api.appUpdateInstall())));
-  }
-  box.replaceChildren(
-    h("div", { class: "card-title" }, "Colony", h("span", { class: "spacer" }), btn("✕", close, { class: "icon", title: "Close" })),
-    row("Version", s.version),
-    row("Channel", s.channel === "direct" ? "direct (GitHub Releases)" : "package (distro package)"),
-    row("Installed as", s.install),
-    row("Updates", s.note),
-    row("License", "Apache-2.0 · github.com/agent-kit-startup/colony"),
-    ...(actions.childElementCount ? [actions] : []),
-    msg,
-  );
 }
