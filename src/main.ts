@@ -4107,7 +4107,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.menuBack = await until(() => activeTab === "inbox", 2000);
     const stGroups = [...settingsPane.querySelectorAll<HTMLElement>(".settings-group")];
     const groupRows = Object.fromEntries(stGroups.map((g) => [g.dataset.group ?? "", { title: g.querySelector(".settings-group-title")?.textContent ?? "", hidden: g.hidden, labels: [...g.querySelectorAll(".menu-label")].map((l) => l.textContent ?? ""), cmds: [...g.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd ?? "") }]));
-    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
+    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "App updates", "Engine", "Editor and files", "Kit config", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
     st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels", "Oligarchy on the rail"]) && !groupRows.Appearance?.cmds.length;
     st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
     // The module bodies: App updates shows the version, Editor and files its three settings,
