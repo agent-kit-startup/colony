@@ -252,8 +252,10 @@ mod tests {
         assert_eq!(view.iter().filter(|i| i.starts_with("view:")).count(), 14, "{view:?}");
         assert_eq!(view[..14].iter().filter(|i| i.starts_with("view:")).count(), 14, "the rail items come first: {view:?}");
         assert_eq!(view[13], "view:workspace", "Workspace last, as on the rail: {view:?}");
-        assert_eq!(view[14..18], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
-        assert_eq!(view[18..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom", "pane-layout-reset"]);
+        // The game item's toggle (amend 2026-11-19, point 4): after the rail rows, before the rest.
+        assert_eq!(view[14], "rail-game");
+        assert_eq!(view[15..19], ["explorer", "explorer-collapse", "explorer-refresh", "refresh"]);
+        assert_eq!(view[19..], ["split-right", "split-down", "pane-close", "pane-focus-left", "pane-focus-right", "pane-focus-up", "pane-focus-down", "pane-focus-next", "pane-focus-prev", "tab-to-pane-left", "tab-to-pane-right", "tab-to-pane-up", "tab-to-pane-down", "pane-swap-left", "pane-swap-right", "pane-swap-up", "pane-swap-down", "pane-move-left", "pane-move-right", "pane-move-up", "pane-move-down", "pane-resize-left", "pane-resize-right", "pane-resize-up", "pane-resize-down", "pane-equalize", "pane-zoom", "pane-layout-reset"]);
         assert_eq!(menu_ids("Go"), ["quick-open", "commands", "explorer-reveal", "nav-back", "nav-forward"]);
         assert_eq!(menu_ids("Terminal"), ["new-terminal", "terminal", "dock:bottom", "dock:top", "dock:side", "term-to-panel", "term-to-editor", "term-placement-reset"]);
         assert_eq!(menu_ids("Run"), ["run-plan", "run-queue", "run-elsewhere", "interactive", "start-project", "backlog-add", "hotfix", "qa", "git-staging", "git-prod"]);

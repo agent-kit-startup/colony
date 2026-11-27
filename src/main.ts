@@ -50,6 +50,7 @@ import { readiness } from "./readiness";
 import { paneKey, SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
 import { closeShortcutsPanel, openShortcutsPanel } from "./shortcuts";
 import { railFit, type RailFit } from "./railfit";
+import { RAIL_GAME, railGameShown, railKeyTarget, railOnScreen } from "./railgame";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { runState } from "./drivermotion";
@@ -148,6 +149,9 @@ document.getElementById("app")!.innerHTML = `
     <div class="menu-label">Rail labels</div>
     <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
     <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+    <div class="menu-label">Oligarchy on the rail</div>
+    <button data-setting="rail-game" data-game="on" title="The game item at the end of the rail's main group (default)">Shown</button>
+    <button data-setting="rail-game" data-game="off" title="Off the rail only: colony://play, View → Oligarchy and the palette still open the game">Hidden</button>
   </section>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>
@@ -907,8 +911,13 @@ function renderRail() {
       return el;
     });
     // The main group scrolls; the bottom group (Workspace) stays on screen below it.
-    $("rail-scroll").replaceChildren(...items.filter((_, i) => !RAIL[i].bottom));
     $("rail-bottom").replaceChildren(...items.filter((_, i) => RAIL[i].bottom));
+  }
+  // The game item (amend 2026-11-19, point 4) is detached, not `hidden`, when off: the arrow
+  // keys, the fade edges and the label fit then see only the items on screen. Its button stays
+  // in railEls; RAIL (and so Ctrl+1..9, view:colony, the palette) never changes.
+  if (railEls.get(RAIL_GAME)!.isConnected !== railGame() || !$("rail-scroll").childElementCount) {
+    $("rail-scroll").replaceChildren(...railOnScreen(RAIL.filter((r) => !r.bottom), railGame()).map((r) => railEls.get(r.id)!));
     railFade();
   }
   let activeEl: HTMLElement | null = null;
@@ -955,14 +964,15 @@ $("rail-scroll").addEventListener("scroll", railFade, { passive: true });
 new ResizeObserver(railFade).observe($("rail-scroll"));
 // Arrow keys move the focus along the rail, main group then Workspace (Home / End: the first /
 // last item); Enter or Space opens the focused item, as on any button.
+// A game item taken off the rail is not in the DOM, so the keys skip it.
 $("rail").addEventListener("keydown", (ev) => {
   const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
   const at = items.indexOf(document.activeElement as HTMLElement);
   if (at < 0) return;
-  const next = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+  const next = railKeyTarget(ev.key, at, items.length);
   if (next === undefined) return;
   ev.preventDefault();
-  const el = items[Math.max(0, Math.min(items.length - 1, next))];
+  const el = items[next];
   el.focus();
   el.scrollIntoView({ block: "nearest" });
 });
@@ -970,9 +980,9 @@ $("rail").addEventListener("keydown", (ev) => {
 // ---- Settings: Colony's settings, one view ---------------------------------------------
 // The one Settings surface (ADR 2026-10-24 amend 2026-11-11, point 2): the top bar gear and
 // File → Settings… show this view, and Back returns from it. Its rows sit under plain group
-// labels: Appearance (Skin, Title bar, Rail position, Rail labels: the pane's markup), then
-// the action rows of src/menu.json `config`, each under its `group` (Engine, Integrations,
-// Files; never in the menu bar; menu.rs tests). `omarchyOnly` rows stay hidden until
+// labels: Appearance (Skin, Title bar, Rail position, Rail labels, Oligarchy on the rail: the
+// pane's markup), then the action rows of src/menu.json `config`, each under its `group`
+// (Engine, Integrations, Files; never in the menu bar; menu.rs tests). `omarchyOnly` rows stay hidden until
 // renderSkinMenu() knows Omarchy is there, and a group with no row on screen hides with them.
 // (Declared before renderTabs, which marks the gear: the Inbox view reports its counts while
 // this module loads, and that already renders the tabs.)
@@ -1733,28 +1743,35 @@ async function revealInExplorer() {
   $("tree").focus({ preventScroll: true });
 }
 
-// The rail (Settings → Appearance → Rail position, Rail labels): its side of the window and
-// labels or icons only.
+// The rail (Settings → Appearance → Rail position, Rail labels, Oligarchy on the rail): its side
+// of the window, labels or icons only, and the game item on or off the rail (also View → Show
+// or hide Oligarchy on the rail, `rail-game`; amend 2026-11-19, point 4).
 type RailPosition = "left" | "right";
 const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
 const railLabels = () => !shell.classList.contains("rail-icons");
+function railGame() {
+  return !shell.classList.contains("no-rail-game");
+}
 
 function renderRailMenu() {
-  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-setting=rail-position], button[data-setting=rail-labels]")) {
-    const on = b.dataset.pos ? b.dataset.pos === railPosition() : (b.dataset.labels === "on") === railLabels();
+  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-setting=rail-position], button[data-setting=rail-labels], button[data-setting=rail-game]")) {
+    const on = b.dataset.pos ? b.dataset.pos === railPosition() : b.dataset.game ? (b.dataset.game === "on") === railGame() : (b.dataset.labels === "on") === railLabels();
     b.dataset.label ??= b.textContent ?? "";
     b.classList.toggle("on", on);
     b.textContent = `${on ? "✓ " : ""}${b.dataset.label}`;
   }
 }
 
-function setRail(p: { position?: RailPosition; labels?: boolean }) {
+function setRail(p: { position?: RailPosition; labels?: boolean; game?: boolean }) {
   if (p.position) shell.dataset.rail = p.position;
   if (p.labels !== undefined) shell.classList.toggle("rail-icons", !p.labels);
+  if (p.game !== undefined) shell.classList.toggle("no-rail-game", !p.game);
   renderRailMenu();
+  renderRail();
   relayout();
   layoutChanged();
-  status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
+  if (p.game !== undefined) status(p.game ? "Rail: Oligarchy shown" : "Rail: Oligarchy hidden; View → Oligarchy, the palette and colony://play still open it");
+  else status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
 }
 
 /** The agent kind of each centre PTY (drawer shells are `shell` by their id), and the
@@ -1782,6 +1799,7 @@ function layoutNow(): Required<{ [K in keyof PanelLayout]: PanelLayout[K] | null
     terminalWidth: px("--term-w"),
     railPosition: railPosition(),
     railLabels: railLabels(),
+    railGame: railGame(),
   };
 }
 /** Put a saved layout on the window (no save back). */
@@ -1791,6 +1809,7 @@ function applyLayout(l: LayoutSettings) {
   shell.classList.toggle("no-side", l.explorerVisible === false);
   shell.dataset.rail = l.railPosition === "right" ? "right" : "left";
   shell.classList.toggle("rail-icons", l.railLabels === false);
+  shell.classList.toggle("no-rail-game", !railGameShown(l));
   const size = (name: string, v: number | undefined) => (typeof v === "number" && v > 0 ? shell.style.setProperty(name, `${v}px`) : shell.style.removeProperty(name));
   size("--side-w", l.explorerWidth);
   size("--bottom-h", l.terminalHeight);
@@ -2816,6 +2835,7 @@ settingsPane.addEventListener("click", (ev) => {
   else if (el.dataset.setting === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
   else if (el.dataset.setting === "rail-position") setRail({ position: el.dataset.pos === "right" ? "right" : "left" });
   else if (el.dataset.setting === "rail-labels") setRail({ labels: el.dataset.labels === "on" });
+  else if (el.dataset.setting === "rail-game") setRail({ game: el.dataset.game === "on" });
   else if (el.dataset.setting === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
@@ -3061,6 +3081,7 @@ const ACTIONS: Record<string, () => unknown> = {
   "file-manager": () => fileManagerHere(),
   settings: () => showSettings(),
   "close-window": () => closeWindow(),
+  "rail-game": () => setRail({ game: !railGame() }),
   explorer: () => toggleExplorer(),
   "explorer-collapse": () => tree.collapseAll(),
   "explorer-refresh": () => tree.refresh(),
@@ -4999,6 +5020,46 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     ctrl.end = document.activeElement === railEls().at(-1);
     (document.activeElement as HTMLElement | null)?.blur();
     await log("rail-keys", Object.values(ctrl).every((v) => v === true), ctrl);
+    // The game item (amend 2026-11-19, point 4): View → Show or hide Oligarchy on the rail takes
+    // it off the rail (the arrow keys skip it, Ctrl+1..9 stay Cockpit to Plans), view:colony and
+    // the palette still open the view, settings.json keeps the choice, and Settings → Appearance
+    // puts it back (the later steps and the next start expect the fourteen items).
+    {
+      await api.smokeMenuClick("rail-game");
+      await until(() => !railGame(), 2000);
+      const offIds = railEls().map((el) => el.dataset.tab ?? "");
+      const procs = railEls().find((el) => el.dataset.tab === "processes")!;
+      procs.focus();
+      procs.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+      const skips = (document.activeElement as HTMLElement | null)?.dataset.tab === "workspace";
+      (document.activeElement as HTMLElement | null)?.blur();
+      showTab("mission");
+      runAction("view:colony");
+      await wait(100);
+      const viewOpens = activeTab === "colony";
+      const inPalette = paletteActions().some((a) => a.id === "view:colony");
+      const digits = JSON.stringify(CTRL_DIGITS) === JSON.stringify(RAIL_WANT.slice(0, 9).map(([id]) => id));
+      let gOff: LayoutSettings = {};
+      for (let i = 0; i < 20; i++) {
+        await wait(200);
+        await layoutSaved;
+        gOff = await savedLayout();
+        if (gOff.railGame === false) break;
+      }
+      settingRow("rail-game][data-game=on");
+      const backIds = railEls().map((el) => el.dataset.tab ?? "");
+      let gOn: LayoutSettings = {};
+      for (let i = 0; i < 20; i++) {
+        await wait(200);
+        await layoutSaved;
+        gOn = await savedLayout();
+        if (gOn.railGame === true) break;
+      }
+      showTab("mission");
+      const want = RAIL_WANT.map(([id]) => id);
+      const g = { offIds, skips, viewOpens, inPalette, digits, savedOff: gOff.railGame, backIds, savedOn: gOn.railGame };
+      await log("rail-game", JSON.stringify(offIds) === JSON.stringify(want.filter((id) => id !== RAIL_GAME)) && skips && viewOpens && inPalette && digits && gOff.railGame === false && JSON.stringify(backIds) === JSON.stringify(want) && gOn.railGame === true && railGame(), g);
+    }
     // The palette has a Go to row for every rail item and every Workspace section, and a
     // Go to row opens its view.
     const goIds = paletteActions().filter((a) => a.name.startsWith("Go to")).map((a) => a.id);

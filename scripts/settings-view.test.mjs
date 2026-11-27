@@ -33,7 +33,7 @@ test("the rows sit under Appearance, Engine, Integrations and Files", async () =
   assert.deepEqual([...pane.matchAll(/data-group="([^"]+)"/g)].map((m) => m[1]), ["Appearance"]);
   assert.deepEqual(
     [...pane.matchAll(/<div class="menu-label"[^>]*>([^<]+)</g)].map((m) => m[1]),
-    ["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"],
+    ["Skin", "Title bar (on the next start)", "Rail position", "Rail labels", "Oligarchy on the rail"],
   );
 });
 
