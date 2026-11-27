@@ -33,14 +33,14 @@ test("the rows sit under Appearance, Engine, Integrations and Files", async () =
   assert.deepEqual([...pane.matchAll(/data-group="([^"]+)"/g)].map((m) => m[1]), ["Appearance"]);
   assert.deepEqual(
     [...pane.matchAll(/<div class="menu-label"[^>]*>([^<]+)</g)].map((m) => m[1]),
-    ["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"],
+    ["Skin", "Title bar (on the next start)", "Rail position", "Rail labels", "Oligarchy on the rail"],
   );
 });
 
 test("Settings is a view of its own, not a Workspace section", async () => {
   const main = await read("src/main.ts");
   const sections = /const WORKSPACE_SECTIONS = \[([^\]]*)\]/.exec(main)?.[1].replace(/["\s]/g, "").split(",");
-  assert.deepEqual(sections, ["health", "decisions", "agents", "skills", "rules", "commands"]);
+  assert.deepEqual(sections, ["overview", "decisions", "agents", "skills", "rules", "commands"]);
   const rail = main.slice(main.indexOf("const RAIL: RailItem[] = ["), main.indexOf("\n];", main.indexOf("const RAIL: RailItem[] = [")));
   assert.ok(!/config/i.test(rail), "no rail item or tooltip names Config");
   assert.ok(!(await read("src/workspace.ts")).includes('config: {'), "Workspace has no Config section");

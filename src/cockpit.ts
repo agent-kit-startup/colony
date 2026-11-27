@@ -784,7 +784,10 @@ export class MissionView extends View {
 }
 
 // ---- Chats ---------------------------------------------------------------------------
-/** The folder's saved agent chats (the Chats rail item): every chat of the read, resumable. */
+/** The Chats rail item: the agent runs going now in this folder (driver runs, interactive and
+ *  queue terminal tabs; a click focuses the tab), then the folder's saved agent chats, every
+ *  chat of the read, resumable (kit ADR 2026-10-24 amend 2026-11-19, point 3). The agent
+ *  definitions stay in Workspace → Agents. */
 export class ChatsView extends View {
   /** The list shows the newest few until the operator asks for all of them. */
   private allChats = false;
@@ -796,16 +799,25 @@ export class ChatsView extends View {
       if (!chats.list) this.allChats = false;
       this.invalidate();
     });
+    launches.on(() => this.invalidate());
   }
 
-  /** Saved chats do not need the kit's data. */
+  /** Saved chats and live runs do not need the kit's data. */
   protected render(): Node[] {
     return [h("div", { class: "grid" }, this.chatsCard())];
+  }
+
+  /** The launches of this window still going in the open folder, newest first. */
+  private liveRows(): HTMLElement[] {
+    const root = this.host.workspaceRoot();
+    const live = launches.list().filter((l) => l.state !== "ended" && l.root === root);
+    return live.sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((l) => launchRow(l, undefined, this.host));
   }
 
   private chatsCard(): HTMLElement {
     const l = chats.list;
     const all = l?.sessions ?? [];
+    const live = this.liveRows();
     const rows: Node[] = (this.allChats ? all : all.slice(0, CHATS_SHOWN)).map((c) => chatRow(c, this.host));
     if (!this.allChats && all.length > CHATS_SHOWN)
       rows.push(
@@ -823,13 +835,26 @@ export class ChatsView extends View {
         : "Reading the saved chats…",
     );
     const body = chats.error ? [empty(`Saved chats unavailable: ${chats.error}`)] : rows.length ? rows : [none];
-    return card({ title: "Chats", aside: [...(l?.total && !chats.error ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []), refresh] }, ...body);
+    // One list: what runs now first, under its own label, then what can be resumed.
+    const head = live.length ? [h("div", { class: "chats-sub dim small", "data-sub": "live" }, "Running now"), ...live, h("div", { class: "chats-sub dim small", "data-sub": "saved" }, "Saved")] : [];
+    const aside = [
+      ...(live.length ? [pill(`${live.length} live`, "running", stateMark("run", "running", { still: true }))] : []),
+      ...(l?.total && !chats.error ? [h("span", { class: "card-count mono", title: l.dir ?? "" }, `${l.total} saved`)] : []),
+      refresh,
+    ];
+    const c = card({ title: "Chats", aside }, ...head, ...body);
+    c.classList.add("chats-card");
+    return c;
   }
 }
 
 // ---- Activity ------------------------------------------------------------------------
-/** The kit's recent activity and the health checks: out of the Cockpit fold. */
+/** The kit's recent activity and the full health checks: out of the Cockpit fold. Health is a
+ *  part of this view, not a Workspace section (kit ADR 2026-10-24 amend 2026-11-19, point 2):
+ *  `view:health` opens it at the health card (showPart). */
 export class ActivityView extends View {
+  private part = "";
+
   constructor(host: CockpitHost) {
     super(host, "cv-activity");
   }
@@ -838,14 +863,46 @@ export class ActivityView extends View {
     return this.noData() ?? [h("div", { class: "grid" }, this.activityCard(), this.healthCard())];
   }
 
+  show() {
+    super.show();
+    const part = this.part;
+    this.part = "";
+    if (part) this.el.querySelector<HTMLElement>(`[data-part="${part}"]`)?.scrollIntoView({ block: "start" });
+  }
+
+  /** Scroll `part` (`health`) into sight on the next show. */
+  showPart(part: string) {
+    this.part = part;
+    if (this.visible) this.show();
+  }
+
   private activityCard(): HTMLElement {
     const list = snapshot.activity.slice(0, 20);
     return card("Activity", ...(list.length ? list.map((a) => h("div", { class: "row" }, chip(str(a.kind)), h("span", { class: "grow ellipsis", title: str(a.label) }, str(a.label)), h("span", { class: "run-meta mono" }, ago(a.at)))) : [empty("No recent activity.")]));
   }
 
+  /** Every check: its state, id and detail, with the overall status and the pass count. */
   private healthCard(): HTMLElement {
-    const checks = Array.isArray(snapshot.health.checks) ? snapshot.health.checks : [];
-    return card("Health", ...(checks.length ? [h("div", { class: "chips" }, ...checks.map((c: J) => checkChip(str(c.label || c.id), c.ok ? "ok" : "fail")))] : [empty("No health checks in the snapshot.")]));
+    const hl = snapshot.health;
+    const checks: J[] = Array.isArray(hl.checks) ? hl.checks : [];
+    const failing = checks.filter((c) => !c.ok).length;
+    const status = str(hl.status, failing ? "degraded" : "ok");
+    const rows = checks.map((c) => {
+      const detail = str(c.detail);
+      const el = h(
+        "div",
+        { class: "kv-row" },
+        h("div", { class: "row" }, checkChip(str(c.label, str(c.id)), c.ok ? "ok" : "fail"), h("span", { class: "grow dim small mono" }, str(c.id)), ...(detail ? [h("span", { class: "dim small ellipsis", title: detail }, detail)] : [])),
+      );
+      el.dataset.key = str(c.id);
+      return el;
+    });
+    const c = card(
+      { title: "Health", icon: "health", aside: checks.length ? [chip(status, status === "ok" ? "chip-done" : "chip-failed"), h("span", { class: "card-count" }, `${checks.length - failing} of ${checks.length} pass`)] : [] },
+      ...(rows.length ? rows : [empty("No health checks in the snapshot.")]),
+    );
+    c.dataset.part = "health";
+    return c;
   }
 }
 
