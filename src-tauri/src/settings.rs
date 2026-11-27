@@ -621,6 +621,43 @@ pub fn settings_set_layout(state: State<'_, AppState>, patch: serde_json::Value)
     })
 }
 
+/// A command setting (`editor.command`, `fileManager`): a string (split on whitespace) or an
+/// array of strings, as editor.rs and filemanager.rs read it. Null, "" or [] clears it.
+fn command_value(key: &str, v: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
+    match v {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) if s.trim().is_empty() => Ok(None),
+        serde_json::Value::String(s) => Ok(Some(serde_json::Value::String(s.trim().to_string()))),
+        serde_json::Value::Array(a) if a.is_empty() => Ok(None),
+        serde_json::Value::Array(a) if a.iter().all(|x| x.as_str().is_some_and(|s| !s.is_empty())) => Ok(Some(v.clone())),
+        _ => Err(format!("{key} must be a string or an array of non-empty strings")),
+    }
+}
+
+/// Settings → Editor and files: set one of `editor.command`, `editor.terminal` (true, false
+/// or null for "decided per source") or `fileManager`; null clears it.
+pub fn apply_editor(s: &mut Settings, key: &str, value: &serde_json::Value) -> Result<(), String> {
+    match key {
+        "editor.command" => s.editor.command = command_value(key, value)?,
+        "fileManager" => s.file_manager = command_value(key, value)?,
+        "editor.terminal" => {
+            s.editor.terminal = match value {
+                serde_json::Value::Null => None,
+                serde_json::Value::Bool(b) => Some(*b),
+                _ => return Err("editor.terminal must be true, false or null".into()),
+            }
+        }
+        _ => return Err(format!("Unknown editor setting: {key} (editor.command, editor.terminal or fileManager)")),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn settings_set_editor(state: State<'_, AppState>, key: String, value: serde_json::Value) -> Result<SettingsInfo, String> {
+    state.settings.update(|s| apply_editor(s, &key, &value))?;
+    settings_get(state)
+}
+
 #[tauri::command]
 pub fn settings_workspace(state: State<'_, AppState>) -> Result<WorkspaceSettings, String> {
     let root = crate::workspace::workspace_root(&state)?.display().to_string();
@@ -645,6 +682,30 @@ mod tests {
         assert_eq!(back["future"], 1);
         assert_eq!(back["workspaces"]["/r"]["x"], 2);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn editor_and_file_manager_rows_set_and_clear() {
+        use serde_json::json;
+        let mut s: Settings = serde_json::from_str(r#"{"editor":{"terminal":true},"future":1}"#).unwrap();
+        apply_editor(&mut s, "editor.command", &json!(" zed --wait ")).unwrap();
+        apply_editor(&mut s, "fileManager", &json!(["yazi", "--cwd-file", "/tmp/x"])).unwrap();
+        apply_editor(&mut s, "editor.terminal", &json!(false)).unwrap();
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["editor"], json!({"command": "zed --wait", "terminal": false}));
+        assert_eq!(v["fileManager"], json!(["yazi", "--cwd-file", "/tmp/x"]));
+        assert_eq!(v["future"], 1);
+        for clear in [json!(null), json!(""), json!([])] {
+            apply_editor(&mut s, "editor.command", &clear).unwrap();
+            apply_editor(&mut s, "fileManager", &clear).unwrap();
+        }
+        apply_editor(&mut s, "editor.terminal", &json!(null)).unwrap();
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["editor"], json!({}));
+        assert!(v.get("fileManager").is_none());
+        for (key, bad) in [("editor.command", json!(3)), ("fileManager", json!(["ok", 1])), ("fileManager", json!([""])), ("editor.terminal", json!("yes")), ("ui.skin", json!("legacy"))] {
+            assert!(apply_editor(&mut s, key, &bad).is_err(), "{key} {bad}");
+        }
     }
 
     #[test]

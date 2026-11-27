@@ -28,7 +28,10 @@ import { planActions } from "./plancrud";
 import { closePlanMenu } from "./planmenu";
 import { type EditorView, Editors, editorStatus } from "./editor";
 import { type Box, cycle, pathTo, type Dir, type DockMove, dockAction, paneDropZone, zoneBox, equalize, freshPaneId, heir, isLeaf, leaves, MAX_PANES, movePane, neighbour, nextShown, nodeAt, type PaneNode, type PanePath, type PaneSplit, readSaved, relInside, absInside, removePane, resizeToward, type SavedPanes, type SavedTab, saveTree, savedLeaves, treeOf, setRatio, type SplitDir, splitContent, splitPane, type Strip, stripAdd, stripRemove, swapPanes } from "./panes";
-import { checkForUpdates, openAboutPanel } from "./about";
+import { openAboutPanel } from "./about";
+import { AppUpdates } from "./appupdates";
+import { EditorFiles } from "./editorfiles";
+import { KitConfig } from "./kitconfig";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
 import { type Move, outermost } from "./treenav";
@@ -980,24 +983,39 @@ $("rail").addEventListener("keydown", (ev) => {
 });
 
 // ---- Settings: Colony's settings, one view ---------------------------------------------
-// The one Settings surface (ADR 2026-10-24 amend 2026-11-11, point 2): the top bar gear and
-// File → Settings… show this view, and Back returns from it. Its rows sit under plain group
-// labels: Appearance (Skin, Title bar, Rail position, Rail labels, Oligarchy on the rail: the
-// pane's markup), then the action rows of src/menu.json `config`, each under its `group`
-// (Engine, Integrations, Files; never in the menu bar; menu.rs tests). `omarchyOnly` rows stay hidden until
-// renderSkinMenu() knows Omarchy is there, and a group with no row on screen hides with them.
+// The one Settings surface (ADR 2026-10-24 amend 2026-11-11 point 2, amend 2026-11-19 point
+// 7): the top bar gear and File → Settings… show this view, and Back returns from it. Its
+// groups come in the order of src/menu.json `groups`: Appearance (Skin, Title bar, Rail
+// position, Rail labels, Oligarchy on the rail: the pane's markup), App updates (appupdates.ts), Engine, Editor and
+// files (editorfiles.ts), Kit config (kitconfig.ts: the open folder's
+// .cursor/agent-kit.config.json), Integrations and Files. The action rows of `config` sit
+// under their `group` (never in the menu bar; menu.rs tests); the module bodies hold no
+// `data-cmd` button. `omarchyOnly` rows stay hidden until renderSkinMenu() knows Omarchy is
+// there, and a group of action rows only hides when none is on screen.
 // (Declared before renderTabs, which marks the gear: the Inbox view reports its counts while
 // this module loads, and that already renders the tabs.)
 const settingsPane = $("settings-pane");
-for (const group of [...new Set(menuSpec.config.map((i) => i.group))]) {
+const appUpdates = new AppUpdates(status);
+const editorFiles = new EditorFiles(status);
+const kitConfig = new KitConfig(status);
+const SETTINGS_BODIES: Record<string, HTMLElement> = { "App updates": appUpdates.el, "Editor and files": editorFiles.el, "Kit config": kitConfig.el };
+for (const group of menuSpec.groups.filter((g) => g !== "Appearance")) {
   settingsPane.append(
     h(
       "section",
       { class: "settings-group", "data-group": group, "aria-label": group },
       h("h3", { class: "settings-group-title" }, group),
+      ...(SETTINGS_BODIES[group] ? [SETTINGS_BODIES[group]] : []),
       ...menuSpec.config.filter((i) => i.group === group).map((i) => h("button", { "data-cmd": i.id, ...(i.title ? { title: i.title } : {}), ...(i.omarchyOnly ? { "data-omarchy-only": "", hidden: "" } : {}) }, i.label)),
     ),
   );
+}
+/** Re-read what the Settings bodies show (every time the view shows): the app's update
+ *  status (local, no network), settings.json's editor rows, the open folder's kit config. */
+function refreshSettingsBodies() {
+  void appUpdates.load();
+  void editorFiles.load();
+  void kitConfig.load(workspace?.root ?? null);
 }
 /** With no folder open the strip (and its Back) is not on screen: this button returns to the
  *  welcome screen instead. */
@@ -1020,6 +1038,7 @@ function markSettings() {
  *  its own Back). */
 function showSettings() {
   if (workspace) return showTab("settings");
+  refreshSettingsBodies();
   oligarchyView.hide();
   for (const t of tabs.values()) t.el.hidden = true;
   for (const p of paneList()) p.editorEl.hidden = p.emptyEl.hidden = true;
@@ -2785,7 +2804,7 @@ function pinViews() {
   section("rules", rulesView.el, rulesView);
   section("commands", commandsView.el, commandsView);
   // Settings: a view of its own, on no rail item (the top bar gear and File → Settings… show it).
-  pin("settings", "Settings", "config", "Settings: skin, title bar, rail, engine, integrations, settings.json", settingsView, { show: () => {}, hide: () => {} });
+  pin("settings", "Settings", "config", "Settings: appearance, app updates, engine, editor and files, kit config, integrations, settings.json", settingsView, { show: () => refreshSettingsBodies(), hide: () => {} });
 }
 
 // Agent tabs: every run opens (and focuses) its own tab with the transcript.
@@ -3149,9 +3168,9 @@ const ACTIONS: Record<string, () => unknown> = {
   qa: () => host.launch("qa", "/qa tests a release or reproduces a bug and checks the CHANGELOG claims."),
   "git-staging": () => host.launch("git-staging", "/git-staging brings this branch to the pre-production branch, with its own checks and gates in the session."),
   "git-prod": () => host.launch("git-prod", "/git-prod promotes staging to production. Colony opens it interactively only; the routine's own production gate in the session is the yes."),
-  about: () => openAboutPanel(status),
+  about: () => openAboutPanel(),
   shortcuts: () => openShortcutsPanel(shortcutRows(menuItems(), CTRL_DIGITS.map((id) => RAIL.find((r) => r.id === id)!.label))),
-  "check-updates": () => checkForUpdates(status),
+  "check-updates": () => checkUpdatesInSettings(),
   engine: () => showEngine(),
   omarchy: () => openOmarchyPanel(status),
   "settings-json": () => openSettings(),
@@ -3211,6 +3230,14 @@ if (unbound.length) console.error(`colony: menu items without an action: ${unbou
 void listen<string>("colony-menu", (ev) => {
   runAction(ev.payload);
 }).catch((e) => status(`Menu bar: ${errText(e)}`));
+
+/** Help → Check for updates (ADR 2026-10-24 amend 2026-11-19 point 6): Settings at App
+ *  updates, and the check runs there (it also reports in the status bar). */
+function checkUpdatesInSettings() {
+  showSettings();
+  appUpdates.el.closest(".settings-group")?.scrollIntoView({ block: "start" });
+  void appUpdates.check();
+}
 
 function showEngine() {
   void openEnginePanel((m) => {
@@ -3308,7 +3335,10 @@ document.body.append(palette.el);
 function renderSkinMenu() {
   // The Omarchy skin and integration exist only where Omarchy is installed.
   for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-omarchy-only]")) b.hidden = !omarchyDetected();
-  for (const g of settingsPane.querySelectorAll<HTMLElement>(".settings-group")) g.hidden = ![...g.querySelectorAll<HTMLElement>("button")].some((b) => !b.hidden);
+  for (const g of settingsPane.querySelectorAll<HTMLElement>(".settings-group")) {
+    const rows = [...g.querySelectorAll<HTMLElement>("button[data-cmd]")];
+    g.hidden = rows.length > 0 && !g.querySelector(".settings-body") && rows.every((b) => b.hidden);
+  }
   for (const b of settingsPane.querySelectorAll<HTMLElement>('button[data-setting="skin"]')) {
     if (b.dataset.skin === "omarchy") b.hidden = !omarchyDetected();
     const on = b.dataset.skin === skin();
@@ -3958,6 +3988,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     hideQuick();
     await fire("about");
     m.about = await until(() => !!document.getElementById("about-panel"), 2000);
+    // About shows the version only (kit ADR 2026-10-24 amend 2026-11-19 point 7): the channel,
+    // the check and Update and restart live in Settings → App updates.
+    await until(() => !!document.querySelector("#about-panel .engine-row"), 2000);
+    const aboutRows = [...document.querySelectorAll("#about-panel .engine-row > span.dim")].map((e) => e.textContent ?? "");
+    m.aboutVersionOnly = JSON.stringify(aboutRows) === JSON.stringify(["Version", "License"]) && document.querySelectorAll("#about-panel button").length === 1 ? true : aboutRows.join();
     document.getElementById("about-panel")?.click();
     // Engine… is a Settings row, not a menu bar item: the bar refuses its id, the row runs it.
     m.engineNotInBar = await fire("engine").then(() => false, (e) => errText(e).startsWith("Unknown menu item"));
@@ -3984,10 +4019,11 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     document.getElementById("run-dialog")?.remove();
     m.unknownRefused = await fire("not-an-item").then(() => "accepted", (e) => errText(e));
     await log("menu-actions", Object.values(m).every((v) => v === true || (typeof v === "string" && v.startsWith("Unknown menu item"))), { ...m, keyRows, notFired: "open-folder, run-elsewhere (native folder dialog), close-window (ends the smoke), run-queue / interactive (covered later from their views), check-updates (asks GitHub Releases)" });
-    // Settings (kit ADR 2026-10-24 amend 2026-11-11, point 2): one view. The top bar gear and
-    // File → Settings… show the same view and Back returns from each; its rows sit under
-    // Appearance, Engine, Integrations (Omarchy only) and Files; Workspace has no Config
-    // section; settings.json opens from its one row; the palette names the place Settings.
+    // Settings (kit ADR 2026-10-24 amend 2026-11-11 point 2, amend 2026-11-19 point 7): one
+    // view. The top bar gear and File → Settings… show the same view and Back returns from
+    // each; its groups are Appearance, App updates, Engine, Editor and files, Kit config,
+    // Integrations (Omarchy only) and Files; Workspace has no Config section; settings.json
+    // opens from its one row; the palette names the place Settings.
     // The gear is marked while the view is on screen, by its border colour alone.
     const st: Record<string, unknown> = {};
     const stView = view("settings");
@@ -4021,6 +4057,14 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
     st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels", "Oligarchy on the rail"]) && !groupRows.Appearance?.cmds.length;
     st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
+    // The module bodies: App updates shows the version, Editor and files its three settings,
+    // Kit config the open folder's file (a form, a missing-file note or an error, never empty).
+    await until(() => !!appUpdates.el.querySelector(".settings-row") && !!editorFiles.el.querySelector("input") && kitConfig.el.childElementCount > 0, 3000);
+    const bodyOf = (g: string) => settingsPane.querySelector<HTMLElement>(`.settings-group[data-group="${g}"] .settings-body`);
+    st.bodies =
+      bodyOf("App updates") === appUpdates.el && bodyOf("Editor and files") === editorFiles.el && bodyOf("Kit config") === kitConfig.el && (appUpdates.el.querySelector(".settings-row")?.textContent ?? "").startsWith("Version") && editorFiles.el.querySelectorAll("input").length === 2 && editorFiles.el.querySelectorAll("button[data-editor-terminal]").length === 3 && /agent-kit\.config\.json|\.cursor/.test(kitConfig.el.textContent ?? "") && !settingsPane.querySelector(".settings-body button[data-cmd]")
+        ? true
+        : { app: appUpdates.el.textContent, editor: editorFiles.el.textContent, kit: kitConfig.el.textContent };
     st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 6 && !tabs.has("config") && view("decisions").querySelectorAll(".ws-nav-btn").length === 6 && !view("decisions").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
     const stPalette = paletteActions();
     st.paletteWhere = menuSpec.config.every((c) => !!c.omarchyOnly && !omarchyDetected() ? !stPalette.some((a) => a.id === c.id) : stPalette.find((a) => a.id === c.id)?.description === "Settings") && stPalette.find((a) => a.id === "settings")?.description === "File menu" && !stPalette.some((a) => a.id === "view:config");
@@ -6211,6 +6255,8 @@ async function runPlaySmoke(info: StartupInfo) {
       ownBack: !settingsBack.hidden,
       gearMarked: gear.getAttribute("aria-current") === "page",
       noStrip: focused.bar.classList.contains("tabbar-empty"),
+      // Kit config belongs to a folder: with none open it says so instead of a form.
+      kitNoFolder: /Open a folder/.test(kitConfig.el.textContent ?? "") && !kitConfig.el.querySelector("input, select, textarea"),
     };
     settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
     await wait(400);

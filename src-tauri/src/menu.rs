@@ -24,6 +24,9 @@ const SPEC: &str = include_str!("../../src/menu.json");
 #[derive(Deserialize, Debug)]
 struct Spec {
     menus: Vec<SpecMenu>,
+    /// The groups of the Settings view, in order (src/main.ts renders them).
+    #[serde(default)]
+    groups: Vec<String>,
     /// The action rows of the Settings view (src/main.ts renders them; not in the bar).
     #[serde(default)]
     config: Vec<SpecItem>,
@@ -120,9 +123,13 @@ fn parse_str(text: &str) -> Result<Spec, String> {
     // the Settings view draws its own groups).
     for i in &spec.config {
         check(i)?;
-        if i.group.trim().is_empty() {
-            return Err(format!("src/menu.json: the Settings row {} names no group", i.id));
+        if !spec.groups.contains(&i.group) {
+            return Err(format!("src/menu.json: the Settings row {} names no group of `groups`", i.id));
         }
+    }
+    let mut seen_groups = std::collections::HashSet::new();
+    if spec.groups.iter().any(|g| g.trim().is_empty() || !seen_groups.insert(g)) {
+        return Err("src/menu.json: `groups` has an empty or duplicate group".into());
     }
     Ok(spec)
 }
@@ -378,6 +385,22 @@ mod tests {
     /// here is a decision.
     const CONFIG_SETTINGS: &[(&str, &str)] = &[("engine", "Engine"), ("omarchy", "Integrations"), ("settings-json", "Files")];
 
+    /// The Settings view's groups, in order (kit ADR 2026-10-24 amend 2026-11-19 point 7).
+    /// Appearance is the view's markup in main.ts; App updates, Editor and files and Kit
+    /// config are rendered by their modules; the rest hold the CONFIG_SETTINGS rows.
+    const SETTINGS_GROUPS: &[&str] = &["Appearance", "App updates", "Engine", "Editor and files", "Kit config", "Integrations", "Files"];
+
+    #[test]
+    fn settings_groups_are_in_adr_order() {
+        let spec = parse().unwrap();
+        assert_eq!(spec.groups, SETTINGS_GROUPS);
+        let markup = main_ts_block("<div id=\"settings-pane\"", "</div>\n<div id=\"quick\"");
+        assert_eq!(markup.matches("data-group=").count(), 1, "the markup holds Appearance only");
+        assert!(markup.contains("data-group=\"Appearance\""));
+        assert!(parse_str(r#"{"menus":[],"groups":["A"],"config":[{"id":"x","label":"X","group":"B"}]}"#).is_err(), "a row outside `groups`");
+        assert!(parse_str(r#"{"menus":[],"groups":["A","A"],"config":[]}"#).is_err(), "a duplicate group");
+    }
+
     #[test]
     fn config_holds_settings_only() {
         let rows: Vec<(String, String)> = parse().unwrap().config.into_iter().map(|i| (i.id, i.group)).collect();
@@ -448,7 +471,7 @@ mod tests {
         assert!(parse_str(bar_and_config).is_err());
         let twice_in_config = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"},{"id":"y","group":"G","label":"Y"}]}"#;
         assert!(parse_str(twice_in_config).is_err());
-        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","group":"G","label":"Y"}]}"#;
+        let fine = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"groups":["G"],"config":[{"id":"y","group":"G","label":"Y"}]}"#;
         assert_eq!(parse_str(fine).map(|s| s.config.len()), Ok(1));
         let no_group = r#"{"menus":[{"label":"A","items":[{"id":"x","label":"X"}]}],"config":[{"id":"y","label":"Y"}]}"#;
         assert!(parse_str(no_group).is_err());

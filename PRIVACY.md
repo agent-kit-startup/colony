@@ -4,7 +4,7 @@ Colony collects no telemetry. It sends no usage events, crash reports, identifie
 
 ## Network calls Colony makes itself
 
-Colony opens a network connection on its own only when you ask for one of these actions in `Settings → Engine…`, `Help → About Colony…` or the Oligarchy rail item:
+Colony opens a network connection on its own only when you ask for one of these actions in `Settings → Engine…`, `Settings → App updates` (also opened by `Help → Check for updates`) or the Oligarchy rail item:
 
 | Action | Request | Code |
 |--------|---------|------|

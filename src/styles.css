@@ -1005,6 +1005,17 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .settings-pane button:hover { border-color: var(--border); }
 .settings-pane button.on { border-color: var(--border-active); color: var(--text-primary); }
 .settings-pane .menu-label { padding-top: var(--mc-space-md); }
+/* The module bodies (App updates, Editor and files, Kit config): rows, fields and messages.
+   No fill and no accent bar: inputs keep the shared 1px border, a chosen value the .on border. */
+.settings-body { display: flex; flex-direction: column; gap: 2px; }
+.settings-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 2px 10px; font-size: var(--mc-chrome-label-size); overflow-wrap: anywhere; }
+.settings-field { display: flex; padding: 0 10px; }
+.settings-field input, .settings-field select, .settings-field textarea { flex: 1; min-width: 0; }
+.settings-msg { padding: 2px 10px; font-size: var(--mc-chrome-meta-size); overflow-wrap: anywhere; }
+.settings-msg:empty { display: none; }
+.settings-msg.bad { color: var(--red); }
+.settings-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 0 0; }
+.settings-pane textarea.settings-raw { margin: 0 10px; min-height: 240px; }
 #btn-settings[aria-current="page"] { border-color: var(--border-active); }
 
 /* Native kit views (src/kitviews.ts): list rows. Active filters and

@@ -22,6 +22,7 @@ mod hostreq;
 mod hyprland;
 #[cfg(unix)]
 mod instance;
+mod kitconfig;
 mod launch;
 mod mcdata;
 mod menu;
@@ -394,6 +395,10 @@ pub fn run() {
             settings::settings_set_title_bar,
             settings::settings_title_bar,
             settings::settings_set_layout,
+            settings::settings_set_editor,
+            kitconfig::kit_config_read,
+            kitconfig::kit_config_set,
+            kitconfig::kit_config_write_raw,
             launch::open_in_editor,
             newwindow::spawn_new_window,
             omarchy::omarchy_subscribe,
