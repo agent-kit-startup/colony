@@ -12,14 +12,14 @@
 # release key 9A9BB4349C2248C6. Bump steps: docs/release.md, "Arch package (AUR)".
 
 pkgname=missionkit-colony-bin
-pkgver=0.5.1
+pkgver=0.6.0
 pkgrel=1
 pkgdesc='Colony, the Mission Kit desktop IDE for agent runs (prebuilt binary)'
 arch=('x86_64')
 url='https://github.com/agent-kit-startup/colony'
-# The app is Apache-2.0. The official build also carries the Oligarchy game catalog, which
-# is all rights reserved and redistributed unmodified with Colony (NOTICE).
-license=('Apache-2.0' 'LicenseRef-Oligarchy-game-content')
+# Apache-2.0. Since v0.6.0 no Oligarchy game content ships in Colony builds: the game is a
+# web page Colony loads from its origin (NOTICE).
+license=('Apache-2.0')
 depends=(
   'cairo'
   'curl'
@@ -52,8 +52,8 @@ source=(
   'colony-hde.desktop'
   'colony-hde-handler.desktop'
 )
-sha256sums=('8623f5050895bcf34656298fe3acce112a2956138cfeba40c3c70f58ff994a8b'
-            '72cd76b204b877ba25a0a795f56653909ae9e91c104d0334125edbab630a24e4'
+sha256sums=('bf36a39b770760681ddf7672f5f2dc755d08a0bf99c93b6a2ba32e3eaf4a66c3'
+            '61c444b312927b56e9fb3722af835f8e733ce3858938eeef3546a8ab0126738d'
             'd4d2d888c6a0a220a7b0e2d6013cf37539b0e05ef937002b3b33bdb364575b88'
             '8193308f417d41ae67af6ebc26ab888e5e244e11839b57d4bdaa3f65e743c6d0'
             '693cbb1224f0b2e05432ae23753695bc619096256dc68a4b017bc657396cb2fc')
