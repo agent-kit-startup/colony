@@ -20,6 +20,14 @@ export interface KitViewsHost extends CockpitHost {
 export const WORKSPACE_DOCS_VERSION = "1.10.0";
 
 /** "Update the engine" for a field this engine's snapshot does not carry. */
+/** `v` >= `min`, both `major.minor.patch` (a missing or non-numeric part counts as 0). */
+export function versionAtLeast(v: string, min: string): boolean {
+  const n = (s: string) => s.split(".").map((x) => Number.parseInt(x, 10) || 0);
+  const [a, b] = [n(v), n(min)];
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  return true;
+}
+
 function needsEngine(host: KitViewsHost, what: string, version: string): HTMLElement {
   const v = snapshot.version || "unknown";
   return emptyCta({
@@ -283,7 +291,9 @@ export class DecisionsView extends ListView {
   protected render(): Node[] {
     const nd = this.noData();
     if (nd) return nd;
-    const index = snapshot.decisionIndex;
+    // The kit leaves the field out when the folder has no .cursor/memory/decisions yet (a fresh
+    // consumer): on data that carries the index that is an empty index, not an older engine.
+    const index = snapshot.decisionIndex ?? (versionAtLeast(snapshot.version, WORKSPACE_DOCS_VERSION) ? [] : null);
     if (!index) {
       // An older engine: the gate, then the few records its snapshot does carry.
       const recent = Array.isArray(snapshot.memory.recentDecisions) ? snapshot.memory.recentDecisions : [];
@@ -310,7 +320,7 @@ export class DecisionsView extends ListView {
                 str(d.id),
               );
             })
-          : [empty(this.query ? "No decision matches the search." : "No decisions with this Status.")]),
+          : [empty(!index.length ? "No decision records in this folder yet." : this.query ? "No decision matches the search." : "No decisions with this Status.")]),
         ...(shown.length > 300 ? [empty(`${shown.length - 300} more: narrow the search.`)] : []),
       ),
     ];

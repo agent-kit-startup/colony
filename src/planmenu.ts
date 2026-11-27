@@ -3,7 +3,7 @@
 // ./plancrud.ts; a pick only hands `/<command> <file>` to the interactive agent (`ask`, the
 // cockpit host's interactive()), where the kit command asks its own confirmation.
 import { h } from "./api";
-import { type PlanAction, type PlanLists, planActions } from "./plancrud";
+import { type PlanAction, type PlanLists, planActions, planFileError } from "./plancrud";
 
 interface Spec {
   file: string;
@@ -118,7 +118,7 @@ function popover(): HTMLElement {
  * The dropdown of plan `file`. `lists`: where HANDOFF lists it. `active`: the HANDOFF plan
  * (Edit and Cancel); `note` says why the remove actions are missing; `busy` why Cancel is off.
  */
-export function planCrudButton(file: string, lists: PlanLists, active: boolean, ask: (prompt: string, why: string) => unknown, note = "", busy = ""): HTMLButtonElement {
+export function planCrudButton(file: string, lists: PlanLists, active: boolean, ask: (prompt: string, why: string) => unknown, note = "", busy = "", blocked?: (why: string) => unknown): HTMLButtonElement {
   const spec: Spec = { file, acts: planActions(file, lists, active, busy), note: active ? note : "", ask };
   const b = h(
     "button",
@@ -128,9 +128,14 @@ export function planCrudButton(file: string, lists: PlanLists, active: boolean, 
   );
   b.dataset.plan = file;
   specs.set(b, spec);
-  if (!spec.acts.length) b.disabled = true;
+  // No actions because Colony cannot pass the file name: the button stays on and its click
+  // says why (a disabled button shows nothing). Any other empty menu stays off.
+  const bad = spec.acts.length ? "" : planFileError(file);
+  if (bad) b.title = `Plan: ${bad}`;
+  if (!spec.acts.length && !(bad && blocked)) b.disabled = true;
   b.addEventListener("click", (ev) => {
     ev.stopPropagation();
+    if (bad) return void blocked?.(bad);
     const m = popover();
     if (!m.hidden && from === b) return closePlanMenu();
     closePlanMenu();

@@ -949,7 +949,8 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 /* ---- launches (Mission: agent runs card, launched-from-Colony hero, held queue) ---- */
 .run-row .run-kind { display: inline-flex; align-items: center; gap: 4px; min-width: 92px; }
 .kit-run { color: var(--text-secondary); }
-.launch-pending { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--green-bg); font-size: var(--mc-chrome-subtitle-size); cursor: pointer; }
+.launch-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border)); border-radius: var(--mc-radius-chrome); font-size: var(--mc-chrome-subtitle-size); cursor: pointer; }
+.launch-pending .grow { flex: 1 1 16em; }
 .queue-held { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--mc-radius-chrome); background: var(--yellow-bg); color: var(--yellow); font-size: var(--mc-chrome-subtitle-size); }
 .row.held { color: var(--yellow); }
 .q-row.held { border-color: var(--yellow); }
