@@ -36,10 +36,28 @@ export const SHORTCUTS: Readonly<Record<string, string>> = {
 
 const ARROW: Readonly<Record<string, string>> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
 
+/** KeyboardEvent.code for the keys paneKey binds, from KeyboardEvent.key: for a press that
+ *  comes with an empty code (some displays, Broadway among them, send none). */
+const CODE_OF_KEY: Readonly<Record<string, string>> = {
+  ArrowLeft: "ArrowLeft",
+  ArrowRight: "ArrowRight",
+  ArrowUp: "ArrowUp",
+  ArrowDown: "ArrowDown",
+  PageDown: "PageDown",
+  PageUp: "PageUp",
+  "0": "Digit0",
+  z: "KeyZ",
+  Z: "KeyZ",
+  "\\": "Backslash",
+  "-": "Minus",
+};
+
 /** The split-tree action a Ctrl+Alt key press runs (`code`: KeyboardEvent.code, so the key
- *  position counts, not the layout), or null. Ctrl+Alt+Shift+Up / Down are left to a focused
- *  editor (`inEditor`), where Monaco copies the line up / down. */
-export function paneKey(code: string, shift: boolean, inEditor: boolean): string | null {
+ *  position counts, not the layout; `key`: KeyboardEvent.key, read only when `code` is empty),
+ *  or null. Ctrl+Alt+Shift+Up / Down are left to a focused editor (`inEditor`), where Monaco
+ *  copies the line up / down. */
+export function paneKey(code: string, shift: boolean, inEditor: boolean, key = ""): string | null {
+  if (!code) code = CODE_OF_KEY[key] ?? "";
   const dir = ARROW[code];
   if (dir && !shift) return `pane-focus-${dir}`;
   if (dir) return inEditor && (dir === "up" || dir === "down") ? null : `tab-to-pane-${dir}`;

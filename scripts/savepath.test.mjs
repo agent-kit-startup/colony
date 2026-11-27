@@ -85,3 +85,21 @@ test("Ctrl+Alt keys drive the split tree, by key position, and leave Monaco its 
   // Clear of the keys the amend reserves: Alt+arrows, Ctrl+digits, Ctrl+Shift+C / V.
   for (const k of Object.values(SHORTCUTS)) assert.ok(!/^(Alt\+(Left|Right)|Ctrl\+[1-9]|Ctrl\+Shift\+[CV])$/.test(k) || ["Alt+Left", "Alt+Right"].includes(k), k);
 });
+
+test("a Ctrl+Alt press with an empty code falls back to its key (displays that send no code)", () => {
+  assert.equal(paneKey("", false, false, "ArrowLeft"), "pane-focus-left");
+  assert.equal(paneKey("", true, false, "ArrowRight"), "tab-to-pane-right");
+  assert.equal(paneKey("", true, true, "ArrowUp"), null, "the editor keeps Ctrl+Alt+Shift+Up without a code too");
+  assert.equal(paneKey("", false, false, "PageDown"), "pane-focus-next");
+  assert.equal(paneKey("", false, false, "0"), "pane-equalize");
+  assert.equal(paneKey("", false, false, "z"), "pane-zoom");
+  assert.equal(paneKey("", false, false, "Z"), "pane-zoom");
+  assert.equal(paneKey("", false, false, "\\"), "split-right");
+  assert.equal(paneKey("", false, false, "-"), "split-down");
+  assert.equal(paneKey("", false, false, "s"), null);
+  assert.equal(paneKey("", false, false, ""), null);
+  assert.equal(paneKey("", false, false), null, "no code and no key");
+  // A code, when there is one, wins over the key (the key position counts, not the layout).
+  assert.equal(paneKey("KeyZ", false, false, "y"), "pane-zoom");
+  assert.equal(paneKey("KeyY", false, false, "z"), null);
+});
