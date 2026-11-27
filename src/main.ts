@@ -791,7 +791,7 @@ async function restorePanes(root: string): Promise<{ panes: number; dropped: str
       }
     }
     const f = ids.get(saved.focused);
-    if (f) focusPane(f);
+    if (f) restoreFocus(f, root);
     renderTabs();
     relayout();
   }
@@ -804,8 +804,25 @@ async function restorePanes(root: string): Promise<{ panes: number; dropped: str
   return { panes: saved ? panes.size : 0, dropped };
 }
 
+/** The saved focused pane `f` takes the focus back once a restore is done. The restored shells
+ *  (their tab's show hook) focus their terminal on the next animation frame, and the focusin
+ *  of that late focus would move the focus to their pane (t6 dogfood 2026-11-27: saved p5,
+ *  restored and saved again as the shell's p7). So the focus is set now and the keyboard goes
+ *  into `f` two frames later, after every focus the restore queued. */
+function restoreFocus(f: Pane, root: string) {
+  focusPane(f);
+  if (!focusPolicy.enabled) return;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (workspace?.root === root && panes.has(f.id)) focusInto(f);
+    }),
+  );
+}
+
 /** View → Splits → Reset the layout: one pane again, every tab kept (they gather in the pane
- *  that takes the space), and this folder's saved tree cleared. */
+ *  that takes the space), and that one pane is written as this folder's tree at once, so the
+ *  next start opens one pane with the tabs (operator call 2026-11-27, Ask t6-reset-restart).
+ *  The tabs a restart restores are files and shells; agent tabs and runs never come back. */
 async function resetLayout() {
   if (!workspace) return status("Open a folder first");
   const root = workspace.root;
@@ -814,11 +831,16 @@ async function resetLayout() {
   window.clearTimeout(panesTimer);
   panesTimer = 0;
   await panesSaved;
-  panesSaved = api.settingsSetLayout({ panes: { [root]: null } }).catch((e) => status(`Layout: ${errText(e)}`));
-  await panesSaved;
-  // The next change saves the tree again; until then the folder has none.
-  panesSavedJson = workspace?.root === root ? JSON.stringify(await panesSnapshot(root)) : "";
-  status("Layout reset: one pane; the saved layout of this folder is cleared");
+  if (panesFor !== root) {
+    // The folder's tree is not restored yet (a reset while it opens): nothing of it is shown,
+    // so its saved tree is cleared rather than overwritten with a half-built one.
+    panesSaved = api.settingsSetLayout({ panes: { [root]: null } }).catch((e) => status(`Layout: ${errText(e)}`));
+    await panesSaved;
+    return status("Layout reset: one pane; the saved layout of this folder is cleared");
+  }
+  panesSavedJson = "";
+  await savePanes();
+  status("Layout reset: one pane with every tab, saved for this folder");
 }
 
 /**

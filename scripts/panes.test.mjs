@@ -246,6 +246,9 @@ test("a hand-edited tree Colony cannot trust reads as nothing (one pane)", () =>
   const leaf = (id, extra = {}) => ({ pane: id, tabs: [], ...extra });
   const ok = { tree: { split: "right", ratio: 0.5, a: leaf("p1"), b: leaf("p2") }, focused: "p1" };
   assert.ok(readSaved(ok));
+  // View → Splits → Reset the layout saves one pane with its tabs: a lone leaf is a tree.
+  const one = { tree: leaf("p1", { tabs: [{ file: "a.md", mode: "preview" }, { terminal: "" }], active: 0 }), focused: "p1" };
+  assert.deepEqual(readSaved(one), one);
   const bad = [
     null,
     "x",
