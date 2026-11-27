@@ -10,7 +10,7 @@ import { type CommandRow, type CommandsCatalog, api, errText, h } from "./api";
 import { type CockpitHost, launchGoal, View } from "./cockpit";
 import { type J, obj, snapshot, str } from "./snapshot";
 import { type TtySession, ttys } from "./ttys";
-import { ago, btn, card, chip, checkChip, empty, emptyCta, metaRow } from "./ui";
+import { ago, btn, card, chip, empty, emptyCta, metaRow } from "./ui";
 
 export interface KitViewsHost extends CockpitHost {
   showEngine(): void;
@@ -247,25 +247,50 @@ export class MemoryView extends View {
   }
 }
 
-// ---- Workspace → Health ----------------------------------------------------------------
-export class HealthView extends View {
-  constructor(host: KitViewsHost) {
-    super(host, "kv kv-health");
+// ---- Workspace → Overview ---------------------------------------------------------------
+/** Workspace's home section: one line per section that follows, with its count and an Open.
+ *  Health is not here: it is a part of Activity (kit ADR 2026-10-24 amend 2026-11-19). */
+export class OverviewView extends View {
+  constructor(
+    host: KitViewsHost,
+    private open: (id: string) => void,
+    /** The commands catalog's row count once it is read, else null. */
+    private commandCount: () => number | null,
+  ) {
+    super(host, "kv kv-overview");
   }
 
   protected render(): Node[] {
     const nd = this.noData();
     if (nd) return nd;
-    const hl = snapshot.health;
-    const checks = Array.isArray(hl.checks) ? hl.checks : [];
-    const failing = checks.filter((c: J) => !c.ok).length;
-    const status = str(hl.status, failing ? "degraded" : "ok");
+    const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+    const kitOf = (list: J[]) => list.filter((j) => j.kitManaged === true).length;
+    const decisions = snapshot.decisionIndex;
+    const accepted = decisions?.filter((d) => str(d.status, "unknown") === "accepted").length ?? 0;
+    const proposed = decisions?.filter((d) => str(d.status, "unknown") === "proposed").length ?? 0;
+    const rules = snapshot.rules;
+    const always = rules?.filter((r) => r.alwaysApply === true).length ?? 0;
+    const agents = snapshot.agents;
+    const skills = snapshot.skills;
+    const commands = this.commandCount();
+    const lines: [string, string, string][] = [
+      ["decisions", decisions ? n(decisions.length, "decision") : "Needs a newer engine", decisions ? `${accepted} accepted, ${proposed} proposed` : `Mission Control data ${WORKSPACE_DOCS_VERSION} or newer`],
+      ["agents", n(agents.length, "agent definition"), `${kitOf(agents)} from the kit, ${agents.length - kitOf(agents)} of this project`],
+      ["skills", n(skills.length, "skill"), `${kitOf(skills)} from the kit, ${skills.length - kitOf(skills)} of this project`],
+      ["rules", rules ? n(rules.length, "rule") : "Needs a newer engine", rules ? `${always} always on, ${rules.length - always} scoped` : `Mission Control data ${WORKSPACE_DOCS_VERSION} or newer`],
+      ["commands", commands === null ? "Slash commands" : n(commands, "slash command"), "The kit's catalog: Run for the allowlisted ones"],
+    ];
     return [
       card(
-        { title: "Health", icon: "health", aside: [chip(status, status === "ok" ? "chip-done" : "chip-failed"), h("span", { class: "card-count" }, `${checks.length - failing} of ${checks.length} pass`)] },
-        ...(checks.length
-          ? checks.map((c: J) => row([checkChip(str(c.label, str(c.id)), c.ok ? "ok" : "fail"), h("span", { class: "grow dim small mono" }, str(c.id)), ...(str(c.detail) ? [h("span", { class: "dim small ellipsis", title: str(c.detail) }, str(c.detail))] : [])], undefined, undefined, str(c.id)))
-          : [empty("No health checks in the snapshot.")]),
+        { title: "Workspace", icon: "workspace" },
+        ...lines.map(([id, count, detail]) =>
+          row(
+            [h("strong", { class: "grow" }, count), btn("Open", () => this.open(id), { class: "link", title: `Open Workspace → ${id[0].toUpperCase()}${id.slice(1)}`, "data-act": "open-section" })],
+            detail,
+            undefined,
+            id,
+          ),
+        ),
       ),
     ];
   }

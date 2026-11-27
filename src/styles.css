@@ -655,7 +655,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
    fills the view, the page does not scroll and every panel scrolls inside. */
 .mission-fold { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: var(--mc-space-xl); align-items: start; }
 .mission-stack { display: flex; flex-direction: column; gap: var(--mc-space-xl); min-width: 0; min-height: 0; }
-.mission-fold .card { container-type: inline-size; }
+.mission-fold .card, .cv-chats .chats-card { container-type: inline-size; }
 @media (min-width: 1024px) {
   /* The rows have a floor: when the window (or a tall terminal panel) leaves less room
      than that, the view scrolls instead of squeezing every panel to a sliver. */
@@ -701,7 +701,9 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 @container (max-width: 600px) { .run-row .run-tokens { display: none; } }
 @container (max-width: 520px) { .run-row .run-clock { display: none; } }
 @container (max-width: 440px) { .run-row .run-backend { display: none; } }
-@container (max-width: 380px) { .run-row .run-kit { display: none; } .run-row .run-kind { min-width: 0; } }
+@container (max-width: 380px) { .run-row .run-kit { display: none; } /* Chats: the live runs and the saved chats in one card, each part under a small label. */
+.chats-sub { padding: var(--mc-space-xs) 0 2px; }
+.run-row .run-kind { min-width: 0; } }
 .gate.compact { padding: 8px; gap: 6px; }
 
 /* Plans (dashboard .plan-accordion-item) and Queue rows. */

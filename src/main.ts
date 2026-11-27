@@ -53,6 +53,7 @@ import { readiness } from "./readiness";
 import { paneKey, SHORTCUTS, saveAsInitial, saveAsTarget, shortcutRows } from "./savepath";
 import { closeShortcutsPanel, openShortcutsPanel } from "./shortcuts";
 import { railFit, type RailFit } from "./railfit";
+import { RAIL_GAME, railGameShown, railKeyTarget, railOnScreen } from "./railgame";
 import { ReviewView } from "./review";
 import { type Run, runs } from "./runs";
 import { runState } from "./drivermotion";
@@ -67,7 +68,8 @@ import { NavHistory } from "./nav-history";
 import { groupSection, sectionInfo, type WorkspaceSection, workspaceSection } from "./workspace";
 import { playTarget } from "./oligarchyfeed";
 import { OligarchyView } from "./oligarchyview";
-import { AgentsView, CommandsView, DecisionsView, HealthView, type KitViewsHost, MemoryView, ProcessesView, REAP_AUDIT, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { AgentsView, CommandsView, DecisionsView, type KitViewsHost, MemoryView, OverviewView, ProcessesView, REAP_AUDIT, RulesView, SkillsView, TerminalsView } from "./kitviews";
+import { routeView, VIEW_ROUTES } from "./viewroutes";
 import { ttys } from "./ttys";
 import { openTermMenu, TermView, termStatus } from "./termview";
 import { dragStarted, dropPlace, isPtyTab, moveLabel, openPlace, otherPlace, type Place, type Placement, placementPatch, readPlacement, recordMove, tabKind, type TermKind } from "./tabmove";
@@ -151,6 +153,9 @@ document.getElementById("app")!.innerHTML = `
     <div class="menu-label">Rail labels</div>
     <button data-setting="rail-labels" data-labels="on" title="A label under each rail icon (default)">Labels under icons</button>
     <button data-setting="rail-labels" data-labels="off" title="A narrower rail: icons only, the name in the tooltip">Icons only</button>
+    <div class="menu-label">Oligarchy on the rail</div>
+    <button data-setting="rail-game" data-game="on" title="The game item at the end of the rail's main group (default)">Shown</button>
+    <button data-setting="rail-game" data-game="off" title="Off the rail only: colony://play, View → Oligarchy and the palette still open the game">Hidden</button>
   </section>
 </div>
 <div id="quick" hidden><div class="quick-box"><input id="quick-input" placeholder="Type a file name" autocomplete="off" spellcheck="false" /><div id="quick-list"></div></div></div>
@@ -834,14 +839,15 @@ async function resetLayout() {
  * on screen) shows and hides it; the Terminals item is a list view.
  */
 interface RailItem { id: string; label: string; icon: IconKind; tip: string; views: string[]; home?: string; bottom?: true }
-/** Workspace's sections, in order: each one a view, switched inside the Workspace view. Plans
- *  and Memory left for the rail (amend 2026-11-19, point 1). */
-const WORKSPACE_SECTIONS = ["health", "decisions", "agents", "skills", "rules", "commands"];
+/** Workspace's sections, in order: each one a view, switched inside the Workspace view, the
+ *  static kit content only (amend 2026-11-19, point 5). Plans and Memory left for the rail;
+ *  Health is a part of Activity (`view:health` routes there, src/viewroutes.ts). */
+const WORKSPACE_SECTIONS = ["overview", "decisions", "agents", "skills", "rules", "commands"];
 const RAIL: RailItem[] = [
   { id: "mission", label: "Cockpit", icon: "current-mission", tip: "Cockpit: the active plan, what needs you, agent runs (Ctrl+1)", views: ["mission"] },
   { id: "queue", label: "Queue", icon: "queue", tip: "Queue: the run-plan-all queue and the driver chat (Ctrl+2)", views: ["queue"] },
   { id: "inbox", label: "Inbox", icon: "inbox", tip: "Inbox: live gates from every run, attention items, gate exits (Ctrl+3)", views: ["inbox"] },
-  { id: "chats", label: "Chats", icon: "chats", tip: "Chats: the saved agent chats of this folder, resumable (Ctrl+4)", views: ["chats"] },
+  { id: "chats", label: "Chats", icon: "chats", tip: "Chats: the agent runs going now and the saved agent chats of this folder (Ctrl+4)", views: ["chats"] },
   { id: "flight", label: "Flight Log", icon: "flight-log", tip: "Flight Log: residuals, warnings, tick logs (Ctrl+5)", views: ["flight"] },
   { id: "review", label: "Review", icon: "review", tip: "Review: per-tick diffs of agent runs (Ctrl+6)", views: ["review"] },
   { id: "ship", label: "Ship", icon: "ship", tip: "Ship: Git (host requests, pull requests, branch flow, commit, push) and CI/CD (Ctrl+7)", views: ["git", "cicd"] },
@@ -851,7 +857,7 @@ const RAIL: RailItem[] = [
   { id: "terminals", label: "Terminals", icon: "terminals", tip: "Terminals: the TTY sessions of this window; the drawer bar controls them", views: ["terminals"] },
   { id: "processes", label: "Processes", icon: "processes", tip: "Processes: the kit's process list", views: ["processes"] },
   { id: "colony", label: "Oligarchy", icon: "colony", tip: "Oligarchy: the game, loaded from oligarchy.missionkit.io and fed by this folder's outcome ledger", views: ["colony"] },
-  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: health, decisions, agents, skills, rules, commands", views: WORKSPACE_SECTIONS, home: "decisions", bottom: true },
+  { id: "workspace", label: "Workspace", icon: "workspace", tip: "Workspace: overview, decisions, agents, skills, rules, commands", views: WORKSPACE_SECTIONS, home: "overview", bottom: true },
 ];
 /** Ship's two views, in the order of its inner switch (the `views` of its rail item). */
 const SHIP_VIEWS: WorkspaceSection[] = [
@@ -910,8 +916,13 @@ function renderRail() {
       return el;
     });
     // The main group scrolls; the bottom group (Workspace) stays on screen below it.
-    $("rail-scroll").replaceChildren(...items.filter((_, i) => !RAIL[i].bottom));
     $("rail-bottom").replaceChildren(...items.filter((_, i) => RAIL[i].bottom));
+  }
+  // The game item (amend 2026-11-19, point 4) is detached, not `hidden`, when off: the arrow
+  // keys, the fade edges and the label fit then see only the items on screen. Its button stays
+  // in railEls; RAIL (and so Ctrl+1..9, view:colony, the palette) never changes.
+  if (railEls.get(RAIL_GAME)!.isConnected !== railGame() || !$("rail-scroll").childElementCount) {
+    $("rail-scroll").replaceChildren(...railOnScreen(RAIL.filter((r) => !r.bottom), railGame()).map((r) => railEls.get(r.id)!));
     railFade();
   }
   let activeEl: HTMLElement | null = null;
@@ -958,14 +969,15 @@ $("rail-scroll").addEventListener("scroll", railFade, { passive: true });
 new ResizeObserver(railFade).observe($("rail-scroll"));
 // Arrow keys move the focus along the rail, main group then Workspace (Home / End: the first /
 // last item); Enter or Space opens the focused item, as on any button.
+// A game item taken off the rail is not in the DOM, so the keys skip it.
 $("rail").addEventListener("keydown", (ev) => {
   const items = [...$("rail").querySelectorAll<HTMLElement>(".rail-item")];
   const at = items.indexOf(document.activeElement as HTMLElement);
   if (at < 0) return;
-  const next = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+  const next = railKeyTarget(ev.key, at, items.length);
   if (next === undefined) return;
   ev.preventDefault();
-  const el = items[Math.max(0, Math.min(items.length - 1, next))];
+  const el = items[next];
   el.focus();
   el.scrollIntoView({ block: "nearest" });
 });
@@ -974,7 +986,7 @@ $("rail").addEventListener("keydown", (ev) => {
 // The one Settings surface (ADR 2026-10-24 amend 2026-11-11 point 2, amend 2026-11-19 point
 // 7): the top bar gear and File → Settings… show this view, and Back returns from it. Its
 // groups come in the order of src/menu.json `groups`: Appearance (Skin, Title bar, Rail
-// position, Rail labels: the pane's markup), App updates (appupdates.ts), Engine, Editor and
+// position, Rail labels, Oligarchy on the rail: the pane's markup), App updates (appupdates.ts), Engine, Editor and
 // files (editorfiles.ts), Kit config (kitconfig.ts: the open folder's
 // .cursor/agent-kit.config.json), Integrations and Files. The action rows of `config` sit
 // under their `group` (never in the menu bar; menu.rs tests); the module bodies hold no
@@ -1085,12 +1097,22 @@ function renderStrip(p: Pane) {
 /** Show tab or view `id`: a document tab in its pane (the focused one when it holds it), a
  *  view in the focused pane. */
 function showTab(id: string) {
+  // An old view id (Health) opens its new place (amend 2026-11-19; src/viewroutes.ts).
+  if (!tabs.has(id) && VIEW_ROUTES[id]) return showRoute(id);
   const t = tabs.get(id);
   // A terminal tab moved to the drawer keeps its id: a focus by id (Inbox, Agent runs, a
   // resumed chat) shows it there (kit ADR 2026-10-24 amend 2026-11-07).
   if (!t && workspace && drawerHas(id)) return void focusPty(id);
   if (!t || !workspace) return;
   showIn(paneFor(id), id);
+}
+
+/** Show the place an old view id moved to, scrolled to its part. */
+function showRoute(id: string) {
+  const r = routeView(id);
+  if (!tabs.has(r.view)) return;
+  if (r.view === "activity" && r.part) activity.showPart(r.part);
+  showTab(r.view);
 }
 
 /** The pane to show `id` in. */
@@ -1752,28 +1774,35 @@ async function revealInExplorer() {
   $("tree").focus({ preventScroll: true });
 }
 
-// The rail (Settings → Appearance → Rail position, Rail labels): its side of the window and
-// labels or icons only.
+// The rail (Settings → Appearance → Rail position, Rail labels, Oligarchy on the rail): its side
+// of the window, labels or icons only, and the game item on or off the rail (also View → Show
+// or hide Oligarchy on the rail, `rail-game`; amend 2026-11-19, point 4).
 type RailPosition = "left" | "right";
 const railPosition = (): RailPosition => (shell.dataset.rail === "right" ? "right" : "left");
 const railLabels = () => !shell.classList.contains("rail-icons");
+function railGame() {
+  return !shell.classList.contains("no-rail-game");
+}
 
 function renderRailMenu() {
-  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-setting=rail-position], button[data-setting=rail-labels]")) {
-    const on = b.dataset.pos ? b.dataset.pos === railPosition() : (b.dataset.labels === "on") === railLabels();
+  for (const b of settingsPane.querySelectorAll<HTMLElement>("button[data-setting=rail-position], button[data-setting=rail-labels], button[data-setting=rail-game]")) {
+    const on = b.dataset.pos ? b.dataset.pos === railPosition() : b.dataset.game ? (b.dataset.game === "on") === railGame() : (b.dataset.labels === "on") === railLabels();
     b.dataset.label ??= b.textContent ?? "";
     b.classList.toggle("on", on);
     b.textContent = `${on ? "✓ " : ""}${b.dataset.label}`;
   }
 }
 
-function setRail(p: { position?: RailPosition; labels?: boolean }) {
+function setRail(p: { position?: RailPosition; labels?: boolean; game?: boolean }) {
   if (p.position) shell.dataset.rail = p.position;
   if (p.labels !== undefined) shell.classList.toggle("rail-icons", !p.labels);
+  if (p.game !== undefined) shell.classList.toggle("no-rail-game", !p.game);
   renderRailMenu();
+  renderRail();
   relayout();
   layoutChanged();
-  status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
+  if (p.game !== undefined) status(p.game ? "Rail: Oligarchy shown" : "Rail: Oligarchy hidden; View → Oligarchy, the palette and colony://play still open it");
+  else status(`Rail: ${railPosition()}, ${railLabels() ? "labels under icons" : "icons only"}`);
 }
 
 /** The agent kind of each centre PTY (drawer shells are `shell` by their id), and the
@@ -1801,6 +1830,7 @@ function layoutNow(): Required<{ [K in keyof PanelLayout]: PanelLayout[K] | null
     terminalWidth: px("--term-w"),
     railPosition: railPosition(),
     railLabels: railLabels(),
+    railGame: railGame(),
   };
 }
 /** Put a saved layout on the window (no save back). */
@@ -1810,6 +1840,7 @@ function applyLayout(l: LayoutSettings) {
   shell.classList.toggle("no-side", l.explorerVisible === false);
   shell.dataset.rail = l.railPosition === "right" ? "right" : "left";
   shell.classList.toggle("rail-icons", l.railLabels === false);
+  shell.classList.toggle("no-rail-game", !railGameShown(l));
   const size = (name: string, v: number | undefined) => (typeof v === "number" && v > 0 ? shell.style.setProperty(name, `${v}px`) : shell.style.removeProperty(name));
   size("--side-w", l.explorerWidth);
   size("--bottom-h", l.terminalHeight);
@@ -2577,14 +2608,14 @@ const terminalsView = new TerminalsView(kitHost, {
 });
 const oligarchyView = new OligarchyView(kitHost, { openFolder: () => void pickFolder(), welcome: () => showWelcome() });
 const memoryView = new MemoryView(kitHost, () => showTab("decisions"));
-const healthView = new HealthView(kitHost);
 const decisionsView = new DecisionsView(kitHost);
 const agentsView = new AgentsView(kitHost);
 const skillsView = new SkillsView(kitHost);
 const rulesView = new RulesView(kitHost);
 const commandsView = new CommandsView(kitHost);
 /** Every snapshot view, for a folder switch or a server restart. */
-const kitViews = [processesView, oligarchyView, memoryView, healthView, decisionsView, agentsView, skillsView, rulesView];
+const overviewView = new OverviewView(kitHost, (id) => showTab(id), () => commandsView.rows().length || null);
+const kitViews = [processesView, oligarchyView, memoryView, overviewView, decisionsView, agentsView, skillsView, rulesView];
 let inboxCount = { gates: 0, attention: 0 };
 const inbox = new InboxView(host, (gates, attention) => {
   inboxCount = { gates, attention };
@@ -2753,7 +2784,7 @@ function pinViews() {
   ship(SHIP_VIEWS[1], cicd.el, cicd);
   pin("flight", "Flight Log", "field-report", "Flight log: residuals, warnings, tick logs", flight.el, flight);
   pin("activity", "Activity", "activity", "The kit's recent activity and health checks", activity.el, activity);
-  pin("chats", "Chats", "agents", "The saved agent chats of this folder", chatsView.el, chatsView);
+  pin("chats", "Chats", "agents", "The agent runs going now and the saved agent chats of this folder", chatsView.el, chatsView);
   pin("terminals", "Terminals", "terminals", "Every terminal of this window, closed drawer shells included", terminalsView.el, terminalsView);
   pin("processes", "Processes", "processes", "The kit's process list", processesView.el, processesView);
   pin("colony", "Oligarchy", "overview", "The game, loaded from oligarchy.missionkit.io", oligarchyView.el, oligarchyView);
@@ -2766,7 +2797,7 @@ function pinViews() {
     const info = sectionInfo(id);
     pin(id, info.label, info.icon, info.tip, workspaceSection(id, WORKSPACE_SECTIONS, body, openSection), v);
   };
-  section("health", healthView.el, healthView);
+  section("overview", overviewView.el, overviewView);
   section("decisions", decisionsView.el, decisionsView);
   section("agents", agentsView.el, agentsView);
   section("skills", skillsView.el, skillsView);
@@ -2835,6 +2866,7 @@ settingsPane.addEventListener("click", (ev) => {
   else if (el.dataset.setting === "title-bar") void setTitleBar(el.dataset.mode === "custom" ? "custom" : "native");
   else if (el.dataset.setting === "rail-position") setRail({ position: el.dataset.pos === "right" ? "right" : "left" });
   else if (el.dataset.setting === "rail-labels") setRail({ labels: el.dataset.labels === "on" });
+  else if (el.dataset.setting === "rail-game") setRail({ game: el.dataset.game === "on" });
   else if (el.dataset.setting === "skin") {
     const next = el.dataset.skin as Skin;
     void setSkin(next).then(
@@ -3080,6 +3112,7 @@ const ACTIONS: Record<string, () => unknown> = {
   "file-manager": () => fileManagerHere(),
   settings: () => showSettings(),
   "close-window": () => closeWindow(),
+  "rail-game": () => setRail({ game: !railGame() }),
   explorer: () => toggleExplorer(),
   "explorer-collapse": () => tree.collapseAll(),
   "explorer-refresh": () => tree.refresh(),
@@ -3143,13 +3176,14 @@ const ACTIONS: Record<string, () => unknown> = {
   "settings-json": () => openSettings(),
 };
 
-/** `view:<rail item or Workspace section>`: the rail item's own behaviour (a group opens its
- *  last view); a Workspace section (`view:plans`, `view:memory`, ...) opens that section. */
+/** `view:<rail item, Workspace section or old id>`: the rail item's own behaviour (a group
+ *  opens its last view); a Workspace section (`view:decisions`, ...) opens that section; an
+ *  old id (`view:health`) opens its new place (src/viewroutes.ts). */
 function viewAction(id: string): (() => unknown) | null {
   const v = id.slice("view:".length);
   const r = RAIL.find((x) => x.id === v && x.views.length);
   if (r) return () => (workspace ? openRail(r) : status("Open a folder first"));
-  if (WORKSPACE_SECTIONS.includes(v)) return () => (workspace ? showTab(v) : status("Open a folder first"));
+  if (WORKSPACE_SECTIONS.includes(v) || VIEW_ROUTES[v]) return () => (workspace ? showTab(v) : status("Open a folder first"));
   return null;
 }
 
@@ -3217,14 +3251,20 @@ $("st-engine").addEventListener("click", showEngine);
 // ---- command palette (Ctrl+Shift+P, Go → Commands) -------------------------------------
 /** Every menu action the menus show here (menu bar, then the Settings view) as a palette row,
  *  a view row as `Go to <item>`, then `Go to Workspace → <section>` for every Workspace section
- *  the View menu does not list; not Commands… itself. */
+ *  the View menu does not list, then `Go to Activity → Health` for each old id that moved;
+ *  not Commands… itself. */
 const paletteActions = (): ColonyAction[] => {
   const rows = menuItems()
     .filter((i) => i.id !== "commands" && (!i.omarchyOnly || omarchyDetected()))
     .map((i) => ({ id: i.id, name: i.id.startsWith("view:") ? `Go to ${i.label}` : i.label, description: i.where, shortcut: SHORTCUTS[i.id] }));
   const listed = new Set(rows.map((r) => r.id));
   const sections = WORKSPACE_SECTIONS.filter((s) => !listed.has(`view:${s}`)).map((s) => ({ id: `view:${s}`, name: `Go to Workspace → ${sectionInfo(s).label}`, description: "Workspace" }));
-  return [...rows, ...sections];
+  // Old ids keep a row that opens their new place (Health: Activity's health part).
+  const moved = Object.entries(VIEW_ROUTES).map(([old, r]) => {
+    const to = RAIL.find((x) => x.views.includes(r.view))?.label ?? r.view;
+    return { id: `view:${old}`, name: `Go to ${to} → ${old[0].toUpperCase()}${old.slice(1)}`, description: to };
+  });
+  return [...rows, ...sections, ...moved];
 };
 /** The unmodified `claude` in a terminal tab, no prompt (the palette's Claude Code section:
  *  `claude` itself, not the engine choice, which may be codex). */
@@ -4014,8 +4054,8 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.menuBack = await until(() => activeTab === "inbox", 2000);
     const stGroups = [...settingsPane.querySelectorAll<HTMLElement>(".settings-group")];
     const groupRows = Object.fromEntries(stGroups.map((g) => [g.dataset.group ?? "", { title: g.querySelector(".settings-group-title")?.textContent ?? "", hidden: g.hidden, labels: [...g.querySelectorAll(".menu-label")].map((l) => l.textContent ?? ""), cmds: [...g.querySelectorAll<HTMLElement>("button[data-cmd]")].map((b) => b.dataset.cmd ?? "") }]));
-    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "App updates", "Engine", "Editor and files", "Kit config", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
-    st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels"]) && !groupRows.Appearance?.cmds.length;
+    st.groups = JSON.stringify(stGroups.map((g) => g.dataset.group)) === JSON.stringify(["Appearance", "Engine", "Integrations", "Files"]) && stGroups.every((g) => g.querySelector(".settings-group-title")?.textContent === g.dataset.group && g.hidden === (g.dataset.group === "Integrations" && !omarchyDetected()));
+    st.appearance = JSON.stringify(groupRows.Appearance?.labels) === JSON.stringify(["Skin", "Title bar (on the next start)", "Rail position", "Rail labels", "Oligarchy on the rail"]) && !groupRows.Appearance?.cmds.length;
     st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
     // The module bodies: App updates shows the version, Editor and files its three settings,
     // Kit config the open folder's file (a form, a missing-file note or an error, never empty).
@@ -5043,8 +5083,48 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     ctrl.end = document.activeElement === railEls().at(-1);
     (document.activeElement as HTMLElement | null)?.blur();
     await log("rail-keys", Object.values(ctrl).every((v) => v === true), ctrl);
-    // The palette has a Go to row for every rail item and every Workspace section, and a
-    // Go to row opens its view.
+    // The game item (amend 2026-11-19, point 4): View → Show or hide Oligarchy on the rail takes
+    // it off the rail (the arrow keys skip it, Ctrl+1..9 stay Cockpit to Plans), view:colony and
+    // the palette still open the view, settings.json keeps the choice, and Settings → Appearance
+    // puts it back (the later steps and the next start expect the fourteen items).
+    {
+      await api.smokeMenuClick("rail-game");
+      await until(() => !railGame(), 2000);
+      const offIds = railEls().map((el) => el.dataset.tab ?? "");
+      const procs = railEls().find((el) => el.dataset.tab === "processes")!;
+      procs.focus();
+      procs.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+      const skips = (document.activeElement as HTMLElement | null)?.dataset.tab === "workspace";
+      (document.activeElement as HTMLElement | null)?.blur();
+      showTab("mission");
+      runAction("view:colony");
+      await wait(100);
+      const viewOpens = activeTab === "colony";
+      const inPalette = paletteActions().some((a) => a.id === "view:colony");
+      const digits = JSON.stringify(CTRL_DIGITS) === JSON.stringify(RAIL_WANT.slice(0, 9).map(([id]) => id));
+      let gOff: LayoutSettings = {};
+      for (let i = 0; i < 20; i++) {
+        await wait(200);
+        await layoutSaved;
+        gOff = await savedLayout();
+        if (gOff.railGame === false) break;
+      }
+      settingRow("rail-game][data-game=on");
+      const backIds = railEls().map((el) => el.dataset.tab ?? "");
+      let gOn: LayoutSettings = {};
+      for (let i = 0; i < 20; i++) {
+        await wait(200);
+        await layoutSaved;
+        gOn = await savedLayout();
+        if (gOn.railGame === true) break;
+      }
+      showTab("mission");
+      const want = RAIL_WANT.map(([id]) => id);
+      const g = { offIds, skips, viewOpens, inPalette, digits, savedOff: gOff.railGame, backIds, savedOn: gOn.railGame };
+      await log("rail-game", JSON.stringify(offIds) === JSON.stringify(want.filter((id) => id !== RAIL_GAME)) && skips && viewOpens && inPalette && digits && gOff.railGame === false && JSON.stringify(backIds) === JSON.stringify(want) && gOn.railGame === true && railGame(), g);
+    }
+    // The palette has a Go to row for every rail item, every Workspace section and the old
+    // Health id, and a Go to row opens its view.
     const goIds = paletteActions().filter((a) => a.name.startsWith("Go to")).map((a) => a.id);
     const goMissing = [...RAIL.map((r) => [r.id, ...r.views]), ...WORKSPACE_SECTIONS.map((s) => [s])].filter((ids) => !ids.some((v) => goIds.includes(`view:${v}`)));
     await palette.show();
@@ -5052,7 +5132,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // The rows act on mousedown (the press must not blur the palette's input first).
     goRow?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     await wait(100);
-    await log("palette-goto", !goMissing.length && !!goRow && activeTab === "processes", { goIds, goMissing, opened: activeTab });
+    await log("palette-goto", !goMissing.length && goIds.includes("view:health") && !!goRow && activeTab === "processes", { goIds, goMissing, opened: activeTab });
     palette.hide();
     showTab("mission");
     // ---- s3: the native kit views (no web panel) -----------------------------------------
@@ -5060,7 +5140,7 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     const nv: Record<string, unknown> = {};
     const isGate = (id: string) => (view(id).querySelector(".empty-state-headline")?.textContent ?? "") === "Update the engine";
     const ver = snapshot.version;
-    for (const id of ["terminals", "processes", "memory", "health", "decisions", "agents", "skills", "rules", "commands"]) {
+    for (const id of ["terminals", "processes", "memory", "overview", "decisions", "agents", "skills", "rules", "commands"]) {
       showTab(id);
       if (id === "commands") await commandsView.load();
       await wait(250);
@@ -5107,11 +5187,24 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       decisions: decIndex ? decRows === Math.min(300, decIndex.length) && (!decIndex.length || decOpen === String(decIndex[0].path)) : isGate("decisions"),
       rules: snapshot.rules ? rulesRows === snapshot.rules.length : isGate("rules"),
     };
-    for (const [id, want] of [["agents", snapshot.agents.length], ["skills", snapshot.skills.length], ["health", Array.isArray(snapshot.health.checks) ? snapshot.health.checks.length : 0]] as [string, number][]) {
+    for (const [id, want] of [["agents", snapshot.agents.length], ["skills", snapshot.skills.length]] as [string, number][]) {
       showTab(id);
       await wait(100);
       wsLists[id] = rowsIn(id).length === want ? true : { rows: rowsIn(id).length, want };
     }
+    // Health is a part of Activity (amend 2026-11-19): the old id opens Activity at the full
+    // checks, one row per check, and Workspace has no Health section.
+    showTab("health");
+    await wait(100);
+    const healthRows = view("activity").querySelectorAll('[data-part="health"] .kv-row[data-key]').length;
+    const healthWant = Array.isArray(snapshot.health.checks) ? snapshot.health.checks.length : 0;
+    wsLists.health = activeTab === "activity" && healthRows === healthWant && !tabs.has("health") && !view("decisions").querySelector('.ws-nav-btn[data-section="health"]') ? true : { active: activeTab, rows: healthRows, want: healthWant };
+    // Workspace opens on Overview: one row per section after it, each Open shows its section.
+    showTab("overview");
+    await wait(100);
+    const ovRows = rowsIn("overview");
+    ovRows[0]?.querySelector<HTMLButtonElement>('[data-act="open-section"]')?.click();
+    wsLists.overview = ovRows.length === WORKSPACE_SECTIONS.length - 1 && activeTab === "decisions" && RAIL.find((r) => r.id === "workspace")?.home === "overview" ? true : { rows: ovRows.length, opened: activeTab };
     showTab("memory");
     await wait(100);
     wsLists.memory = view("memory").querySelectorAll(".card").length >= 3;

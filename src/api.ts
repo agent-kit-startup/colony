@@ -36,6 +36,8 @@ export interface LayoutSettings {
   railPosition?: "left" | "right";
   /** false: icon-only rail (tooltips and aria-labels kept). */
   railLabels?: boolean;
+  /** false: the game item (Oligarchy) off the rail; unset or true shows it (src/railgame.ts). */
+  railGame?: boolean;
   /** Where new terminal tabs of each kind open (unset kind: its default). Saved on its own
    *  patch when the operator moves a tab, never by the panel-change save. */
   terminalPlacement?: { shell?: "editor" | "panel"; interactive?: "editor" | "panel"; queue?: "editor" | "panel" };

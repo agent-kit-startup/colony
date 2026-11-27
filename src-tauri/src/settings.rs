@@ -84,6 +84,11 @@ pub struct LayoutSettings {
     /// Labels under the rail icons (default true); false = icon-only, tooltips kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rail_labels: Option<bool>,
+    /// The game item (Oligarchy) on the rail (default true, kit ADR 2026-10-24 amend
+    /// 2026-11-19 point 4, Ask r0-oligarchy-default: shown); false takes it off the rail only:
+    /// `colony://play`, `view:colony` and the palette still open the view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rail_game: Option<bool>,
     /// Where new terminal tabs of each kind open: the bar that kind was last moved to
     /// (kit ADR 2026-10-24, amend 2026-11-07 tab placement memory). Written only when the
     /// operator moves a tab, never with the rest of the layout.
@@ -159,6 +164,7 @@ pub fn merge_layout(mut l: LayoutSettings, patch: &serde_json::Value) -> Result<
                 }
             }
             "railLabels" => l.rail_labels = flag(v)?,
+            "railGame" => l.rail_game = flag(v)?,
             "terminalVisible" => l.terminal_visible = flag(v)?,
             "explorerVisible" => l.explorer_visible = flag(v)?,
             "explorerWidth" => l.explorer_width = px(v)?,
@@ -771,6 +777,36 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"terminalDock":"top","terminalHeight":260,"railPosition":"right","railLabels":false}}}"#).unwrap();
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["ui"]["layout"], serde_json::json!({"terminalDock": "top", "terminalHeight": 260, "railPosition": "right", "railLabels": false}));
+    }
+
+    /// The game item (amend 2026-11-19 point 4): a flag next to the rail fields, cleared by
+    /// null, refused otherwise; it and the free tiling `panes` branch never drop each other.
+    #[test]
+    fn rail_game_merges_and_keeps_panes() {
+        let l = merge_layout(LayoutSettings::default(), &serde_json::json!({"railPosition": "right", "panes": {"/r/a": two_panes()}})).unwrap();
+        assert_eq!(l.rail_game, None, "unset: shown (the default)");
+        let l = merge_layout(l, &serde_json::json!({"railGame": false, "railLabels": false})).unwrap();
+        assert_eq!(l.rail_game, Some(false));
+        assert_eq!(l.rail_position.as_deref(), Some("right"));
+        assert_eq!(l.panes.as_ref().unwrap()["/r/a"]["tree"], two_panes()["tree"], "railGame keeps the split trees");
+        // a panes write keeps the game item
+        let l = merge_layout(l, &serde_json::json!({"panes": {"/r/b": two_panes()}})).unwrap();
+        assert_eq!(l.rail_game, Some(false));
+        assert_eq!(l.panes.as_ref().unwrap().len(), 2);
+        let l = merge_layout(l, &serde_json::json!({"railGame": true})).unwrap();
+        assert_eq!(l.rail_game, Some(true));
+        let l = merge_layout(l, &serde_json::json!({"railGame": null})).unwrap();
+        assert_eq!(l.rail_game, None);
+        assert_eq!(l.panes.as_ref().unwrap().len(), 2);
+        for bad in [serde_json::json!({"railGame": "hidden"}), serde_json::json!({"railGame": 0}), serde_json::json!({"railGame": false, "railPosition": "top"})] {
+            assert!(merge_layout(l.clone(), &bad).is_err(), "{bad}");
+        }
+        // settings.json round trip: the key reads back and an unset one stays absent
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"railLabels":false,"railGame":false}}}"#).unwrap();
+        assert_eq!(s.ui.layout.as_ref().unwrap().rail_game, Some(false));
+        assert_eq!(serde_json::to_value(&s).unwrap()["ui"]["layout"], serde_json::json!({"railLabels": false, "railGame": false}));
+        let s: Settings = serde_json::from_str(r#"{"ui":{"layout":{"railLabels":false}}}"#).unwrap();
+        assert!(serde_json::to_value(&s).unwrap()["ui"]["layout"].get("railGame").is_none());
     }
 
     #[test]
