@@ -116,6 +116,10 @@ export interface SettingsInfo { path: string; settings: { editor: { command?: Co
 export interface KitConfigField { path: string; label: string; kind: "choice" | "text" | "lines"; options: string[] }
 /** The open folder's `.cursor/agent-kit.config.json` (kitconfig.rs): `text` as on disk, none when missing; `canCreate`: the folder has `.cursor/`. */
 export interface KitConfigInfo { path: string; exists: boolean; canCreate: boolean; text: string | null; fields: KitConfigField[] }
+/** One field of the kit settings form (contextconfig.rs FIELDS, the Mission Control allowlist); `clearable`: null removes the key. */
+export interface ContextConfigField { path: string; label: string; group: string; kind: "bool" | "int" | "choice" | "model"; options: string[]; min: number; max: number; clearable: boolean }
+/** The open folder's `.cursor/context/config.json` (contextconfig.rs): `text` as on disk, none when missing; `canCreate`: the folder has `.cursor/`. */
+export interface ContextConfigInfo { path: string; exists: boolean; canCreate: boolean; text: string | null; fields: ContextConfigField[] }
 /** `systemDefault`: the desktop's default coding agent (Omarchy `omarchy-default-agent`) is this backend. */
 export interface BackendChoice { id: string; bin: string; available: boolean; note: string; needsEngine: string | null; systemDefault?: boolean }
 /** The kit command a driver run runs: the tick loop or the queue runner (driver protocol 1.2.0). */
@@ -238,6 +242,9 @@ export const api = {
   kitConfigSet: (path: string, value: unknown) => invoke<KitConfigInfo>("kit_config_set", { path, value }),
   /** The raw editor's save: written verbatim once it parses as a JSON object; `base` is the text it started from (null: no file). */
   kitConfigWriteRaw: (text: string, base: string | null) => invoke<KitConfigInfo>("kit_config_write_raw", { text, base }),
+  contextConfigRead: () => invoke<ContextConfigInfo>("context_config_read"),
+  /** A kit settings form edit: one allowlisted value (null clears a clearable one), written as a targeted text edit. */
+  contextConfigSet: (path: string, value: unknown) => invoke<ContextConfigInfo>("context_config_set", { path, value }),
   settingsWorkspace: () => invoke<WorkspaceSettings>("settings_workspace"),
   settingsSetWorkspace: (patch: Record<string, unknown>) => invoke<WorkspaceSettings>("settings_set_workspace", { patch }),
   contextSources: (cwd: string, engine: string) => invoke<ContextReport>("context_sources", { cwd, engine }),

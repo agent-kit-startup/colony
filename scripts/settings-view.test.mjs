@@ -1,6 +1,7 @@
 // The Settings view (kit ADR 2026-10-24 amend 2026-11-11 point 2, amend 2026-11-19 points 6
 // and 7): one Settings surface. Source-level checks of src/main.ts, src/menu.json and
 // src/styles.css, and the About panel, App updates, Editor and files and Kit config bodies
+// (both kit files: kitconfig.ts and contextconfig.ts)
 // rendered on the small DOM of ./test-dom.mjs; the window itself is checked by the
 // COLONY_SMOKE steps `settings-view`, `menu-actions` and `settings-no-folder`.
 // Run: pnpm test
@@ -16,6 +17,7 @@ const { openAboutPanel } = await import("../src/about.ts");
 const { AppUpdates } = await import("../src/appupdates.ts");
 const { EditorFiles, commandValue } = await import("../src/editorfiles.ts");
 const { KitConfig, parseRaw, valueAt } = await import("../src/kitconfig.ts");
+const { ContextConfig, rowValue } = await import("../src/contextconfig.ts");
 
 const read = (p) => readFile(new URL(`../${p}`, import.meta.url), "utf8");
 
@@ -42,7 +44,9 @@ test("the groups come in ADR order: Appearance, App updates, Engine, Editor and 
   );
   assert.ok(spec.config.every((i) => spec.groups.includes(i.group)), "every row sits in a group of `groups`");
   assert.ok(main.includes('for (const group of menuSpec.groups.filter((g) => g !== "Appearance")) {'), "the view builds its groups in `groups` order after the Appearance markup");
-  assert.ok(main.includes('const SETTINGS_BODIES: Record<string, HTMLElement> = { "App updates": appUpdates.el, "Editor and files": editorFiles.el, "Kit config": kitConfig.el };'));
+  assert.ok(main.includes('const SETTINGS_BODIES: Record<string, HTMLElement> = { "App updates": appUpdates.el, "Editor and files": editorFiles.el, "Kit config": kitFiles };'));
+  assert.ok(main.includes('const kitFiles = h("div", { id: "settings-kit-files", class: "settings-body" }, kitConfig.el, contextConfig.el);'), "Kit config holds both kit files, the profile first");
+  assert.ok(main.includes("  void kitConfig.load(workspace?.root ?? null);\n  void contextConfig.load(workspace?.root ?? null);\n"), "both re-read when Settings shows");
   assert.ok(spec.config.every((i) => !!i.omarchyOnly === (i.group === "Integrations")), "Integrations shows on Omarchy only");
   assert.ok(!spec.menus.some((m) => m.items.some((i) => spec.config.some((c) => c.id === i.id))), "a Settings row is no menu bar item");
   const from = main.indexOf('<div id="settings-pane"');
@@ -178,6 +182,53 @@ test("Kit config: a form over the kit's confirmed values, a raw JSON editor that
   button("Save").click();
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(calls.at(-1), ["kit_config_write_raw", { text: '{ "purpose": { "value": "library" } }', base: text }], "verbatim, against the text it started from");
+});
+
+test("Kit config, second file: .cursor/context/config.json as a form over the Mission Control allowlist, no raw editor", async () => {
+  const f = (path, kind, extra = {}) => ({ path, label: path, group: path.split(".")[0], kind, options: [], min: 0, max: 0, clearable: false, ...extra });
+  const fields = [
+    f("autoHandoff", "bool"),
+    f("interTickCooldownMs", "int", { max: 3600000 }),
+    f("agentPersona.modes.run-plan", "choice", { options: ["autopilot", "night-shift"], clearable: true }),
+    f("roles.worker.model", "model", { min: 1, max: 128, clearable: true }),
+  ];
+  assert.deepEqual(rowValue(fields[0], "false"), { value: false });
+  assert.deepEqual(rowValue(fields[1], " 250 "), { value: 250 });
+  assert.ok("error" in rowValue(fields[1], "2.5"), "an integer field sends no fraction");
+  assert.deepEqual(rowValue(fields[3], "  "), { value: null }, "an empty clearable model unsets");
+  const text = '{\n  "autoHandoff": true,\n  "onboarded": true\n}\n';
+  const calls = [];
+  setInvoke(async (cmd, args) => {
+    calls.push([cmd, args]);
+    if (cmd === "context_config_read" || cmd === "context_config_set") return { path: "/r/.cursor/context/config.json", exists: true, canCreate: true, text, fields };
+    throw new Error(cmd);
+  });
+  const ctx = new ContextConfig(() => {});
+  await ctx.load(null);
+  assert.match(ctx.el.childNodes[0].childNodes[0].data, /Open a folder/);
+  assert.equal(calls.length, 0, "no folder: nothing is read");
+  await ctx.load("/r");
+  const inputs = elements(ctx.el).filter((e) => ["INPUT", "SELECT", "TEXTAREA"].includes(e.tagName));
+  assert.deepEqual(inputs.map((i) => i.dataset.path), fields.map((x) => x.path), "a row per allowlisted field, set or not");
+  assert.ok(!elements(ctx.el).some((e) => e.tagName === "TEXTAREA" || (e.tagName === "BUTTON" && /Raw/.test(e.childNodes[0]?.data ?? ""))), "no raw JSON editor for the operator settings");
+  assert.ok(!elements(ctx.el).some((e) => e.dataset?.path === "onboarded"), "keys outside the allowlist get no row");
+  assert.equal(inputs[0].value, "true");
+  inputs[0].value = "false";
+  inputs[0].dispatchEvent({ type: "change" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls.at(-1), ["context_config_set", { path: "autoHandoff", value: false }]);
+  const reads = calls.length;
+  inputs[1].value = "1.5";
+  inputs[1].dispatchEvent({ type: "change" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, reads, "a malformed integer writes nothing");
+  const persona = elements(ctx.el).find((e) => e.dataset?.path === "agentPersona.modes.run-plan");
+  const unset = elements(persona).find((e) => e.tagName === "OPTION" && e.childNodes[0]?.data === "Unset");
+  assert.ok(unset, "a clearable row offers Unset");
+  persona.value = unset.getAttribute("value");
+  persona.dispatchEvent({ type: "change" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls.at(-1), ["context_config_set", { path: "agentPersona.modes.run-plan", value: null }]);
 });
 
 test("Settings is a view of its own, not a Workspace section", async () => {

@@ -31,6 +31,7 @@ import { type Box, cycle, pathTo, type Dir, type DockMove, dockAction, paneDropZ
 import { openAboutPanel } from "./about";
 import { AppUpdates } from "./appupdates";
 import { EditorFiles } from "./editorfiles";
+import { ContextConfig } from "./contextconfig";
 import { KitConfig } from "./kitconfig";
 import { closeEnginePanel, openEnginePanel, refreshEngineBadge } from "./engine";
 import { FileTree, type TreeContext, type TreeItem } from "./filetree";
@@ -1009,8 +1010,8 @@ $("rail").addEventListener("keydown", (ev) => {
 // 7): the top bar gear and File → Settings… show this view, and Back returns from it. Its
 // groups come in the order of src/menu.json `groups`: Appearance (Skin, Title bar, Rail
 // position, Rail labels, Oligarchy on the rail: the pane's markup), App updates (appupdates.ts), Engine, Editor and
-// files (editorfiles.ts), Kit config (kitconfig.ts: the open folder's
-// .cursor/agent-kit.config.json), Integrations and Files. The action rows of `config` sit
+// files (editorfiles.ts), Kit config (both kit files of the open folder: kitconfig.ts for
+// .cursor/agent-kit.config.json, contextconfig.ts for .cursor/context/config.json), Integrations and Files. The action rows of `config` sit
 // under their `group` (never in the menu bar; menu.rs tests); the module bodies hold no
 // `data-cmd` button. `omarchyOnly` rows stay hidden until renderSkinMenu() knows Omarchy is
 // there, and a group of action rows only hides when none is on screen.
@@ -1020,7 +1021,10 @@ const settingsPane = $("settings-pane");
 const appUpdates = new AppUpdates(status);
 const editorFiles = new EditorFiles(status);
 const kitConfig = new KitConfig(status);
-const SETTINGS_BODIES: Record<string, HTMLElement> = { "App updates": appUpdates.el, "Editor and files": editorFiles.el, "Kit config": kitConfig.el };
+const contextConfig = new ContextConfig(status);
+/** Kit config holds both kit files: the profile, then the operator settings. */
+const kitFiles = h("div", { id: "settings-kit-files", class: "settings-body" }, kitConfig.el, contextConfig.el);
+const SETTINGS_BODIES: Record<string, HTMLElement> = { "App updates": appUpdates.el, "Editor and files": editorFiles.el, "Kit config": kitFiles };
 for (const group of menuSpec.groups.filter((g) => g !== "Appearance")) {
   settingsPane.append(
     h(
@@ -1038,6 +1042,7 @@ function refreshSettingsBodies() {
   void appUpdates.load();
   void editorFiles.load();
   void kitConfig.load(workspace?.root ?? null);
+  void contextConfig.load(workspace?.root ?? null);
 }
 /** With no folder open the strip (and its Back) is not on screen: this button returns to the
  *  welcome screen instead. */
@@ -4107,12 +4112,12 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     st.rows = JSON.stringify([groupRows.Engine?.cmds, groupRows.Integrations?.cmds, groupRows.Files?.cmds]) === JSON.stringify([["engine"], ["omarchy"], ["settings-json"]]);
     // The module bodies: App updates shows the version, Editor and files its three settings,
     // Kit config the open folder's file (a form, a missing-file note or an error, never empty).
-    await until(() => !!appUpdates.el.querySelector(".settings-row") && !!editorFiles.el.querySelector("input") && kitConfig.el.childElementCount > 0, 3000);
+    await until(() => !!appUpdates.el.querySelector(".settings-row") && !!editorFiles.el.querySelector("input") && kitConfig.el.childElementCount > 0 && contextConfig.el.childElementCount > 0, 3000);
     const bodyOf = (g: string) => settingsPane.querySelector<HTMLElement>(`.settings-group[data-group="${g}"] .settings-body`);
     st.bodies =
-      bodyOf("App updates") === appUpdates.el && bodyOf("Editor and files") === editorFiles.el && bodyOf("Kit config") === kitConfig.el && (appUpdates.el.querySelector(".settings-row")?.textContent ?? "").startsWith("Version") && editorFiles.el.querySelectorAll("input").length === 2 && editorFiles.el.querySelectorAll("button[data-editor-terminal]").length === 3 && /agent-kit\.config\.json|\.cursor/.test(kitConfig.el.textContent ?? "") && !settingsPane.querySelector(".settings-body button[data-cmd]")
+      bodyOf("App updates") === appUpdates.el && bodyOf("Editor and files") === editorFiles.el && bodyOf("Kit config") === kitFiles && kitFiles.contains(kitConfig.el) && kitFiles.contains(contextConfig.el) && /context\/config\.json/.test(contextConfig.el.textContent ?? "") && (appUpdates.el.querySelector(".settings-row")?.textContent ?? "").startsWith("Version") && editorFiles.el.querySelectorAll("input").length === 2 && editorFiles.el.querySelectorAll("button[data-editor-terminal]").length === 3 && /agent-kit\.config\.json|\.cursor/.test(kitConfig.el.textContent ?? "") && !settingsPane.querySelector(".settings-body button[data-cmd]")
         ? true
-        : { app: appUpdates.el.textContent, editor: editorFiles.el.textContent, kit: kitConfig.el.textContent };
+        : { app: appUpdates.el.textContent, editor: editorFiles.el.textContent, kit: kitConfig.el.textContent, context: contextConfig.el.textContent };
     st.noWorkspaceConfig = !WORKSPACE_SECTIONS.includes("config") && WORKSPACE_SECTIONS.length === 6 && !tabs.has("config") && view("decisions").querySelectorAll(".ws-nav-btn").length === 6 && !view("decisions").querySelector('.ws-nav-btn[data-section="config"]') && !/config/i.test($("rail").querySelector<HTMLElement>('.rail-item[data-tab="workspace"]')?.title ?? "config");
     const stPalette = paletteActions();
     st.paletteWhere = menuSpec.config.every((c) => !!c.omarchyOnly && !omarchyDetected() ? !stPalette.some((a) => a.id === c.id) : stPalette.find((a) => a.id === c.id)?.description === "Settings") && stPalette.find((a) => a.id === "settings")?.description === "File menu" && !stPalette.some((a) => a.id === "view:config");
@@ -6307,7 +6312,7 @@ async function runPlaySmoke(info: StartupInfo) {
       gearMarked: gear.getAttribute("aria-current") === "page",
       noStrip: focused.bar.classList.contains("tabbar-empty"),
       // Kit config belongs to a folder: with none open it says so instead of a form.
-      kitNoFolder: /Open a folder/.test(kitConfig.el.textContent ?? "") && !kitConfig.el.querySelector("input, select, textarea"),
+      kitNoFolder: /Open a folder/.test(kitConfig.el.textContent ?? "") && !kitConfig.el.querySelector("input, select, textarea") && /Open a folder/.test(contextConfig.el.textContent ?? "") && !contextConfig.el.querySelector("input, select, textarea"),
     };
     settingsPane.querySelector<HTMLElement>('button[data-cmd="settings-json"]')?.click();
     await wait(400);

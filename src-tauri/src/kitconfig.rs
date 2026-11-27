@@ -14,7 +14,8 @@
 //! Form source (FIELDS): the kit ships no JSON Schema for this file (kit `schemas/` holds the
 //! manifest and pack schemas only), and the Mission Control Config allowlist
 //! (`dashboard/lib/guards.mjs` `validateConfigWriteBody`) validates a different file,
-//! `.cursor/context/config.json`. This file is the scanner's repository profile
+//! `.cursor/context/config.json` (the kit's operator settings; Settings → Kit config edits it
+//! too, in `contextconfig.rs`). This file is the scanner's repository profile
 //! (`RepositoryProfile`, kit `packages/cli/src/types.ts` at kit commit 30d6a55f), refreshed by
 //! `doctor` with fresh scanner values winning on shared keys. So the form offers only the
 //! values the kit reads back as the operator's confirmation instead of re-detecting them:
@@ -376,13 +377,171 @@ pub fn patch_text(text: &str, path: &[&str], new: &Value) -> Result<String, Stri
     Ok(out)
 }
 
+/// `v` as JSON text for a member written at indent `base`: objects and arrays one member per
+/// line with the file's indent `unit` and line ending `nl`, scalars compact.
+fn render_at(v: &Value, base: &str, unit: &str, nl: &str) -> Result<String, String> {
+    let inner = format!("{base}{unit}");
+    match v {
+        Value::Object(m) if !m.is_empty() => {
+            let mut rows = Vec::new();
+            for (k, x) in m {
+                rows.push(format!("{inner}{}: {}", serde_json::to_string(k).map_err(|e| e.to_string())?, render_at(x, &inner, unit, nl)?));
+            }
+            Ok(format!("{{{nl}{}{nl}{base}}}", rows.join(&format!(",{nl}"))))
+        }
+        Value::Array(a) if !a.is_empty() => {
+            let rows: Vec<String> = a.iter().map(|x| render_at(x, &inner, unit, nl).map(|t| format!("{inner}{t}"))).collect::<Result<_, _>>()?;
+            Ok(format!("[{nl}{}{nl}{base}]", rows.join(&format!(",{nl}"))))
+        }
+        _ => serde_json::to_string(v).map_err(|e| e.to_string()),
+    }
+}
+
+/// `text` with the member `key: value` added at the end of the object spanning `start..end`,
+/// in the object's style: one member per line at the other members' indent (an empty object
+/// opens on new lines at the key line's indent plus the file's unit, the shape Mission
+/// Control's `JSON.stringify(…, null, 2)` writes), or on the same line when the object is on
+/// one line.
+fn insert_member(text: &str, start: usize, end: usize, key: &str, value: &Value) -> Result<String, String> {
+    let obj = &text[start..end];
+    if !(obj.starts_with('{') && obj.ends_with('}')) {
+        return Err("not an object".into());
+    }
+    let inner = &obj[1..obj.len() - 1];
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let unit = indent_unit(text);
+    let key = serde_json::to_string(key).map_err(|e| e.to_string())?;
+    let (at, add) = if inner.trim().is_empty() {
+        let base = line_indent(text, start);
+        let member = format!("{base}{unit}");
+        return Ok(format!("{}{{{nl}{member}{key}: {}{nl}{base}}}{}", &text[..start], render_at(value, &member, unit, nl)?, &text[end..]));
+    } else if inner.contains('\n') {
+        let first = start + 1 + (inner.len() - inner.trim_start().len());
+        let member = line_indent(text, first);
+        (start + 1 + inner.trim_end().len(), format!(",{nl}{member}{key}: {}", render_at(value, member, unit, nl)?))
+    } else {
+        let colon = if inner.contains("\":") && !inner.contains("\": ") { ":" } else { ": " };
+        let comma = if inner.contains(',') && !inner.contains(", ") { "," } else { ", " };
+        (start + 1 + inner.trim_end().len(), format!("{comma}{key}{colon}{}", serde_json::to_string(value).map_err(|e| e.to_string())?))
+    };
+    Ok(format!("{}{}{}", &text[..at], add, &text[at..]))
+}
+
+/// `text` without the member whose value spans `vstart..vend` (key `key`), with its comma; the
+/// next member moves up into its place. The last member takes the comma before it; a lone
+/// member leaves `{}`.
+fn remove_member(text: &str, vstart: usize, vend: usize, key: &str) -> Result<String, String> {
+    let s = text.as_bytes();
+    let is_ws = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r');
+    let mut i = vstart;
+    while i > 0 && is_ws(s[i - 1]) {
+        i -= 1;
+    }
+    if i == 0 || s[i - 1] != b':' {
+        return Err("no member there".into());
+    }
+    i -= 1;
+    while i > 0 && is_ws(s[i - 1]) {
+        i -= 1;
+    }
+    let quoted = serde_json::to_string(key).map_err(|e| e.to_string())?;
+    if !text[..i].ends_with(&quoted) {
+        return Err(format!("the key {quoted} is spelled with escapes in the file"));
+    }
+    let kstart = i - quoted.len();
+    let mut j = vend;
+    while j < s.len() && is_ws(s[j]) {
+        j += 1;
+    }
+    if j < s.len() && s[j] == b',' {
+        let mut k = j + 1;
+        while k < s.len() && is_ws(s[k]) {
+            k += 1;
+        }
+        return Ok(format!("{}{}", &text[..kstart], &text[k..]));
+    }
+    let mut b = kstart;
+    while b > 0 && is_ws(s[b - 1]) {
+        b -= 1;
+    }
+    if b > 0 && s[b - 1] == b',' {
+        return Ok(format!("{}{}", &text[..b - 1], &text[vend..]));
+    }
+    // The only member: `{` before it, `}` after it.
+    Ok(format!("{}{}", &text[..b], &text[j..]))
+}
+
+/// `text` with the value at `path` set to `new` (`None`: the member removed), every other byte
+/// unchanged. A missing member is added (with any missing parent objects) at the end of its
+/// object. Refused when a parent on the path is not an object, or the result would not parse
+/// back to the old document with exactly that one change (a duplicate key, a key spelled with
+/// escapes).
+pub fn edit_text(text: &str, path: &[&str], new: Option<&Value>) -> Result<String, String> {
+    let old_doc = parse_object(text)?;
+    let mut want = old_doc.clone();
+    {
+        let mut cur = &mut want;
+        for k in &path[..path.len() - 1] {
+            let obj = cur.as_object_mut().ok_or_else(|| format!("{} is not an object in the file", path.join(".")))?;
+            if new.is_none() && !obj.contains_key(*k) {
+                return Ok(text.to_string());
+            }
+            cur = obj.entry(k.to_string()).or_insert_with(|| Value::Object(Default::default()));
+        }
+        let obj = cur.as_object_mut().ok_or_else(|| format!("{} is not an object in the file", path[..path.len() - 1].join(".")))?;
+        let last = path[path.len() - 1].to_string();
+        match new {
+            Some(v) => {
+                obj.insert(last, v.clone());
+            }
+            None => {
+                obj.remove(&last);
+            }
+        }
+    }
+    if want == old_doc {
+        return Ok(text.to_string());
+    }
+    let out = match (new, value_span(text, path)?) {
+        (Some(v), Some((start, end))) => format!("{}{}{}", &text[..start], render(text, start, &text[start..end], v)?, &text[end..]),
+        (Some(v), None) => {
+            // The deepest object on the path that the file has; the rest is added under it.
+            let mut have = 0;
+            let mut cur = &old_doc;
+            while have < path.len() - 1 {
+                match cur.get(path[have]) {
+                    Some(x) => {
+                        cur = x;
+                        have += 1;
+                    }
+                    None => break,
+                }
+            }
+            let (start, end) = value_span(text, &path[..have])?.ok_or_else(|| format!("{} is not in the file", path[..have].join(".")))?;
+            let mut value = v.clone();
+            for k in path[have + 1..].iter().rev() {
+                value = Value::Object([(k.to_string(), value)].into_iter().collect());
+            }
+            insert_member(text, start, end, path[have], &value)?
+        }
+        (None, Some((start, end))) => remove_member(text, start, end, path[path.len() - 1])?,
+        (None, None) => return Ok(text.to_string()),
+    };
+    let got: Value = serde_json::from_str(&out).map_err(|e| format!("The edit would break the JSON ({e}); nothing was written"))?;
+    if got != want {
+        return Err(format!("The file has {} more than once; nothing was written", path.join(".")));
+    }
+    Ok(out)
+}
+
 // ---- writes ----------------------------------------------------------------------------------
 
-/// One kit-config writer at a time in this process.
-static WRITE: Mutex<()> = Mutex::new(());
+/// One kit-config writer at a time in this process (both kit files: this one and
+/// `contextconfig.rs`).
+pub(crate) static WRITE: Mutex<()> = Mutex::new(());
 
 /// Temp file in the same folder, the old file's permissions, then rename.
-fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     let tmp = file.with_extension(format!("json.colony-{}.tmp", std::process::id()));
     let mut f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;

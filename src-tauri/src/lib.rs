@@ -9,6 +9,7 @@ mod catalog;
 mod chats;
 mod conflicts;
 mod context;
+mod contextconfig;
 mod dashboard;
 mod deeplink;
 mod dragdrop;
@@ -399,6 +400,8 @@ pub fn run() {
             kitconfig::kit_config_read,
             kitconfig::kit_config_set,
             kitconfig::kit_config_write_raw,
+            contextconfig::context_config_read,
+            contextconfig::context_config_set,
             launch::open_in_editor,
             newwindow::spawn_new_window,
             omarchy::omarchy_subscribe,
