@@ -1015,6 +1015,7 @@ button.now-meta-btn:hover .now-meta-value { text-decoration: underline; color: v
 .settings-msg { padding: 2px 10px; font-size: var(--mc-chrome-meta-size); overflow-wrap: anywhere; }
 .settings-msg:empty { display: none; }
 .settings-msg.bad { color: var(--red); }
+.settings-subtitle { padding: var(--mc-space-md) 10px 0; font-size: var(--mc-chrome-label-size); font-weight: var(--mc-chrome-label-weight); color: var(--text-secondary); }
 .settings-actions { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 0 0; }
 .settings-pane textarea.settings-raw { margin: 0 10px; min-height: 240px; }
 #btn-settings[aria-current="page"] { border-color: var(--border-active); }
