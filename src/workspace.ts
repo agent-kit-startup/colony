@@ -1,5 +1,6 @@
 // Workspace: the kit's static items under one rail item, alone in the rail's bottom group (ADR
-// 2026-10-24 amends 2026-10-28 and 2026-11-19; Plans and Memory are rail items of their own).
+// 2026-10-24 amends 2026-10-28 and 2026-11-19; Plans and Memory are rail items of their own,
+// Health is a part of Activity). It opens on Overview, one line per section that follows.
 // Its sections switch with an inner navigation at the head of the view, never in the tab
 // strip. Each section is its own pinned view (src/main.ts WORKSPACE_SECTIONS), so Back /
 // Forward, `view:<section>` and the palette reach it like any other view. Every rail group
@@ -11,7 +12,7 @@ import { icon, type IconKind } from "./icons";
 export interface WorkspaceSection { id: string; label: string; icon: IconKind; tip: string }
 
 export const SECTION_INFO: Record<string, WorkspaceSection> = {
-  health: { id: "health", label: "Health", icon: "health", tip: "Health: the kit's health checks" },
+  overview: { id: "overview", label: "Overview", icon: "overview", tip: "Overview: what the kit of this folder holds, one line per section" },
   decisions: { id: "decisions", label: "Decisions", icon: "review", tip: "Decisions: the ADRs of this folder, by Status and date" },
   agents: { id: "agents", label: "Agents", icon: "agents", tip: "Agents: the agent definitions of this folder" },
   skills: { id: "skills", label: "Skills", icon: "checklist", tip: "Skills: the skills of this folder" },
