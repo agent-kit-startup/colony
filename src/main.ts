@@ -3565,11 +3565,11 @@ window.addEventListener(
       ev.stopPropagation();
       return;
     }
-    // Ctrl+Alt: the panes of the split tree (View → Splits), by key position (ev.code), in a
-    // terminal and the editor too. Ctrl+Alt+Shift+Up / Down stay with a focused editor
-    // (Monaco's copy line up / down on Linux).
+    // Ctrl+Alt: the panes of the split tree (View → Splits), by key position (ev.code; by
+    // ev.key when a display sends no code), in a terminal and the editor too.
+    // Ctrl+Alt+Shift+Up / Down stay with a focused editor (Monaco's copy line up / down on Linux).
     if (ev.ctrlKey && ev.altKey && !ev.metaKey && workspace) {
-      const id = paneKey(ev.code, ev.shiftKey, ev.target instanceof Element && !!ev.target.closest(".monaco-editor"));
+      const id = paneKey(ev.code, ev.shiftKey, ev.target instanceof Element && !!ev.target.closest(".monaco-editor"), ev.key);
       if (id) {
         runAction(id);
         ev.preventDefault();
