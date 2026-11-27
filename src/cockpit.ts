@@ -18,7 +18,7 @@ import { liveQueueRun, liveRun, type QueueState, queuePosition, type Run, runLab
 import { type J, type McPlan, obj, snapshot, str } from "./snapshot";
 import { planCrudButton } from "./planmenu";
 import { type CardButton, cardButtons, type CardRun } from "./missioncard";
-import { planActions } from "./plancrud";
+import { planActions, planFileError } from "./plancrud";
 import type { DriverChat } from "./driverchat";
 import { inlineMd, plainMd, prose } from "./transcript";
 import { ago, btn, bytes, card, cardHeader, type CheckTone, checkChip, chip, empty, emptyCta, iconBtn, lifecycleChip, metaRow, pill, rerender, type Step, stepbar, stepper, type Tone } from "./ui";
@@ -657,7 +657,10 @@ export class MissionView extends View {
     const terminal = term ? `${term.label}${term.plan ? ` (${planName(term.plan)})` : ""}` : "";
     const busy = r ? `${r.command === "run-plan-all" ? "Queue run" : "Run"} #${r.id} is going in this folder` : terminal ? `${terminal} is going in a terminal tab` : "";
     const acts = file ? planActions(file, snapshot.plans().find((x) => x.file === file) ?? { parked: false, backlog: false }, true, busy) : [];
+    const badFile = file ? planFileError(file) : "";
     const ask = (id: "edit" | "cancel") => {
+      // A file name Colony cannot pass has no actions: say why instead of doing nothing.
+      if (badFile) return this.host.status(`${id === "edit" ? "Edit" : "Cancel"}: ${badFile}`);
       const a = acts.find((x) => x.id === id);
       if (a && !a.disabled) void this.host.interactive(a.prompt, a.why);
     };
@@ -678,6 +681,7 @@ export class MissionView extends View {
       const attrs = { class: `status-bar-btn card-btn${b.id === "kill" ? " card-kill" : ""}`, "data-act": b.act, title: b.title, "aria-label": b.label.replace(/…$/, "") };
       const el = b.icon ? iconBtn(b.icon, b.label, () => click(b), attrs) : btn(b.label, () => click(b), attrs);
       el.dataset.card = b.id;
+      if (badFile && (b.id === "edit" || b.id === "cancel")) el.title = `${b.label.replace(/…$/, "")}: ${badFile}`;
       if (b.face) el.dataset.face = b.face;
       el.disabled = b.disabled;
       return el;
@@ -1001,21 +1005,25 @@ export class PlansView extends View {
 
   private row(p: McPlan, active: boolean): HTMLElement {
     const open = this.expanded.has(p.file);
+    // Run and Resume send the file as one token: a name Colony cannot pass gets a status line
+    // at the click (and on the tooltip), never a refusal after it.
+    const badFile = planFileError(p.file);
+    const withPlan = (label: string, prompt: string, why?: string) => (badFile ? this.host.status(`${label}: ${badFile}`) : void this.host.interactive(prompt, why));
     const acts: HTMLElement[] = [btn("Open", () => this.host.openRepoFile(p.path || `.cursor/plans/${p.file}`), { class: "status-bar-btn", title: p.path })];
     // The HANDOFF plan runs from Mission (Run plan); other open plans get activated here.
     if (!active && p.lifecycle !== "completed") {
       acts.unshift(
-        btn("Run…", () => void this.host.interactive(`/run-plan ${p.file}`, `agent-kit run-plan only runs the HANDOFF plan (${snapshot.activePlanFile || "none"}). This opens your agent interactively with /run-plan ${p.file}, which activates it.`), {
+        btn("Run…", () => withPlan("Run", `/run-plan ${p.file}`, `agent-kit run-plan only runs the HANDOFF plan (${snapshot.activePlanFile || "none"}). This opens your agent interactively with /run-plan ${p.file}, which activates it.`), {
           class: "status-bar-btn",
           "data-act": "run-other",
-          title: "Opens your agent interactively with /run-plan <plan> (agent-kit run-plan has no plan argument)",
+          title: badFile ? `Run: ${badFile}` : "Opens your agent interactively with /run-plan <plan> (agent-kit run-plan has no plan argument)",
         }),
       );
     }
-    if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => void this.host.interactive(`/continue-plan ${p.file}`), { class: "status-bar-btn", title: "/continue-plan in your agent, interactively" }));
+    if (["parked", "incomplete", "executing", "awaiting_user"].includes(p.lifecycle)) acts.push(btn("Resume…", () => withPlan("Resume", `/continue-plan ${p.file}`), { class: "status-bar-btn", title: badFile ? `Resume: ${badFile}` : "/continue-plan in your agent, interactively" }));
     // Edit, then the remove commands its HANDOFF list allows (Archive: parked; Cancel, Delete:
     // backlog); the HANDOFF plan offers Edit and Cancel (/cancel-plan, off during a run; src/plancrud.ts).
-    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive and delete stop on the active plan; Cancel is /cancel-plan.", active ? runBusy(this.host.workspaceRoot()) : ""));
+    acts.push(planCrudButton(p.file, p, active, (prompt, why) => this.host.interactive(prompt, why), "Archive and delete stop on the active plan; Cancel is /cancel-plan.", active ? runBusy(this.host.workspaceRoot()) : "", (why) => this.host.status(`Plan: ${why}`)));
     const inProgress = p.todos.filter((t) => t.status === "in_progress").length;
     const pct = p.progress.total ? Math.round((100 * p.progress.completed) / p.progress.total) : 0;
     const head = h(

@@ -3,7 +3,7 @@
 // Delete). Pure: Node runs it with its types stripped. Run: pnpm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planActions } from "../src/plancrud.ts";
+import { planActions, planFileError } from "../src/plancrud.ts";
 
 const ids = (xs) => xs.map((x) => x.id);
 
@@ -54,4 +54,13 @@ test("each action is one allowlisted command with the plan file", () => {
 
 test("a file name that is not one plain token gets no action", () => {
   for (const bad of ["", "a b.plan.md", "../x.plan.md", "-x.plan.md", "x;rm.plan.md"]) assert.deepEqual(planActions(bad, backlog, false), [], bad);
+});
+
+test("a file name Colony cannot pass names the reason; a plain one has none", () => {
+  for (const ok of ["x.plan.md", "archive/2026-11-27_x.plan.md", "a:b.plan.md"]) assert.equal(planFileError(ok), "", ok);
+  for (const bad of ["plano esquisito.plan.md", "a+b.plan.md", "a@b.plan.md", "ação.plan.md", "ñ.plan.md", "", "../x.plan.md", "-x.plan.md"]) {
+    assert.match(planFileError(bad), /^rename the plan file first/, bad);
+    // The same names get no action, so every surface has the reason to show instead.
+    assert.deepEqual(planActions(bad, backlog, false), [], bad);
+  }
 });

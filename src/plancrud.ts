@@ -30,9 +30,17 @@ export interface PlanLists {
   backlog: boolean;
 }
 
+/** Why Colony cannot hand plan `file` to a kit command ("" when it can): the argument is one
+ *  plain token (vendor.rs `valid_token`), so a name with a space, `+`, `@` or a non-ASCII
+ *  letter is refused. Every surface that would send the file says this instead of going quiet. */
+export function planFileError(file: string): string {
+  if (PLAIN.test(file) && !file.startsWith("-") && !file.split("/").includes("..")) return "";
+  return "rename the plan file first (letters, digits and . _ : / - only): Colony does not pass this name to your agent";
+}
+
 /** `busy`: why the active plan cannot be cancelled now (a run or queue in flight), "" when it can. */
 export function planActions(file: string, lists: PlanLists, active: boolean, busy = ""): PlanAction[] {
-  if (!PLAIN.test(file) || file.startsWith("-") || file.split("/").includes("..")) return [];
+  if (planFileError(file)) return [];
   const edit: PlanAction = {
     id: "edit",
     label: "Edit…",
