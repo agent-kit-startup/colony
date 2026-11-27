@@ -3729,9 +3729,10 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
     // settings.json ended with panes-seed (two panes; a Markdown file in preview and a shell
     // in .cursor on the right, a file that was then deleted on the left). This launch restored
     // them when the folder opened: the tree and its ratio, the file in its pane and mode, a
-    // fresh shell in its last folder, the missing file dropped and its pane kept, the focus.
-    // Then View → Splits → Reset the layout gives one pane and clears the saved tree. A first
-    // launch (nothing saved) only notes it.
+    // fresh shell in its last folder, the missing file dropped and its pane kept, the focus on
+    // the left pane (not the shell's). A second restore with the focus policy on checks that the
+    // shell's late focus does not keep the focus. Then View → Splits → Reset the layout gives
+    // one pane and saves it with the tabs. A first launch (nothing saved) only notes it.
     const panesOnDisk = async () => (((await api.settingsGet()).settings as { ui?: { layout?: LayoutSettings } } | null)?.ui?.layout?.panes ?? {})[root];
     {
       const seeded = readSaved(bootLayout.panes?.[root]);
@@ -3753,20 +3754,45 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
         }
         r.freshShellInLastFolder = !!sh && cwd === `${root}/.cursor` ? true : { sh, cwd };
         r.missingFileDroppedPaneKept = !tabs.has(gone) && !!q1 && panes.has(q1.id) && !q1.strip.order.includes(gone) && q1.strip.order.length > 0;
-        r.focusRestored = focused === q2;
+        r.focusRestored = focused === q1 ? true : { focused: focused.id, want: q1?.id };
         await wait(800);
         await panesSaved;
         const disk = readSaved(await panesOnDisk());
-        r.diskDropsMissing = !!disk && !savedLeaves(disk.tree)[0].tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && savedLeaves(disk.tree)[1].tabs.length === 2 ? true : disk;
+        r.diskDropsMissing = !!disk && disk.focused === q1?.id && !savedLeaves(disk.tree)[0].tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && savedLeaves(disk.tree)[1].tabs.length === 2 ? true : disk;
+        // The smoke runs with the focus policy off, so the restore at start had no late focus to
+        // survive. Restore the saved tree again with it on: the restored shell (right pane)
+        // focuses itself on the next frame; two frames later the left pane has the focus back.
+        const frame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
+        const shells = new Set(paneList().flatMap((p) => p.strip.order).filter((id) => id.startsWith("drawer:")));
+        let focusDetail: Record<string, unknown> = {};
+        focusPolicy.enabled = true;
+        try {
+          resetPanes();
+          await restorePanes(root);
+          await frame();
+          const afterOne = focused.id;
+          await frame();
+          await frame();
+          await wait(200);
+          const left = paneList()[0];
+          r.focusSurvivesLateShellFocus = panes.size === 2 && focused === left ? true : { focused: focused.id, want: left.id, panes: panes.size };
+          focusDetail = { afterOneFrame: afterOne, stolenThenGivenBack: afterOne !== left.id, keyboardInPane: left.el.contains(document.activeElement) };
+        } finally {
+          focusPolicy.enabled = false;
+        }
+        await wait(800);
+        await panesSaved;
         runAction("pane-layout-reset");
         await wait(300);
         await panesSaved;
         r.resetOnePane = panes.size === 1 && tabs.has(md) && paneList()[0].strip.order.includes(md);
-        r.resetClearsDisk = (await panesOnDisk()) === undefined;
+        const afterReset = readSaved(await panesOnDisk());
+        const oneLeaf = afterReset ? savedLeaves(afterReset.tree) : [];
+        r.resetSavesOnePaneWithTabs = oneLeaf.length === 1 && afterReset?.focused === oneLeaf[0].pane && oneLeaf[0].tabs.some((t) => "file" in t && t.file === "smoke-restore.md") && oneLeaf[0].tabs.some((t) => "terminal" in t) ? true : afterReset;
         await closeTab(md);
-        if (sh && tabs.has(sh)) await closeTab(sh);
+        for (const id of paneList().flatMap((p) => p.strip.order).filter((id) => id.startsWith("drawer:") && (id === sh || !shells.has(id)))) if (tabs.has(id)) await closeTab(id);
         await wait(150);
-        await log("panes-restart", Object.values(r).every((v) => v === true), { saved: seeded, ...r });
+        await log("panes-restart", Object.values(r).every((v) => v === true), { saved: seeded, ...r, focusDetail });
         focused.nav.reset();
         showTab("mission");
       }
@@ -6035,12 +6061,15 @@ async function runSmoke(root: string, info: StartupInfo, bootLayout: LayoutSetti
       showIn(s2, md);
       paneTree = setRatio(paneTree, [], 0.6);
       renderPaneTree();
+      // The focus is saved on the pane without the shell: a restored shell focuses itself late,
+      // and the restart must still give the focus back to this pane (t6 dogfood 2026-11-27).
+      focusPane(s1);
       await wait(1500);
       panesChanged();
       await flushPanes();
       const disk = readSaved(await panesOnDisk());
       const [l1, l2] = disk ? savedLeaves(disk.tree) : [];
-      r.saved = !!disk && disk.focused === s2.id && !!l2 && l1.tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && l1.active == null && JSON.stringify(l2.tabs) === JSON.stringify([{ file: "smoke-restore.md", mode: "preview" }, { terminal: ".cursor" }]) && l2.active === 0 ? true : disk;
+      r.saved = !!disk && disk.focused === s1.id && !!l2 && l1.tabs.some((t) => "file" in t && t.file === "smoke-restore-gone.txt") && l1.active == null && JSON.stringify(l2.tabs) === JSON.stringify([{ file: "smoke-restore.md", mode: "preview" }, { terminal: ".cursor" }]) && l2.active === 0 ? true : disk;
       // The panel-change save leaves the tree alone.
       layoutChanged();
       await wait(600);
